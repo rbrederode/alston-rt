@@ -12,7 +12,7 @@ from astropy import units as u
 from scipy.signal import savgol_filter
 from scipy.ndimage import gaussian_filter1d
 
-import dmd_proto as dmd
+import proto as dmd
 
 # Configure logging
 logging.basicConfig(
