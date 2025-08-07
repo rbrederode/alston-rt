@@ -19,7 +19,7 @@ from math import cos, sin, radians
 
 from polarplot import PolarPlot
 
-from rtlsdr import *
+from rtlsdr import RtlSdr, RtlSdrTcpClient
 
 from scipy import fftpack
 from scipy.ndimage import gaussian_filter1d
@@ -49,6 +49,7 @@ OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Alston Observator
 #OUTPUT_DIR = '~/Samples'  # Directory to store samples
 USABLE_BANDWIDTH = 0.65  # Percentage of usable bandwidth for a scan
 FIG_SIZE = (14, 9)  # Default figure size for plots
+MAX_RECONNECT_ATTEMPTS = 5  # Maximum number of attempts to reconnect to the SDR device
 
 def velocity2LSR(coord: SkyCoord, observing_location: EarthLocation, observing_time: Time):
     """ Calculates the velocity adjustment for the Local Standard of Rest 
@@ -168,6 +169,8 @@ def init_args():
     parser.add_argument('-loc', '--location', type=arg_to_location, dest='loc', help='Location of the observer', default='53.187052,-2.256079, Congleton') # Default is home
     parser.add_argument('-target', type=arg_to_SkyCoord, dest='tar', help="right ascension and declination of the target in the format ra0,dec0 e.g. 4h42m,-38d6m50.8s", default=None)
     parser.add_argument('-cal', '--calibrate', action='store_true', help='Generate hot / cold calibration spectra', default=False)
+    parser.add_argument('-host', '--host', type=str, help='Hostname/IP address of an SDR TCP server', default=None)
+    parser.add_argument('-port', '--port', type=int, help='Port of the SDR server', default=1234)
 
     return parser.parse_args()
 
@@ -1124,7 +1127,7 @@ def sdr_init(sdr, center_freq, gain, sample_rate, ppm):
     Initialize the RTL-SDR device with the specified parameters.
     """
 
-    sdr.center_freq = center_freq  # Hz
+    sdr.center_freq = int(center_freq)  # Hz
     sdr.gain = int(gain) if gain.isdigit() else 'auto'  # dB
     sdr.sample_rate = sample_rate  # Hz
     sdr.ppm = ppm  # PPM for frequency correction
@@ -1147,6 +1150,11 @@ def sdr_info():
         result = subprocess.run(['rtl_eeprom', '-d', '0'], capture_output=True, text=True)
         # Strangely the rtl_eeprom command returns the device information in stderr, not stdout
         output = result.stderr
+
+        if output.strip() == "No supported devices found.":
+            logger.warning("No local RTL-SDR devices found.")
+            return None
+
         info = {}
 
         for line in output.splitlines():
@@ -1160,7 +1168,10 @@ def sdr_info():
         return info
 
     except Exception as e:
-        return {'error': str(e)}
+        logger.exception("Error occurred while retrieving SDR information.")
+        logger.exception(e)
+    
+    return None
 
 def sdr_bias_t(enable=True):
     """ Enable or disable the bias tee on the RTL-SDR device.
@@ -1172,8 +1183,13 @@ def sdr_bias_t(enable=True):
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
-        logger.info(f"Running command: {' '.join(cmd)} with result: {result.returncode}")
-        logger.info(result.stderr)
+
+        if result.returncode == 0:
+            logger.info(f"Switched BiasT to {'ON' if enable else 'OFF'} with command: {' '.join(cmd)}")
+        else:
+            logger.error(f"Failed to switch BiasT {'ON' if enable else 'OFF'} with command: {' '.join(cmd)}, return code: {result.returncode}")
+            logger.error(result.stdout)
+            logger.info(result.stderr)
 
     except Exception as e:
         logger.exception(f"Error occurred while running command: {' '.join(cmd)}")
@@ -1314,7 +1330,7 @@ def main():
 
             scan_start_freq += args.sample_rate - freq_overlap
 
-    # If we are not reading samples from a file, initialize the RTL-SDR device
+    # If we are not reading samples from a file, initialize an RTL-SDR device
     if args.read == 'none':
 
         sdr = None
@@ -1323,25 +1339,40 @@ def main():
         try:
             info = sdr_info()  # Print the SDR device information
 
-            meta["sdr"]["product"] = info.get('Product', 'Unknown')  # Add product info to metadata
-            meta["sdr"]["manufacturer"] = info.get('Manufacturer', 'Unknown')  # Add manufacturer info to metadata
-            meta["sdr"]["serial"] = info.get('Serial', 'Unknown')  # Add serial number to metadata
+            if info is None:
 
-            # If the device is a Blog V, enable the bias tee and update the metadata accordingly
-            if 'Blog V' in info['Product']:
-                sdr_bias_t(enable=True)
-                meta["sdr"]["bias_tee"] = True  
+                if args.host is None or args.port is None:
+                    logger.error("No RTL-SDR device found and no host/port specified to connect to a server instance. Exiting...")
+                    exit(1)
+                else:
+                    logger.info(f"Connecting to RTL-SDR server at {args.host}:{args.port}...")
+                    sdr = RtlSdrTcpClient(hostname=args.host, port=args.port)
+
             else:
-                meta["sdr"]["bias_tee"] = False  
+                logger.info(f"Found RTL-SDR device: {info.get('Product', 'Unknown')} by {info.get('Manufacturer', 'Unknown')} with serial number {info.get('Serial', 'Unknown')}")
+                
+                meta["sdr"] = {}
 
-            # Instantiate and initialise the RTL-SDR device
-            sdr = RtlSdr()
+                meta["sdr"]["product"] = info.get('Product', 'Unknown')  # Add product info to metadata
+                meta["sdr"]["manufacturer"] = info.get('Manufacturer', 'Unknown')  # Add manufacturer info to metadata
+                meta["sdr"]["serial"] = info.get('Serial', 'Unknown')  # Add serial number to metadata
 
-            initial_cf = start_freq + args.sample_rate/2  # Set the center frequency for the first scan
+                # If the device is a Blog V, enable the bias tee and update the metadata accordingly
+                if 'Blog V' in info['Product']:
+                    sdr_bias_t(enable=True)
+                    meta["sdr"]["bias_tee"] = True  
+                else:
+                    meta["sdr"]["bias_tee"] = False  
+
+                # Instantiate and initialise the RTL-SDR device
+                sdr = RtlSdr()
+
+            initial_cf = int(start_freq + args.sample_rate/2)  # Set the center frequency for the first scan
             sdr_init(sdr, initial_cf, args.gain, args.sample_rate, args.ppm)  # Set the SDR to the appropriate center frequency etc
 
         except Exception as e:
-            logger.exception(f"Error instantiating SDR: {e}")
+            logger.exception(f"Error while trying to instantiate an SDR instance: {e}")
+            exit(1)
    
     # We are about to observe the sky if we not doing a 'load' nor are we reading samples from a file
     observing_sky = not args.load and args.read == 'none'
@@ -1391,7 +1422,7 @@ def main():
         for freq_scan in range(freq_scans):
 
             # Determine the scan center freq and extent (range) of the scan on the spectrum
-            scan_center_freq = (scan_start_freq + args.sample_rate/2)
+            scan_center_freq = int(scan_start_freq + args.sample_rate/2)
             
             extent = [(scan_center_freq + args.sample_rate/-2)/1e6,
                 (scan_center_freq + args.sample_rate/2)/1e6,
@@ -1400,8 +1431,8 @@ def main():
             # If we are using an RTL-SDR device...
             if 'sdr' in globals() and sdr is not None:
                 if args.load or freq_scan > 0:  # If we are loading calibration data or this is not the first scan
-                    sdr.center_freq = scan_center_freq  # Set the center frequency for scan 1 and onwards (scan 0 is already set)
-                    sdr_stabilise(sdr, sample_rate=args.sample_rate, duration=5)  # Stabilize the SDR by discarding initial samples for duration seconds
+                    sdr.center_freq = int(scan_center_freq)  # Set the center frequency for scan 1 and onwards (scan 0 is already set)
+                    sdr_stabilise(sdr, sample_rate=args.sample_rate, duration=30)  # Stabilize the SDR by discarding initial samples for duration seconds
 
             # For each scan iteration NOTE: It is important to iterate scans within the frequency scan loop
             # This is because we want to minise adjustments to the SDR center frequency as we need to stabilise it after each change
@@ -1426,9 +1457,38 @@ def main():
                         freq_scan=freq_scan, 
                         scan_iter=scan_iter)[:17]  # Read the raw IQ samples for the scan from the specified file
                 else:
-                    
-                    # Perform the scan using the RTL-SDR device
-                    perform_scan(args, sdr, scan_center_freq, args.sample_rate, scan_duration, args.fft_size)  # Collect samples and populate data arrays
+
+                    try:
+
+                        # Perform a scan using the RTL-SDR device
+                        perform_scan(args, sdr, scan_center_freq, args.sample_rate, scan_duration, args.fft_size)  # Collect samples and populate data arrays
+
+                    except (OSError, EOFError) as e:
+                        # OSError = network error, EOFError = server closed connection
+                        logger.exception(f"SDR TCP Server Connection lost: {e}")
+                        logger.info("Attempting to reconnect to the SDR device...")
+
+                        # Close the SDR device if it is open
+                        if sdr is not None:
+                            sdr.close()
+                            sdr = None  
+
+                        # Attempt to reconnect to the SDR device
+                        attempt = 0
+
+                        while sdr is None and attempt < MAX_RECONNECT_ATTEMPTS:  # Keep trying to reconnect until successful
+                            try:
+                                sdr = RtlSdrTcpClient(hostname=args.host, port=args.port) if args.host and args.port else RtlSdr()
+                                logger.info("Reconnected to the SDR device successfully.")
+
+                                sdr_init(sdr, scan_center_freq, args.gain, args.sample_rate, args.ppm)  # Reinitialize the SDR with the same parameters
+                                sdr_stabilise(sdr, sample_rate=args.sample_rate, duration=30)  # Stabilize the SDR after reconnecting
+                                
+                            except Exception as e:
+                                logger.exception(f"Failed to reconnect to the SDR device: {e}")
+                                time.sleep(5)
+
+                            attempt += 1
 
                     # If we need to write raw IQ samples to file for this scan
                     if args.write:
