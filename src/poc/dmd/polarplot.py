@@ -251,6 +251,23 @@ class PolarPlot:
                 self.start_index = None # Reset the start index
                 print(f"Stopped observing at index {self.stop_index}...")
 
+    def get_target_altaz(self, target_name: str = None):
+
+        dt = datetime.datetime.now(datetime.timezone.utc)
+
+        # Check if the polar plot has expired (older than 24 hrs) or has not yet been plotted (no axes)
+        if dt > Time(self.init_dt) + 24 * u.hour:
+            # Reset the polar plot for the next 24 hrs
+            self.reset()
+
+        for tgt in self.targets:
+            # Check if the target is the one we're interested in, or no target name was specified
+            if tgt[FIXEDTARGET].name == target_name or target_name is None:
+                tgt_altaz = self.observer.altaz(dt, tgt[FIXEDTARGET])
+                return tgt_altaz.alt.degree, tgt_altaz.az.degree
+
+        return None, None
+
     def update_targetbox(self):
 
         dt = datetime.datetime.now(datetime.timezone.utc)

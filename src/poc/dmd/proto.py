@@ -18,11 +18,14 @@ from matplotlib.patches import Ellipse
 from math import cos, sin, radians
 
 from polarplot import PolarPlot
+from pecplot import PECPlot
+from motion import Motion
 
 from rtlsdr import RtlSdr, RtlSdrTcpClient
 
 from scipy import fftpack
 from scipy.ndimage import gaussian_filter1d
+from scipy.stats import shapiro, normaltest, norm
 import scipy.constants as const
 
 from astropy import units as u
@@ -48,7 +51,7 @@ OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Alston Observator
 #OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
 #OUTPUT_DIR = '~/Samples'  # Directory to store samples
 USABLE_BANDWIDTH = 0.65  # Percentage of usable bandwidth for a scan
-FIG_SIZE = (14, 9)  # Default figure size for plots
+FIG_SIZE = (14, 7)  # Default figure size for plots
 MAX_RECONNECT_ATTEMPTS = 5  # Maximum number of attempts to reconnect to the SDR device
 
 def velocity2LSR(coord: SkyCoord, observing_location: EarthLocation, observing_time: Time):
@@ -124,7 +127,8 @@ def arg_to_SkyCoord(s: str) -> SkyCoord:
         #convert the input RA and Dec strings to an Astropy SkyCoord object
         try:
             rastr, decstr = s.split(',')
-            coord = SkyCoord(rastr, decstr, unit=(u.hourangle, u.deg), frame='icrs')    # defaults to ICRS (RA,DEC)
+            # Explicitly set the frame to FK5 and equinox to the current time instead of the default ICRS (which is effectively J2000)
+            coord = SkyCoord(rastr, decstr, unit=(u.hourangle, u.deg), frame='fk5', equinox=Time.now())
             return coord
         except:
             logger.error("Error parsing RA,Dec strings: {} {}".format(rastr,decstr))
@@ -156,7 +160,7 @@ def init_args():
     parser = argparse.ArgumentParser(description='SDR Observation')
     parser.add_argument('-g', '--gain', type=str, help='SDR gain in dB between 0-49.6 or "auto"', default='auto')
     parser.add_argument('-l', '--load', action='store_true', help='Generate load file for calibration', default=False)
-    parser.add_argument('-s', '--sample_rate', type=float, help='Sample rate in Hz e.g. 2.048e6 for 2.048 MHz, max sample rate is 3.2 MHz, however max rate that does not drop samples is 2.56 MHz https://www.rtl-sdr.com/about-rtl-sdr/', default=2.4e6)
+    parser.add_argument('-s', '--sample_rate', type=float, help='Sample rate in Hz e.g. 2.048e6 for 2.048 MHz, max sample rate is 3.2 MHz, however max rate that does not drop samples is 2.56 MHz https://www.rtl-sdr.com/about-rtl-sdr/', default=2.048e6)
     parser.add_argument('-c', '--center_freq', type=float, help='Center frequency in Hz e.g. 1420.4e6 for 1420.4 MHz, valid range is 25 - 1750 MHz ref: NESDR SMArt v5 RTL-SDR Software Defined Radio Data Sheet', default=1420.40e6)
     parser.add_argument('-d', '--duration', type=int, help='Observation duration (integration time)', default=10)
     parser.add_argument('-f', '--fft_size', type=int, help='Number of frequency bins (FFT size)', default=512)
@@ -171,6 +175,8 @@ def init_args():
     parser.add_argument('-cal', '--calibrate', action='store_true', help='Generate hot / cold calibration spectra', default=False)
     parser.add_argument('-host', '--host', type=str, help='Hostname/IP address of an SDR TCP server', default=None)
     parser.add_argument('-port', '--port', type=int, help='Port of the SDR server', default=1234)
+    parser.add_argument('-imu', '--imu', type=str, help='IMU device identifier e.g. "/dev/tty.usbserial-1120" Use "auto" to detect IMU devices', default=None)
+    parser.add_argument('-baud', '--baud', type=int, help='Baud rate for the IMU device e.g. 9600', default=9600)
 
     return parser.parse_args()
 
@@ -462,7 +468,7 @@ def init_saturation_axes(axes):
 
     # Set up the SDR saturation levels plot
     axes.set_title("SDR Saturation Level")
-    axes.set_xlabel("Max(I), Max(Q)")
+    axes.set_xlabel("Mean(I), Mean(Q)")
     axes.set_ylabel("Saturation [%]")
     axes.set_ylim(0, 100)
     axes.set_facecolor('white')
@@ -652,35 +658,48 @@ def plot_survey_fits(args, fig, axes, survey='hi4pi', fov=25, fits_file=f"'{OUTP
     axes.add_patch(ellipse)
     axes.legend(loc='upper right')
 
-def init_cam_displays(args, fits_file=None):
+def init_pec_analysis(args, fig, axes, motion=None):
+    """ Initialize the PEC analysis plot """
+
+    pec = PECPlot(args.loc[0], args.tar, motion=motion)
+
+    pec.start_recording()
+    pec.plot(figure=fig, axes=axes)
+
+    return pec
+
+def init_cam_displays(args, fits_file=None, motion=None):
     """ Initialize the displays for control and monitoring functions.
     This includes a polar plot for observing the sky, a galactic direction plot, and a survey FITs image.
         :param args: Command line arguments containing target coordinates and other parameters
         :param fits_file: Path to the FITs file to plot, default is None
+        :param motion: Motion sensor object for PEC analysis, default is None
     """
 
     global OUTPUT_DIR, FIG_SIZE
 
      # Initialize the grid space for the control & monitoring displays
     gs0 = GridSpec(2, 1, width_ratios=[1], height_ratios=[1, 1], left=0.07, right=0.43, top=0.93, bottom=0.07, wspace=0.2) # control and monitoring displays
-    gs1 = GridSpec(1, 1, width_ratios=[1], height_ratios=[1], left=0.53, right=0.93, top=0.93, bottom=0.2, wspace=0.2) # control and monitoring displays
+    gs1 = GridSpec(2, 1, width_ratios=[1], height_ratios=[1, 0.2], left=0.53, right=0.93, top=0.93, bottom=0.07, wspace=0.2) # control and monitoring displays
 
     hdu_list = fits.open(fits_file) if fits_file else None  # Open the survey FITs file if it exists
     wcs = WCS(hdu_list[0].header) if hdu_list is not None else None  # Get the World Coordinate System information from the FITs header
 
     # Create Figure and Axes for the Polar Plot and show the target tracks 
     cam_fig = plt.figure(num=200, figsize=FIG_SIZE)
-    cam = [None] * 3  # Initialize axes for the subplots
+    cam = [None] * 4  # Initialize axes for the subplots
 
     cam[0] = plt.subplot(gs0[0], polar=True)  # Polar plot for observing the sky
-    cam[1] = plt.subplot(gs1[0])  # Image of Milky Way
+    cam[1] = plt.subplot(gs1[0]) # Image of Milky Way
     cam[2] = plt.subplot(gs0[1], projection=wcs)  # Survey FITs image
+    cam[3] = plt.subplot(gs1[1]) # PEC Analysis
 
     polar = plot_polarplot(args, cam_fig, cam[0])  # Initialize the polar plot for observing the sky
-    plot_galactic_direction(args, cam_fig, cam[1])  # Initialize the galactic plot    
-    plot_survey_fits(args, cam_fig, cam[2], survey='hi4pi', fits_file=fits_file)  # Initialize the survey FITs plot`
+    plot_galactic_direction(args, cam_fig, cam[1])  # Initialize the galactic plot
+    plot_survey_fits(args, cam_fig, cam[2], survey='hi4pi', fits_file=fits_file)  # Initialize the survey FITs plot
+    pec = init_pec_analysis(args, cam_fig, cam[3], motion=motion)
 
-    return cam_fig, cam, polar
+    return cam_fig, cam, polar, pec
 
 def init_metadata(args, scans_meta):
 
@@ -859,11 +878,14 @@ def signal_displays_update(raw, mpr, bsl, sec, duration, row_start, row_end, ext
     # Plot 10% of raw IQ samples for the current second
     indices = np.linspace(row_start, row_end - 1, int(raw.shape[0]*0.01), dtype=int)
 
-    max_real = np.max(np.abs(raw[row_start:row_end, ].real))*100  # Find the maximum real value in the raw samples (I)
-    max_imag = np.max(np.abs(raw[row_start:row_end, ].imag))*100  # Find the maximum imaginary value in the raw samples (Q)
+    mean_real = np.mean(np.abs(raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
+    mean_imag = np.mean(np.abs(raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
 
-    sig_axes[3].bar(0, max_real, color='blue', label='I')
-    sig_axes[3].bar(1, max_imag, color='orange', label='Q')
+    sig_axes[3].bar(0, mean_real, color='blue', label='I')
+    sig_axes[3].bar(1, mean_imag, color='orange', label='Q')
+    # Draw a line at the 33% and 66% marks
+    sig_axes[3].axhline(y=33, color='green', linestyle='--', label='33%')
+    sig_axes[3].axhline(y=66, color='red', linestyle='--', label='66%')
     sig_axes[3].legend(loc='lower right')
 
     sig_axes[4].legend(loc='lower right')
@@ -1134,6 +1156,150 @@ def sdr_init(sdr, center_freq, gain, sample_rate, ppm):
 
     logger.info(f"Initialised SDR: Center Frequency {sdr.center_freq/1e6} MHz, Gain {sdr.gain} dB, Sample Rate {sdr.sample_rate/1e6} MHz, PPM {sdr.ppm}")
 
+def sdr_check_gain_gaussianity(sdr, sample_rate=2.4e6, duration=1):
+    """
+    Check the Gaussianity of the SDR samples over a specified duration.
+    """
+
+    p_threshold = 0.05 # p-value threshold for Gaussian detection
+    sample_limit = 5000  # limit for Shapiro–Wilk
+
+    samples = int(duration * sample_rate)
+
+    x = np.zeros(samples, dtype=np.complex128)
+    x = sdr.read_samples(samples)
+
+    # Take a random subset of samples to avoid warning and speed up test
+    idx = np.random.choice(samples, size=sample_limit, replace=False)
+    r_samples = x.real[idx]
+    i_samples = x.imag[idx]
+
+    # Run Gaussianity test (Shapiro–Wilk)
+    stat_r, p_r = shapiro(r_samples)
+    stat_i, p_i = shapiro(i_samples)
+
+    if p_r > p_threshold and p_i > p_threshold:
+        logger.info(f"Gaussianity test at gain={sdr.gain} dB passed: P-Values: Real={p_r:.3f} AND Imaginary={p_i:.3f} greater than threshold {p_threshold} with power {np.sum(np.abs(x)**2):.2f} [a.u.]")
+        return True, (p_r, p_i)
+    else:
+        logger.info(f"Gaussianity test at gain={sdr.gain} dB failed: P-Values: Real={p_r:.3f} OR Imaginary={p_i:.3f} less than threshold {p_threshold} with power {np.sum(np.abs(x)**2):.2f} [a.u.]")
+        return False, (p_r, p_i)
+
+def sdr_get_gaussian_gain(sdr, sample_rate=2.4e6, duration=1, fft_size=1024, p_threshold=0.05, max_samples=5000):
+    """Iterate through all SDR gain settings to find the optimal gain for Gaussianity.
+        Return the gain setting that meets the Gaussianity criteria.
+    """
+
+    curr_gain = sdr.gain # remember current SDR gain setting
+    num_samples = int(duration * sample_rate) # number of samples to collect
+
+    # Gain settings
+    Glist = [1,3,7,9,12,14,16,17,19,21,23,25,28,30,32,34,36,37,39,40,42,43,44,45,48,50]
+
+    # Lists to hold p-values per gain
+    p_r_list = []
+    p_i_list = []
+
+    # Loop over each gain setting
+    for gain in Glist:
+
+        sdr.gain = gain  # Set the SDR gain
+        result, (p_r, p_i) = sdr_check_gain_gaussianity(sdr=sdr, sample_rate=sample_rate, duration=duration)
+
+        p_r_list.append(p_r)
+        p_i_list.append(p_i)
+
+    gaussian = False
+    gauss_gain = None
+    for i in range(len(Glist) - 1):
+        if (p_r_list[i] > p_threshold and p_i_list[i] > p_threshold and
+            p_r_list[i+1] > p_threshold and p_i_list[i+1] > p_threshold):
+            gaussian = True
+            gauss_gain = Glist[i+1]
+            sdr.gain = gauss_gain
+            break
+
+    # If we find a gaussian gain
+    if gaussian:
+        logger.info(f"Optimal SDR gain for gaussianity: {sdr.gain} dB\n")
+    else: 
+        logger.warning("\nNo SDR gain meets Gaussianity criteria — check signal chain.\n")
+
+        max_p_r = np.max(p_r_list)
+        # Set gauss gain to gain in Glist corresponding to maximum p_r_list else curr_gain if max=0.0
+        gauss_gain = Glist[np.argmax(p_r_list)] if max_p_r > 0.0 else curr_gain
+        sdr.gain = gauss_gain
+        logger.warning(f"Propose SDR gain {sdr.gain} dB based on maximum p_r value {max_p_r}\n")
+
+    gaussian_array = np.random.normal(loc=0.0, scale=1, size=num_samples)
+    g_hist, g_bins = np.histogram(gaussian_array, range=(-1, 1),bins=fft_size)
+
+    fig = plt.figure(num=400,figsize=FIG_SIZE)
+    gs = GridSpec(3, 1, height_ratios=[0.5, 1, 1], left=0.07, right=0.93, top=0.93, bottom=0.07, hspace=0.4) # Gaussianity check displays
+
+    # === Plot p-values vs gain ===
+    ax1 = fig.add_subplot(gs[0])
+    ax1.plot(Glist, p_r_list, 'ro-', label='Real part p-value')
+    ax1.plot(Glist, p_i_list, 'bo-', label='Imag part p-value')
+    ax1.axhline(p_threshold, color='k', linestyle='--', label=f'Threshold = {p_threshold}')
+    ax1.set_xlabel('Gain')
+    ax1.set_ylabel('p-value')
+    ax1.set_title('Gaussianity Test (Shapiro–Wilk) vs Gain')
+    ax1.legend(loc='upper right')
+    ax1.grid(True)
+
+    def add_reference_gaussian(ax, data, fft_size, label_gain):
+        r_hist, r_bins = np.histogram(data.real, range=(-1, 1), bins=fft_size)
+        i_hist, i_bins = np.histogram(data.imag, range=(-1, 1), bins=fft_size)
+
+        # Convert to percentages
+        r_hist = r_hist / np.sum(r_hist) * 100
+        i_hist = i_hist / np.sum(i_hist) * 100
+
+        # Plot histograms
+        ax.bar(r_bins[:-1], r_hist, width=np.diff(r_bins), color='r', alpha=0.5, label='Real')
+        ax.bar(i_bins[:-1], i_hist, width=np.diff(i_bins), color='b', alpha=0.5, label='Imaginary')
+
+        # Std Deviation (spread or width of the distribution) 
+        # Gaussian has:
+        #    ~68% of data within 1 sigma
+        #    ~95% of data within 2 sigma
+        #    ~99.7% of data within 3 sigma
+        # Set sigma = 0.334 to capture ~99.7% of data within 3 sigma
+
+        mu, sigma = 0.0, 0.334  # Mean and standard deviation for Gaussian distribution
+        gauss_array = np.random.normal(loc=mu, scale=sigma, size=len(data))
+        g_hist, g_bins = np.histogram(gauss_array, range=(-1, 1), bins=fft_size)
+        
+        # Convert to percentages
+        g_hist = g_hist / np.sum(g_hist) * 100
+
+        ax.plot(g_bins[:-1], g_hist, color='black', label="Gauss")
+
+        ax.set_xlabel('Value')
+        ax.set_ylabel('Count (%)')
+        ax.set_title(f'Histogram of SDR Samples (Gain = {label_gain} dB)')
+        ax.legend(loc='upper right')
+
+    # === Plot original gain setting ===
+    sdr.gain = curr_gain
+    x = sdr.read_samples(num_samples)
+    ax2 = fig.add_subplot(gs[1])
+    add_reference_gaussian(ax2, x, fft_size, sdr.gain)
+
+    # === Plot Gaussian gain setting ===
+    sdr.gain = gauss_gain
+    x = sdr.read_samples(num_samples)
+    ax3 = fig.add_subplot(gs[2])
+    add_reference_gaussian(ax3, x, fft_size, sdr.gain)
+
+    filename = f"{datetime.datetime.now().strftime('%Y-%m-%dT%H%M%S')}-sdr-gaussian-gain-{gauss_gain}dB.png"
+    plt.savefig(f"{OUTPUT_DIR}/{filename}", dpi=300)
+    plt.pause(0.1)
+
+    sdr.gain = curr_gain # Restore original gain setting
+    return gaussian, gauss_gain
+
 def sdr_stabilise(sdr, sample_rate=2.4e6, duration=5):
     """
     Stabilize the SDR by discarding initial samples for a specified duration.
@@ -1300,6 +1466,27 @@ def main():
     # Create and initialize metadata structure to store information about the observation
     meta = init_metadata(args, scans_meta)
 
+    # Initialize inertial motion sensor to None
+    motion = None
+
+    # If an Inertial Measurement Unit (IMU) device is specified, initialise it and connect
+    if args.imu:
+
+        connected = False
+
+        try:
+            motion = Motion(args.imu, args.baud)  # Initialize the IMU device
+            connected = motion.connect()
+
+        except:
+            logger.error(f"Failed to connect to IMU device at {args.imu} with baudrate {args.baud}")
+
+        meta["imu"]={
+            "device": args.imu,
+            "baudrate": args.baud,
+            "connected": connected
+        }
+
     # If we are not performing calibration, load calibration data from CSV files for each scan
     if not args.load and not args.calibrate:
 
@@ -1309,8 +1496,8 @@ def main():
 
             scan_center_freq = (scan_start_freq + args.sample_rate/2)
 
-            gain_file = load_gain_calibration(gen_file_prefix(args, duration=args.duration, center_freq=scan_center_freq, freq_scan=freq_scan, type='gain'))  # Load gain calibration if not generating a load file
-            tsys_file = load_tsys_calibration(gen_file_prefix(args, duration=args.duration, center_freq=scan_center_freq, freq_scan=freq_scan, type='tsys'))  # Load Tsys calibration if not generating a load file
+            gain_file = None #load_gain_calibration(gen_file_prefix(args, duration=args.duration, center_freq=scan_center_freq, freq_scan=freq_scan, type='gain'))  # Load gain calibration if not generating a load file
+            tsys_file = None #load_tsys_calibration(gen_file_prefix(args, duration=args.duration, center_freq=scan_center_freq, freq_scan=freq_scan, type='tsys'))  # Load Tsys calibration if not generating a load file
 
             if gain_file is None:
                 bsl_file = load_baseline(gen_file_prefix(args, duration=args.duration, center_freq=scan_center_freq, freq_scan=freq_scan,type='load'), freq_scan) # Load baseline power spectrum if not generating a load file
@@ -1360,7 +1547,7 @@ def main():
                 # If the device is a Blog V, enable the bias tee and update the metadata accordingly
                 if 'Blog V' in info['Product']:
                     sdr_bias_t(enable=True)
-                    meta["sdr"]["bias_tee"] = True  
+                    meta["sdr"]["bias_tee"] = True
                 else:
                     meta["sdr"]["bias_tee"] = False  
 
@@ -1368,7 +1555,27 @@ def main():
                 sdr = RtlSdr()
 
             initial_cf = int(start_freq + args.sample_rate/2)  # Set the center frequency for the first scan
-            sdr_init(sdr, initial_cf, args.gain, args.sample_rate, args.ppm)  # Set the SDR to the appropriate center frequency etc
+
+            sdr_init(sdr, initial_cf, args.gain, args.sample_rate, args.ppm)  # Configure SDR to appropriate center frequency etc
+            gaussian, (p_r, p_i) = sdr_check_gain_gaussianity(sdr=sdr, sample_rate=args.sample_rate, duration=1)
+
+            # If SDR Gaussianity check fails
+            if not gaussian:
+                logger.warning(f"Gaussianity test at SDR gain={sdr.gain} dB failed.\nFind a Gaussian distribution of samples ? (y/n)")
+                confirm = input().strip().lower()
+
+                # If user wants to find a Gaussian distribution of samples
+                if confirm == 'y':
+                    gaussian, gauss_gain = sdr_get_gaussian_gain(sdr, sample_rate=args.sample_rate, duration=1, fft_size=args.fft_size)
+                    confirm = input(f"Configure {gauss_gain} gain on the SDR ? (y/n)").strip().lower()
+
+                    # If the user confirms
+                    if confirm == 'y':
+                        # Adjust gain to the Gaussian setting
+                        args.gain = str(gauss_gain)  
+                        sdr_init(sdr, initial_cf, args.gain, args.sample_rate, args.ppm)  
+
+                logger.info("Proceeding with SDR gain set to {}".format(sdr.gain))
 
         except Exception as e:
             logger.exception(f"Error while trying to instantiate an SDR instance: {e}")
@@ -1381,7 +1588,7 @@ def main():
     if observing_sky:
 
         # Initialize the control and monitoring displays
-        cam_fig, cam_axes, polar = init_cam_displays(args, fits_file=fits_file)  # Initialize control and monitoring displays
+        cam_fig, cam_axes, polar, pec = init_cam_displays(args, fits_file=fits_file, motion=motion)  # Initialize control and monitoring displays
 
         global cam_key_press
 
@@ -1391,6 +1598,7 @@ def main():
 
         while (not cam_key_press):
             polar.update_targetbox()
+            pec.plot(cam_fig, cam_axes[3])
             plt.pause(0.1)  # Pause to allow the plot to update
 
             # If we are using an RTL-SDR device...start stabilizing it
@@ -1415,7 +1623,7 @@ def main():
 
         # Record date and time that this observation starts
         obs_start = datetime.datetime.now().astimezone()
-        meta["observation"]["start_time"] = obs_start.isoformat()  # Record the start time in the metadata
+        meta["observation"]["obs_start"] = obs_start.isoformat()  # Record the start time in the metadata
         logger.info(f"Observation started at {obs_start} for {args.duration} second(s), with {freq_scans} frequency scan(s) of {scan_duration} seconds each and {scan_iterations} iteration(s).")
 
         # For each frequency scan
@@ -1460,8 +1668,35 @@ def main():
 
                     try:
 
+                        # If we have a motion sensor 
+                        if 'motion' in locals():
+                            # Update scan meta data with current motion altitude, azimuth and temperature
+                            alt, az = motion.get_altaz() if motion is not None else ("No IMU sensor", "No IMU sensor")
+                            temp = motion.get_temperature() if motion is not None else "No IMU sensor"
+
+                            meta["observation"]["scans"][freq_scan * scan_iterations + scan_iter].update({
+                                "scan_imu_temp": temp,
+                                "scan_imu_alt": alt,
+                                "scan_imu_az": az
+                            })
+
+                        if 'polar' in globals() and polar is not None:
+                            # Get the current altitude and azimuth of the target from the polar plot
+                            alt, az = polar.get_target_altaz()
+                            meta["observation"]["scans"][freq_scan * scan_iterations + scan_iter].update({
+                                "scan_target_alt": alt,
+                                "scan_target_az": az
+                            })
+
+                        meta["observation"]["scans"][freq_scan * scan_iterations + scan_iter].update({
+                            "scan_start": datetime.datetime.now().astimezone().isoformat() })
+
                         # Perform a scan using the RTL-SDR device
                         perform_scan(args, sdr, scan_center_freq, args.sample_rate, scan_duration, args.fft_size)  # Collect samples and populate data arrays
+
+                        # Update scan meta data to indicate datetime of scan completion and current motion azimuth and elevation
+                        meta["observation"]["scans"][freq_scan * scan_iterations + scan_iter].update({
+                            "scan_end": datetime.datetime.now().astimezone().isoformat() })
 
                     except (OSError, EOFError) as e:
                         # OSError = network error, EOFError = server closed connection
@@ -1570,6 +1805,7 @@ def main():
             # If the SDR device is a Blog V
             if 'Blog V' in meta["sdr"]["product"]:
                 # Disable the bias tee 
+                #pass
                 sdr_bias_t(enable=False)
 
         # Stop tracking polar plot targets if necessary
@@ -1577,11 +1813,20 @@ def main():
             polar.update_tracks()
             polar.update_targetbox()
             polar.stop_observing() 
-            
+
+        # Stop recording PEC if it was initialized
+        if pec:
+            pec.stop_recording()
+
+        # Disconnect the motion sensor if it was initialized
+        if 'motion' in locals() and motion is not None:
+            motion.disconnect()
+
     # Record date and time that this observation ends
     obs_end = datetime.datetime.now().astimezone()
-    logger.info(f"Data acquisition completed at {obs_end}.")
-    meta["observation"]["end_time"] = obs_end.isoformat()  # Add end time to metadata
+    logger.info(f"Data acquisition completed at {obs_end} after {obs_end - obs_start} seconds.")
+    meta["observation"]["obs_end"] = obs_end.isoformat()  # Add end time to metadata
+    meta["observation"]["obs_duration"] = (obs_end - obs_start).total_seconds()  # Add duration to metadata
 
     # Normalise the integrated power spectrum to power per second before plotting and saving
     int_mpr = int_mpr / ((scan_iter+1) * scan_duration)  # Normalise the integrated power spectrum to power per second
@@ -1600,7 +1845,6 @@ def main():
     # Save the cam plots if they were initialized
     if cam_fig:
         cam_fig.savefig(f"{OUTPUT_DIR}/{gen_file_prefix(args, dt=obs_start, type='cam')}.png", dpi=300)
-        plt.close(cam_fig)
 
     # Print the list of output files generated during the observation
     out_files = print_output_files(obs_start)

@@ -23,6 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Alston Observatory'
+EPSILON = 0.1
 
 def load_hotcold_data(args, scan_center_freq, extent, duration, fft_size, scan=None):
 
@@ -301,9 +302,9 @@ def main():
         tsys_end_mean = np.mean(int_tsys_cal[scan, end_bin - delta:end_bin])  # Calculate the mean Tsys at the end of the usable bandwidth
 
         # Populate the adjusted tsys numpy array with a straightline fit of the avg tsys calibration
-        #int_adj_tsys_cal[scan, ] = np.interp(np.arange(args.fft_size), [0,args.fft_size], [avg_tsys, avg_tsys])
+        int_adj_tsys_cal[scan, ] = np.interp(np.arange(args.fft_size), [0,args.fft_size], [avg_tsys, avg_tsys])
         logger.info(f"Scan {scan}/{freq_scans}: Tsys Start: {10*np.log10(tsys_start_mean):.2f}dB, End: {10*np.log10(tsys_end_mean):.2f}dB, Center: {10*np.log10(np.mean(int_tsys_cal[scan, start_bin:end_bin])):.2f}dB")
-        int_adj_tsys_cal[scan, ] = int_tsys_cal[scan, ]
+        #int_adj_tsys_cal[scan, ] = int_tsys_cal[scan, ]
 
         # Smooth the tsys calibration using a maximal smoothing (10) Gaussian filter
         #int_adj_tsys_cal[scan, ] = gaussian_filter1d(int_tsys_cal[scan, ], sigma=10) 
@@ -340,20 +341,20 @@ def main():
         tsys_label=f"Tsys" if f"Tsys" not in [l.get_label() for l in cal[1].lines] else ""
         adj_tsys_label=f"Adj Tsys" if f"Adj Tsys" not in [l.get_label() for l in cal[1].lines] else ""
 
-        cal[1].plot(np.linspace(extent[0], extent[1], args.fft_size), 10*np.log10(int_gain_cal[scan, :]), color='purple', label=gain_label)
-        cal[1].plot(np.linspace(extent[0], extent[1], args.fft_size), 10*np.log10(int_adj_gain_cal[scan, :]), color='black', label=adj_gain_label)
-        cal[1].plot(np.linspace(extent[0], extent[1], args.fft_size), 10*np.log10(int_tsys_cal[scan, :]), color='orange', label=tsys_label)
 
-        
-        cal[1].plot(np.linspace(extent[0], extent[1], delta), 10*np.log10(int_tsys_cal[scan, start_bin:start_bin+delta]), color='green', label=tsys_label)
-        cal[1].plot(np.linspace(extent[0], extent[1], args.fft_size), 10*np.log10(int_tsys_cal[scan, :]), color='orange', label=tsys_label)
-        cal[1].plot(np.linspace(extent[0], extent[1], delta), 10*np.log10(int_tsys_cal[scan, end_bin - delta:end_bin]), color='green', label=tsys_label)
-        
-        cal[1].plot(np.linspace(extent[0], extent[1], args.fft_size), 10*np.log10(int_adj_tsys_cal[scan, :]), color='tomato', label=adj_tsys_label)
+        cal[1].plot(np.linspace(extent[0], extent[1], args.fft_size), 10 * np.log10(np.where(int_gain_cal[scan, :] > 0, int_gain_cal[scan, :], np.finfo(float).eps)), color='purple', label=gain_label)
+        cal[1].plot(np.linspace(extent[0], extent[1], args.fft_size), 10 * np.log10(np.where(int_adj_gain_cal[scan, :] > 0, int_adj_gain_cal[scan, :], np.finfo(float).eps)), color='black', label=adj_gain_label)
+        cal[1].plot(np.linspace(extent[0], extent[1], args.fft_size), 10 * np.log10(np.where(int_tsys_cal[scan, :] > 0, int_tsys_cal[scan, :], np.finfo(float).eps)), color='orange', label=tsys_label)
+
+        #cal[1].plot(np.linspace(extent[0], extent[1], delta), 10 * np.log10(np.where(int_tsys_cal[scan, start_bin:start_bin+delta] > 0, int_tsys_cal[scan, start_bin:start_bin+delta], np.finfo(float).eps)), color='green', label=tsys_label)
+        #cal[1].plot(np.linspace(extent[0], extent[1], args.fft_size), 10 * np.log10(np.where(int_tsys_cal[scan, :] > 0, int_tsys_cal[scan, :], np.finfo(float).eps)), color='orange', label=tsys_label)
+        #cal[1].plot(np.linspace(extent[0], extent[1], delta), 10 * np.log10(np.where(int_tsys_cal[scan, end_bin - delta:end_bin] > 0, int_tsys_cal[scan, end_bin - delta:end_bin], np.finfo(float).eps)), color='green', label=tsys_label)
+
+        cal[1].plot(np.linspace(extent[0], extent[1], args.fft_size), 10 * np.log10(np.where(int_adj_tsys_cal[scan, :] > 0, int_adj_tsys_cal[scan, :], np.finfo(float).eps)), color='tomato', label=adj_tsys_label)
 
         # Add average lines for hot and cold power spectra
-        gainline = cal[1].axhline(10*np.log10(avg_gain), color='purple', linestyle='--', label=f'Avg Gain: {avg_gain:.2f} {10*np.log10(avg_gain):.2f}dB')
-        tsysline = cal[1].axhline(10*np.log10(avg_tsys), color='orange', linestyle='--', label=f'Avg Tsys: {avg_tsys:.2f}K {10*np.log10(avg_tsys):.2f}dB')
+        gainline = cal[1].axhline(10 * np.log10(avg_gain), color='purple', linestyle='--', label=f'Avg Gain: {avg_gain:.2f} {10 * np.log10(avg_gain):.2f}dB')
+        tsysline = cal[1].axhline(10 * np.log10(avg_tsys), color='orange', linestyle='--', label=f'Avg Tsys: {avg_tsys:.2f}K {10 * np.log10(avg_tsys):.2f}dB')
 
         # Add labels and legend to the calibration spectra plot
         cal[1].legend()  
