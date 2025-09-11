@@ -13,6 +13,7 @@ from datetime import datetime
 
 import message
 import events
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -231,10 +232,23 @@ if __name__ == "__main__":
         logging.FileHandler("server.log", mode="a")  # Log to a file
     ]
     )
+    
+    content = {}
+    content["timestamp"] = str(datetime.now())
+    content["type"] = "prop_set"
+    content["name"] = "fc"
+    content["value"] = 1420.40e6
 
-    data = '{"byteorder": "big", "content-type": "text/json", "content-encoding": "utf-8", "content-length": 14}Hello, Server!'
+    data = json.dumps({**content})
+
+    print(f"Data: {data}")
 
     app_msg = message.AppMessage()
+    app_msg.set_json_header(
+        content_type="text/json",
+        content_encoding="utf-8",
+        content_bytes=data.encode('utf-8')
+    )
     app_msg.from_data(data.encode('utf-8'))
     
     queue = Queue()
