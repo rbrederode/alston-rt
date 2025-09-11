@@ -40,7 +40,11 @@ from geopy.geocoders import Nominatim
 logging.basicConfig(
     level=logging.INFO,  # Or DEBUG for more verbosity
     format='%(asctime)s %(levelname)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(),                    # Log to console
+        logging.FileHandler("proto.log", mode="a")  # Log to a file
+    ]
 )
 logger = logging.getLogger(__name__)
 
