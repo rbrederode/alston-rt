@@ -1813,13 +1813,13 @@ def main():
                 sdr_bias_t(enable=False)
 
         # Stop tracking polar plot targets if necessary
-        if polar:
+        if 'polar' in locals() and polar is not None:
             polar.update_tracks()
             polar.update_targetbox()
             polar.stop_observing() 
 
         # Stop recording PEC if it was initialized
-        if pec:
+        if 'pec' in locals() and pec is not None:
             pec.stop_recording()
 
         # Disconnect the motion sensor if it was initialized
