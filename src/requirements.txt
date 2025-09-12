@@ -1,0 +1,10 @@
+numpy
+matplotlib
+tzlocal
+pytz
+astropy
+astroplan
+witmotion
+pyrtlsdr
+scipy
+geopy
