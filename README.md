@@ -11,4 +11,4 @@ Observations of known radio sources are conducted to characterise the performanc
 
 # Installation Instructions
 
-TBD
+pip install -r src/requirements.txt
