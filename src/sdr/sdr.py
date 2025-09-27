@@ -4,6 +4,7 @@ import numpy as np
 import sys
 import subprocess
 import threading
+import time
 import functools
 
 import logging
@@ -19,7 +20,7 @@ def sdr_guard(default=None):
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs):
             with SDR._mutex:
-                if self.sdr is None:
+                if self.rtlsdr is None:
                     logger.warning("SDR device not connected.")
                     return default
                 return func(self, *args, **kwargs)
@@ -39,11 +40,11 @@ class SDR:
         with SDR._mutex:
 
             try:
-                self.sdr = RtlSdr()
+                self.rtlsdr = RtlSdr()
             except Exception as e:
                 logger.exception(f"SDR could not connect due to exception: {e}")
-                self.sdr = None
-        
+                self.rtlsdr = None
+
         info = self.get_eeprom_info()
         if info:
             logger.info(f"SDR connected, device information: {info}")
@@ -54,16 +55,16 @@ class SDR:
 
         with SDR._mutex:
 
-            if self.sdr:
-                self.sdr.close()
-                self.sdr = None
+            if self.rtlsdr:
+                self.rtlsdr.close()
+                self.rtlsdr = None
                 logger.info("SDR connection closed.")
         
     def get_eeprom_info(self):
 
         with SDR._mutex:
 
-            if self.sdr is None:
+            if self.rtlsdr is None:
                 logger.warning("SDR device not connected.")
                 return None
 
@@ -99,7 +100,7 @@ class SDR:
 
         with SDR._mutex:
 
-            if self.sdr is None:
+            if self.rtlsdr is None:
                 logger.warning("SDR device not connected.")
                 return False
 
@@ -128,7 +129,7 @@ class SDR:
 
         with SDR._mutex:
 
-            if self.sdr is None:
+            if self.rtlsdr is None:
                 logger.warning("SDR device not connected.")
                 return False
 
@@ -144,64 +145,67 @@ class SDR:
 
     @sdr_guard(default=None)
     def get_center_freq(self):
-        return self.sdr.center_freq
+        return self.rtlsdr.center_freq
 
     @sdr_guard(default=None)
     def set_center_freq(self, value):
-        self.sdr.center_freq = value
+        self.rtlsdr.center_freq = value
 
     @sdr_guard(default=None)
     def get_sample_rate(self):
-        return self.sdr.sample_rate
+        return self.rtlsdr.sample_rate
 
     @sdr_guard(default=None)
     def set_sample_rate(self, value):
-        self.sdr.sample_rate = value
+        self.rtlsdr.sample_rate = value
 
     @sdr_guard(default=None)
     def get_bandwidth(self):
-        return self.sdr.bandwidth
+        return self.rtlsdr.bandwidth
 
     @sdr_guard(default=None)
     def set_bandwidth(self, value):
-        self.sdr.bandwidth = value
+        self.rtlsdr.bandwidth = value
 
     @sdr_guard(default=None)
     def get_gain(self):
-        return self.sdr.gain
+        return self.rtlsdr.gain
 
     @sdr_guard(default=None)
     def set_gain(self, value):
-        self.sdr.gain = value
+        self.rtlsdr.gain = value
 
     @sdr_guard(default=None)
     def get_freq_correction(self):
-        return self.sdr.freq_correction
+        return self.rtlsdr.freq_correction
 
     @sdr_guard(default=None)
     def set_freq_correction(self, value):
-        self.sdr.freq_correction = value
+        self.rtlsdr.freq_correction = value
 
     @sdr_guard(default=None)
     def get_gains(self):
-        return self.sdr.get_gains()
+        return self.rtlsdr.get_gains()
 
     @sdr_guard(default=None)
     def get_tuner_type(self):
-        return self.sdr.get_tuner_type()
+        return self.rtlsdr.get_tuner_type()
 
     @sdr_guard(default=None)
     def set_direct_sampling(self, value):
-        self.sdr.direct_sampling = value
+        self.rtlsdr.direct_sampling = value
 
     @sdr_guard(default=None)
     def read_bytes(self, num_bytes=DEFAULT_READ_SIZE):
-        return self.sdr.read_bytes(num_bytes)
+        return self.rtlsdr.read_bytes(num_bytes)
 
     @sdr_guard(default=None)
     def read_samples(self, num_samples=DEFAULT_READ_SIZE):
-        x = self.sdr.read_samples(num_samples)
-        x = np.array(x, dtype=np.complex64)  
+        time_enter = time.time()
+        x = self.rtlsdr.read_samples(num_samples)
+        x = np.array(x, dtype=np.complex64)
+        time_exit = time.time()
+        logger.info(f"SDR READ SAMPLES: requested {num_samples} samples, read {x.size} samples in {time_exit - time_enter:.3f} seconds")
         return x
 
 def main():

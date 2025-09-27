@@ -243,6 +243,8 @@ class TCPClient:
 
         with self._send_lock:  # Ensure that only one thread can send a message at a time
 
+            time_enter = time.time()
+
             if not self.connected:
                 logging.error(f"TCP Client {self.description} not connected to host {self.host} port {self.port}. Cannot send message.\n{msg}")
                 return
@@ -296,6 +298,9 @@ class TCPClient:
                     except Exception as e:
                         logger.error(f"TCP Client {self.description} general exception sending message to host {self.host} port {self.port}\n{e}")
                         self._process_disconnect()
+
+            time_exit = time.time()
+            logger.info(f"TCP Client {self.description} SEND {len(data)} bytes duration: {(time_exit - time_enter)*1000:.2f} ms")
     
     def nrConnections(self):
         """Return the number of connections to the server."""
@@ -343,21 +348,30 @@ if __name__ == "__main__":
     ]
     )
 
-    content = {}
-    content["msg_type"] = "req"
-    content["action_code"] = "method"
-    content["method"] = "read_samples"
-    content["params"] = {"num_samples": 2.4e6}
+    set_sample_rate_apicall = {}
+    set_sample_rate_apicall["msg_type"] = "req"
+    set_sample_rate_apicall["action_code"] = "set"
+    set_sample_rate_apicall["property"] = "sample_rate"
+    set_sample_rate_apicall["value"] = 2.4e6
+
+    get_sample_rate_apicall = {}
+    get_sample_rate_apicall["msg_type"] = "req"
+    get_sample_rate_apicall["action_code"] = "get"
+    get_sample_rate_apicall["property"] = "sample_rate"
+
+    set_center_freq_apicall = {}
+    set_center_freq_apicall["msg_type"] = "req"
+    set_center_freq_apicall["action_code"] = "set"
+    set_center_freq_apicall["property"] = "center_freq"
+    set_center_freq_apicall["value"] = 1.42e6
+
+    read_samples_apicall = {}
+    read_samples_apicall["msg_type"] = "req"
+    read_samples_apicall["action_code"] = "method"
+    read_samples_apicall["method"] = "read_samples"
+    read_samples_apicall["params"] = {"num_samples": 2.4e6}
 
     api_msg = message.APIMessage()
-
-    api_msg.set_json_api_header(
-        api_version="1.0",
-        dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
-        api_call=content
-    )
 
     queue = Queue()
 
@@ -387,6 +401,46 @@ if __name__ == "__main__":
     client.connect()
     
     time.sleep(5)
+
+    api_msg.set_json_api_header(
+        api_version="1.0",
+        dt=datetime.now(timezone.utc),
+        from_system="tm",
+        to_system="dig",
+        api_call=set_sample_rate_apicall
+    )
+
+    client.send(api_msg)
+
+    time.sleep(5)
+
+    api_msg.set_json_api_header(
+        api_version="1.0",
+        dt=datetime.now(timezone.utc),
+        from_system="tm",
+        to_system="dig",
+        api_call=get_sample_rate_apicall
+    )
+
+    client.send(api_msg)
+
+    api_msg.set_json_api_header(
+        api_version="1.0",
+        dt=datetime.now(timezone.utc),
+        from_system="tm",
+        to_system="dig",
+        api_call=set_center_freq_apicall
+    )
+
+    client.send(api_msg)
+
+    api_msg.set_json_api_header(
+        api_version="1.0",
+        dt=datetime.now(timezone.utc),
+        from_system="tm",
+        to_system="dig",
+        api_call=read_samples_apicall
+    )
 
     client.send(api_msg)
     time.sleep(100)
