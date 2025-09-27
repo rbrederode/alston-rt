@@ -106,7 +106,7 @@ class Digitiser(App):
 
         action.set_msg_to_remote(tm_rsp)
 
-        if api_call['method'] in ("read_samples") and payload is not None:
+        if action_code == 'method' and api_call['method'] in ("read_samples") and payload is not None:
 
             if self.sdp_connected:
 
@@ -120,7 +120,7 @@ class Digitiser(App):
             else:
                 logger.warning("Digitiser cannot send samples to Science Data Processor, not connected.")
 
-                tm_adv = self._construct_adv_to_tm(property=PROPERTY_SDP_CONNECTED, value=False, message="Disconnected from SDP")
+                tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_CONNECTED, value=False, message="Disconnected from SDP")
                 action.set_msg_to_remote(tm_adv)
                 action.set_timer_action(Action.Timer(name="tm_adv_timer", timer_action=30000, echo_data=tm_adv))
                 
@@ -202,29 +202,8 @@ class Digitiser(App):
         """ Handles field set api calls.
                 : returns: (status, message, payload)
         """
-        prop_name = api_call['property']
+        prop_name = 'set_' + api_call['property']
         prop_value = api_call['value']
-
-        if self.sdr is None:
-            return tm_dig.STATUS_ERROR, "Digitiser not connected to SDR device"
-
-        if not hasattr(self.sdr, prop_name):
-            return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} not found on SDR", None
-
-        setattr(self.sdr, prop_name, prop_value)
-
-        value = getattr(self.sdr, prop_name)
-
-        if value == prop_value:
-            return tm_dig.STATUS_SUCCESS
-        else:
-            return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name} to {prop_value}, current value is {value}"
-
-    def handle_field_get(self, api_call):
-        """ Handles field get api calls.
-                : returns: (status, message, payload)
-        """
-        prop_name = api_call['property']
 
         if self.sdr is None:
             return tm_dig.STATUS_ERROR, "Digitiser not connected to SDR device", None
@@ -232,9 +211,32 @@ class Digitiser(App):
         if not hasattr(self.sdr, prop_name):
             return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} not found on SDR", None
 
-        value = getattr(self.sdr, prop_name)
+        setter = getattr(self.sdr, prop_name)
+        if callable(setter):
+            setter(prop_value)
+            return tm_dig.STATUS_SUCCESS, f"Digitiser set property {prop_name} to {prop_value}", None
+        else:
+            return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} is not callable", None
 
-        return tm_dig.STATUS_SUCCESS, None, value
+    def handle_field_get(self, api_call):
+        """ Handles field get api calls.
+                : returns: (status, message, payload)
+        """
+        prop_name = 'get_' + api_call['property']
+
+        if self.sdr is None:
+            return tm_dig.STATUS_ERROR, "Digitiser not connected to SDR device", None
+
+        if not hasattr(self.sdr, prop_name):
+            return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} not found on SDR", None
+
+        getter = getattr(self.sdr, prop_name)
+        if callable(getter):
+            value = getter()
+        else:
+            value = getter
+
+        return tm_dig.STATUS_SUCCESS, f"Digitiser {prop_name} value {value}", None
 
     def handle_method_call(self, api_call):
         """ Handles method api calls.
@@ -268,14 +270,18 @@ class Digitiser(App):
         """
 
         tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
-        tm_adv.set_to("tm")
-        tm_adv.set_from(self.app_name)
-        tm_adv.set_api_call({
-            "msg_type": "adv", 
-            "action_code": "set", 
-            "property": property, 
-            "value": value, 
-            "message": message if message else ""
+
+        tm_adv.set_json_api_header(
+            api_version=self.tm_api.get_api_version(), 
+            dt=datetime.datetime.now(timezone.utc), 
+            from_system=self.app_name, 
+            to_system="tm", 
+            api_call={
+                "msg_type": "adv", 
+                "action_code": "set", 
+                "property": property, 
+                "value": value, 
+                "message": message if message else ""
         })
 
         return tm_adv
@@ -285,9 +291,15 @@ class Digitiser(App):
         """
 
         sdp_adv = APIMessage(api_version=self.sdp_api.get_api_version(), payload=payload)
-        sdp_adv.set_to("sdp")
-        sdp_adv.set_from(self.app_name)
 
+        sdp_adv.set_json_api_header(
+            api_version=self.sdp_api.get_api_version(), 
+            dt=datetime.datetime.now(timezone.utc), 
+            from_system=self.app_name, 
+            to_system="sdp", 
+            api_call={}
+        )
+        
         metadata = [   
             {"property": "center_freq", "value": 1420.40e6},  # Hz
             {"property": "sample_rate", "value": 2.4e6},      # Hz
@@ -313,8 +325,10 @@ class Digitiser(App):
             status, message, payload = result
         elif isinstance(result, tuple) and len(result) == 2:
             status, message, payload = result, None
-        else:
+        elif isinstance(result, tuple) and len(result) == 1:
             status, message, payload = result, None, None
+        else:
+            status, message, payload = tm_dig.STATUS_ERROR, "Invalid result format", None
 
         return status, message, payload
 

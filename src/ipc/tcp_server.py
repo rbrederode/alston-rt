@@ -51,6 +51,8 @@ class TCPServer:
         self.started = False # Flag to indicate if the server has been started or stopped
         self.max_block_size = max_block_size if max_block_size > 0 else MAX_BLOCK_SIZE
 
+        self._send_lock = threading.Lock() # Lock to ensure thread-safe sending of messages
+
     def _create_socket(self):
         """Create a new socket and register it with the selector."""
         # AF_INET: IPv4, SOCK_STREAM: TCP
@@ -144,7 +146,7 @@ class TCPServer:
             pass
 
         except Exception as e:
-            logger.error(f"TCP Server {self.description} unhandled exception error on {self.host} port {self.port} Data (hex): {full_msg[:1024].hex()} Exception: {e}")
+            logger.error(f"TCP Server {self.description} unhandled exception error on {self.host} port {self.port} Message:\n{msg}\nException: {e}")
             self.sel.unregister(client_socket)
             client_socket.close()
             return
@@ -194,41 +196,57 @@ class TCPServer:
 
     def send(self, msg, client_socket=None):
         """Send a message to a specific connected client."""
-        if client_socket is None:
-            return self.broadcast(msg)
 
-        try:
-            data = msg.to_data()  # Convert the message to bytes 
-            
-            total_len = len(data)
-            offset = 0
+        with self._send_lock:  # Ensure that only one thread can send a message at a time
 
-            # If the message exceeds the maximum block size, set the socket to blocking mode temporarily
-            # This prevents "Resource temporarily unavailable" errors on large messages
-            if total_len > self.max_block_size:
-                client_socket.setblocking(True)
+            if client_socket is None:
+                logger.error(f"TCP Server {self.description} no client socket specified to send message.\n{msg}")
+                return
 
-            # Send the message in blocks if it exceeds the maximum block size
-            while offset < total_len:
-                block = data[offset:offset + self.max_block_size]
-                block_size = len(block)
-                # Calculate remaining blocks (including this one)
-                remaining_blocks = ((total_len - offset) // self.max_block_size)
-                # Pack both as 2-byte unsigned shorts
-                header = struct.pack('>HH', block_size, remaining_blocks)
-                client_socket.sendall(header + block)
-                offset += self.max_block_size
+            if not isinstance(msg, message.Message):
+                logging.error(f"TCP Server {self.description} invalid message type. Expected message.Message, got {type(msg)}.\n{msg}")
+                return
 
-            if total_len > self.max_block_size:
-                client_socket.setblocking(False)
+            if client_socket is None or client_socket.fileno() == -1:
+                logging.error(f"TCP Server {self.description} socket is invalid. Cannot send message.\n{msg}")
+                return
 
-            logger.info(f"TCP Server {self.description} sent message to {client_socket.getpeername()} in {total_len // self.max_block_size + 1} blocks.\n{message.Message.__str__(msg)}")
-        except (OSError, BrokenPipeError, TimeoutError, ConnectionResetError) as e:
-            logger.error(f"TCP Server {self.description} error sending message to {client_socket.getpeername()}: {e}")
+            if client_socket not in [key.fileobj for key in self.sel.get_map().values() if key.data is not None]:
+                logger.error(f"TCP Server {self.description} client socket {client_socket.getpeername()} not connected to server on host {self.host} port {self.port}. Cannot send message.\n{msg}")
+                return
 
-        except Exception as e:
-            logger.error(f"TCP Server {self.description} error sending message to {client_socket.getpeername()}: {e}")
-            self._process_disconnect(client_socket)
+            try:
+                data = msg.to_data()  # Convert the message to bytes 
+                
+                total_len = len(data)
+                offset = 0
+
+                # If the message exceeds the maximum block size, set the socket to blocking mode temporarily
+                # This prevents "Resource temporarily unavailable" errors on large messages
+                if total_len > self.max_block_size:
+                    client_socket.setblocking(True)
+
+                # Send the message in blocks if it exceeds the maximum block size
+                while offset < total_len:
+                    block = data[offset:offset + self.max_block_size]
+                    block_size = len(block)
+                    # Calculate remaining blocks (including this one)
+                    remaining_blocks = ((total_len - offset) // self.max_block_size)
+                    # Pack both as 2-byte unsigned shorts
+                    header = struct.pack('>HH', block_size, remaining_blocks)
+                    client_socket.sendall(header + block)
+                    offset += self.max_block_size
+
+                if total_len > self.max_block_size:
+                    client_socket.setblocking(False)
+
+                logger.info(f"TCP Server {self.description} sent message to {client_socket.getpeername()} in {total_len // self.max_block_size + 1} blocks.\n{message.Message.__str__(msg)}")
+            except (OSError, BrokenPipeError, TimeoutError, ConnectionResetError) as e:
+                logger.error(f"TCP Server {self.description} error sending message to {client_socket.getpeername()}: {e}")
+
+            except Exception as e:
+                logger.error(f"TCP Server {self.description} error sending message to {client_socket.getpeername()}: {e}")
+                self._process_disconnect(client_socket)
 
     def broadcast(self, msg):
         """Send a message to all connected clients."""
