@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 HOST_IP = socket.gethostbyname(socket.gethostname())
 HOST_PORT = 60000
 
-MAX_BLOCK_SIZE = 4096   # Define a maximum block size for sending data
+MAX_BLOCK_SIZE = 65535   # Define a maximum block size for sending data
 
 class TCPServer:
     """TCP Server class to handle connections and data from/to clients using IPv4.
