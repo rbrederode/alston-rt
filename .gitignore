@@ -1,0 +1,22 @@
+# Python bytecode
+*.pyc
+__pycache__/
+
+# macOS metadata
+.DS_Store
+
+# log files
+*.log
+
+# Profiler files
+*.prof
+*.lprof
+
+# UML files (for now)
+*.puml
+
+# Pictures
+*.png
+
+# CAD STL Files
+*.stl
