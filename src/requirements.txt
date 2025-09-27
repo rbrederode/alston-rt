@@ -8,3 +8,4 @@ witmotion
 pyrtlsdr
 scipy
 geopy
+pytest
