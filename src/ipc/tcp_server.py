@@ -113,7 +113,7 @@ class TCPServer:
                     self._process_disconnect(client_socket)
                     return
                 elif len(msg_header) < 4:  # the header is incomplete
-                    logger.error(f"TCP Server {self.description} received incomplete header on {self.host} port {self.port} from {client_socket.getpeername()}\nData (hex):\n{msg_header.hex()}")
+                    logger.error(f"TCP Server {self.description} received incomplete header on {self.host} port {self.port} from {client_socket.getpeername()}\nHeader (hex):\n{msg_header.hex()}")
                     return
 
                 # Unpack the 4-byte big-endian header ('>HH' means two big-endian unsigned shorts)
@@ -127,7 +127,8 @@ class TCPServer:
                     self._process_disconnect(client_socket)
                     break
                 elif len(block) < block_size:  # the block is incomplete
-                    logger.error(f"TCP Server {self.description} received incomplete block on {self.host} port {self.port} from {client_socket.getpeername()}\nData (hex):\n{block.hex()}")
+                    logger.error(f"TCP Server {self.description} received incomplete block on {self.host} port {self.port} from {client_socket.getpeername()}\n" + \
+                        f"Block size: {block_size}\nReceived size: {len(block)}\nRemaining blocks: {remaining_blocks}\n")
                     return
 
                 full_msg += block
@@ -200,8 +201,12 @@ class TCPServer:
         with self._send_lock:  # Ensure that only one thread can send a message at a time
 
             if client_socket is None:
-                logger.error(f"TCP Server {self.description} no client socket specified to send message.\n{msg}")
-                return
+
+                client_key = next((key for key in self.sel.get_map().values() if key.data is not None), None)
+                if client_key is None:
+                    logger.error(f"TCP Server {self.description} no clients connected to server on host {self.host} port {self.port}. Cannot send message.\n{msg}")
+                    return
+                client_socket = client_key.fileobj    
 
             if not isinstance(msg, message.Message):
                 logging.error(f"TCP Server {self.description} invalid message type. Expected message.Message, got {type(msg)}.\n{msg}")

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 DEST_IP = socket.gethostbyname(socket.gethostname())
 DEST_PORT = 50000
 
-MAX_BLOCK_SIZE = 4096   # Define a maximum block size for sending data
+MAX_BLOCK_SIZE = 65535   # Define a maximum block size for sending data
 
 class TCPClient:
     """TCP Client class to create connections and send data to/from a server using IPv4.
