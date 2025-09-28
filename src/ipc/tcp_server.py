@@ -106,29 +106,26 @@ class TCPServer:
             while remaining_blocks > 0:
 
                 # Step 1: Read a 4-byte header to get the 2-byte block size (0-65,535 bytes) and 2-byte remaining blocks (0-65,535 blocks)
-                msg_header = client_socket.recv(4)
+                msg_header = self.recv_all(client_socket, 4)
 
                 # Check if the connection has been closed i.e. zero bytes received
-                if not msg_header or len(msg_header) == 0:  
+                if not msg_header or len(msg_header) < 4:  
+                    logger.error(f"TCP Server {self.description} received incomplete header on {self.host} port {self.port} from {client_socket.getpeername()}\n" + \
+                        f"Header (hex):\n{msg_header.hex() if msg_header else 'None'}\n")
                     self._process_disconnect(client_socket)
-                    return
-                elif len(msg_header) < 4:  # the header is incomplete
-                    logger.error(f"TCP Server {self.description} received incomplete header on {self.host} port {self.port} from {client_socket.getpeername()}\nHeader (hex):\n{msg_header.hex()}")
                     return
 
                 # Unpack the 4-byte big-endian header ('>HH' means two big-endian unsigned shorts)
                 block_size, remaining_blocks = struct.unpack('>HH', msg_header)
 
                 # Step 2:Read the block of data
-                block = client_socket.recv(block_size)
+                block = self.recv_all(client_socket, block_size)
 
                 # Check if the connection was closed mid-message
-                if not block or len(block) == 0:  
-                    self._process_disconnect(client_socket)
-                    break
-                elif len(block) < block_size:  # the block is incomplete
+                if not block or len(block) < block_size:  
                     logger.error(f"TCP Server {self.description} received incomplete block on {self.host} port {self.port} from {client_socket.getpeername()}\n" + \
-                        f"Block size: {block_size}\nReceived size: {len(block)}\nRemaining blocks: {remaining_blocks}\n")
+                        f"Block size: {block_size}\nReceived size: {len(block) if block else 0}\nRemaining blocks: {remaining_blocks}\n")
+                    self._process_disconnect(client_socket)
                     return
 
                 full_msg += block
@@ -293,6 +290,17 @@ class TCPServer:
         
         self.sel.close() # Close the selector
         logger.info(f"TCP Server {self.description} stopped listening on host {self.host} port {self.port}")
+
+    def recv_all(self, socket, n):
+        """Receive exactly n bytes from the socket."""
+        data = b''
+        while len(data) < n:
+            packet = socket.recv(n - len(data))
+            if not packet:
+                # Connection closed
+                return data if data else None
+            data += packet
+        return data
 
 if __name__ == "__main__":
 
