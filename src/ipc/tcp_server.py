@@ -100,6 +100,8 @@ class TCPServer:
     def _process_msg(self, client_socket, msg):
         """Process incoming msg events from the client and assemble the msg body from the received data."""
         try:
+            client_socket.setblocking(True)  # Temporarily set to blocking mode to read the full message
+
             full_msg = b''
             remaining_blocks = 1
 
@@ -136,7 +138,6 @@ class TCPServer:
             # Create a data event and add it to the queue
             event = events.DataEvent(self, client_socket, client_socket.getpeername(), full_msg, datetime.now())
             self.event_q.put(event)
-
             logger.info(f"TCP Server {self.description} received message on {self.host} port {self.port} from {client_socket.getpeername()} Message:\n{msg}")
 
         except BlockingIOError:
@@ -148,6 +149,10 @@ class TCPServer:
             self.sel.unregister(client_socket)
             client_socket.close()
             return
+
+        finally:
+            if client_socket is not None and client_socket.fileno() != -1:
+                client_socket.setblocking(False) # Set back to non-blocking mode
 
     def _process_events(self):
         """ Process events in a loop until the server is stopped. """
@@ -306,13 +311,15 @@ if __name__ == "__main__":
 
     # Setup logging configuration
     logging.basicConfig(
-    level=logging.DEBUG,  # Set the logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    level=logging.INFO,  # Set the logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     format="%(asctime)s - %(levelname)s - %(message)s",  # Log format
     handlers=[
         logging.StreamHandler(),                     # Log to console
         logging.FileHandler("server.log", mode="a")  # Log to a file
-    ]
+        ]
     )
+
+    logging.getLogger().setLevel(logging.DEBUG)
 
     # Example usage of the TCPServer class    
     queue = Queue()
@@ -320,12 +327,9 @@ if __name__ == "__main__":
     Timer.manager = TimerManager()
     Timer.manager.start()
 
-    server = TCPServer(queue=queue)
+    server = TCPServer(queue=queue, host='192.168.0.18')
     server.start()
     time.sleep(1000) # Keep the server running for 1000 seconds for testing
     server.stop()    
-    
-    # print content of the queue
-    while not queue.empty():
-        event = queue.get()
-        print(f"Event: {event}")
+
+    Timer.manager.stop()

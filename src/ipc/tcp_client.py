@@ -119,6 +119,8 @@ class TCPClient:
     def _process_msg(self, msg):
         """Process incoming msg events from the server and assemble the msg body from the received data."""
         try:
+            self.client_socket.setblocking(True)  # Temporarily set to blocking mode to read the full message
+
             full_msg = b''
             remaining_blocks = 1
 
@@ -153,7 +155,6 @@ class TCPClient:
             # Create a data event and add it to the queue
             event = events.DataEvent(self, self.client_socket, (self.host, self.port), full_msg, datetime.now())
             self.event_q.put(event)
-
             logging.info(f"TCP Client {self.description} received message from host {self.host} port {self.port}\n{msg}")
 
         except BlockingIOError:
@@ -167,6 +168,9 @@ class TCPClient:
             logging.error(f"TCP Client {self.description} unhandled exception error while receiving msg from {self.host} port {self.port} Data (hex): {full_msg.hex()} Exception: {e}")
             self._destroy_socket()
             return
+        finally:
+            if self.client_socket is not None and self.client_socket.fileno() != -1:
+                self.client_socket.setblocking(False) # Set back to non-blocking mode
 
     def _process_events(self):
         """ Process events in a loop until the client is stopped. """
@@ -281,11 +285,9 @@ class TCPClient:
                             remaining_blocks = ((total_len - offset) // self.max_block_size)
                             # Pack both as 2-byte unsigned shorts
                             header = struct.pack('>HH', block_size, remaining_blocks)
-                            key.fileobj.sendall(header + block)
-                            offset += self.max_block_size
 
-                        if total_len > self.max_block_size:
-                            key.fileobj.setblocking(False)
+                            key.fileobj.sendall(header + block)
+                            offset += block_size
 
                         logger.info(f"TCP Client {self.description} sent message to {key.fileobj.getpeername()} in {total_len // self.max_block_size + 1} blocks.\n{message.Message.__str__(msg)}")
                     except (OSError, BrokenPipeError, TimeoutError, ConnectionResetError) as e:
@@ -294,6 +296,9 @@ class TCPClient:
                     except Exception as e:
                         logger.error(f"TCP Client {self.description} general exception sending message to host {self.host} port {self.port}\n{e}")
                         self._process_disconnect()
+                    finally:
+                        if total_len > self.max_block_size:
+                            key.fileobj.setblocking(False)  # Ensure the socket is set back to non-blocking mode
 
             time_exit = time.time()
             logger.info(f"TCP Client {self.description} SEND {len(data)} bytes duration: {(time_exit - time_enter)*1000:.2f} ms")
@@ -347,12 +352,12 @@ if __name__ == "__main__":
 
     # Setup logging configuration
     logging.basicConfig(
-    level=logging.INFO,  # Set the logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    format="%(asctime)s - %(levelname)s - %(message)s",  # Log format
-    handlers=[
-        logging.StreamHandler(),                     # Log to console
-        logging.FileHandler("server.log", mode="a")  # Log to a file
-    ]
+        level=logging.DEBUG,  # Set the logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        format="%(asctime)s - %(levelname)s - %(message)s",  # Log format
+        handlers=[
+            logging.StreamHandler(),                     # Log to console
+            logging.FileHandler("client.log", mode="a")  # Log to a file
+            ]
     )
 
     set_sample_rate_apicall = {}
@@ -376,7 +381,7 @@ if __name__ == "__main__":
     read_samples_apicall["msg_type"] = "req"
     read_samples_apicall["action_code"] = "method"
     read_samples_apicall["method"] = "read_samples"
-    read_samples_apicall["params"] = {"num_samples": 2.4e6}
+    read_samples_apicall["params"] = {"num_samples": 2.4e6, "duration": 30.0} # Sample rate/s and duration in seconds
 
     api_msg = message.APIMessage()
 
