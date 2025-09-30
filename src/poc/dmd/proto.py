@@ -51,8 +51,8 @@ logger = logging.getLogger(__name__)
 f_e = 1420.405751768 * u.MHz  # Rest frequency of HI hyperfine transition
 speed_of_light = const.speed_of_light * (u.meter / u.second)
 
-OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Alston Observatory'  # Directory to store samples
-#OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
+#OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Alston Observatory'  # Directory to store samples
+OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
 #OUTPUT_DIR = '~/Samples'  # Directory to store samples
 USABLE_BANDWIDTH = 0.65  # Percentage of usable bandwidth for a scan
 FIG_SIZE = (14, 7)  # Default figure size for plots
@@ -1773,7 +1773,8 @@ def main():
                     label='Total Power (TPW)')
                 
                 # Add an average total power line
-                sig_axes[4].axhline(y=np.mean(int_tpw[sec_idx:sec_idx+scan_duration]), color='red', linestyle='--', label='Mean')
+                avg_tpw = np.mean(int_tpw[sec_idx:sec_idx+scan_duration])
+                sig_axes[4].axhline(y=avg_tpw, color='red', linestyle='--', label=f'Mean {avg_tpw:.3e}')
                 sig_axes[4].legend(loc='lower right')
 
                 sig_fig.suptitle(f"Scan: {freq_scan}-{scan_iter} Center Frequency: {scan_center_freq/1e6:.2f} MHz, Gain: {args.gain} dB, Sample Rate: {args.sample_rate/1e6:.2f} MHz, FFT Size: {args.fft_size}", fontsize=14)

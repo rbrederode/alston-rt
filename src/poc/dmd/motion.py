@@ -25,8 +25,22 @@ logger = logging.getLogger(__name__)
 MAX_HISTORY = 1000  # Store last X motion readings
 
 class Motion:
+    """ Class to interface with a WitMotion IMU device.
+        The IMU provides acceleration, angular velocity, angle (roll, pitch, yaw), magnetic vector, temperature, and quaternion data.
+        The IMU is connected via a serial port (e.g. /dev/ttyUSB0 or COM3).
+        The class supports calibration of altitude and azimuth offsets.
+
+        The Motion class subscribes to IMU messages and updates its internal state via a callback function.
+    """
 
     def __init__(self, device='auto', baudrate=9600):
+        """ Initialize the Motion class with the given parameters.
+        
+            Parameters
+                device: serial device identifier (e.g. /dev/ttyUSB0 or COM3). Use 'auto' to automatically detect the first available IMU device.
+                baudrate: baud rate for the serial connection (default: 9600)
+        """
+        global cal_key_press
 
         if device == 'auto':
             # Automatically detect and use the first available IMU device
@@ -47,32 +61,53 @@ class Motion:
         self.timestamp = None
         self.quaternion = (None, None, None, None)
 
-        # Default azimuth and altitude offsets
+        # Altitude vector can be either "roll" or "pitch" depending on IMU orientation
+        # Azimuth vector can be either "yaw" or "roll" depending on IMU orientation
+        self.alt_vector = "roll" # or "pitch"
+        self.az_vector = "yaw" # or "roll"
+
+         # Default azimuth and altitude offsets
         self.az_offset = 0.0    # degrees
         self.alt_offset = 0.0   # degrees
+        
+        # Update rate in Hz (how often to read from the IMU)
         self.update_rate = 1.0  # Hz
 
         # Read a config file called motion_config.json
         try:
             with open("motion_config.json", "r") as f:
+                
                 config = json.load(f)
+
+                self.az_vector = config.get("az_vector", self.az_vector)
                 self.az_offset = config.get("az_offset", self.az_offset)
+                self.alt_vector = config.get("alt_vector", self.alt_vector)
                 self.alt_offset = config.get("alt_offset", self.alt_offset)
                 self.update_rate = config.get("update_rate", self.update_rate)
-                logging.info(f"Loaded motion_config.json: az_offset={self.az_offset}, alt_offset={self.alt_offset}, update_rate={self.update_rate}")
+
+                logging.info(f"Loaded motion_config.json: "+\
+                    f"az_vector={self.az_vector}, " +\
+                    f"az_offset={self.az_offset}, " +\
+                    f"alt_vector={self.alt_vector}, " +\
+                    f"alt_offset={self.alt_offset}, " +\
+                    f"update_rate={self.update_rate}")
+
         except FileNotFoundError:
             logging.warning("motion_config.json not found, using default offsets.")
         except json.JSONDecodeError:
             logging.error("Error decoding motion_config.json, using default offsets.")
 
         # Altitude and Azimuth offsets for calibration
-        self.az_offset = max(-180.0, min(180.0, self.az_offset)) # Yaw -180 to 180 deg adjustment
-        self.alt_offset = max(-90.0, min(90.0, self.alt_offset)) # Roll -90 to 90 deg adjustment
+        self.az_offset = max(-180.0, min(180.0, self.az_offset)) # Yaw\Roll -180 to 180 deg adjustment
+        self.alt_offset = max(-90.0, min(90.0, self.alt_offset)) # Roll\Pitch -90 to 90 deg adjustment
 
         self.angle_hist = np.zeros((MAX_HISTORY, 6))  # Store last MAX_HISTORY angle readings (timestamp, roll, pitch, yaw, altitude, azimuth)
         self._lock = threading.Lock()  # Lock for thread-safe access to shared resources (angle_hist numpy array)
 
     def connect(self):
+        """ Connect to the IMU device and start receiving data.
+            Returns True if connection is successful, False otherwise.
+        """
 
         if self.connected:
             logging.warning("IMU is already connected.")
@@ -94,7 +129,10 @@ class Motion:
         return self.connected
 
     def auto_detect_imu(self):
-        # Automatically detect the IMU by listing devices as 'ls /dev/tty* | grep usbserial'
+        """ Automatically detect the IMU by listing devices as 'ls /dev/tty* | grep usbserial'
+            The first entry in the result set is used as the IMU device.
+            Returns the device identifier string if found, None otherwise, e.g. /dev/ttyUSB0
+        """
         result = subprocess.run("ls /dev/tty* | grep usbserial", shell=True, capture_output=True, text=True)
         if result.returncode != 0:
             logging.error(f"Error trying to detect IMU device: {result.stderr}")
@@ -148,14 +186,34 @@ class Motion:
             logging.warning("IMU not connected.")
             return None
 
-        return roll_to_altitude(self.angle[0], self.alt_offset)
+        if self.alt_vector == "roll":
+            angle = self.angle[0]
+        elif self.alt_vector == "pitch":
+            angle = self.angle[1]
+        elif self.alt_vector == "yaw":
+            angle = self.angle[2]
+        else:
+            logging.error(f"Invalid alt_vector: {self.alt_vector}. Must be 'roll', 'pitch', or 'yaw'.")
+            return None
+
+        return angle_to_altitude(angle, self.alt_offset)
 
     def _get_azimuth(self, flip_az=False):
         if not self.connected:
             logging.warning("IMU not connected.")
             return None
 
-        return yaw_to_azimuth(self.angle[2], self.az_offset, flip_az)
+        if self.az_vector == "yaw":
+            angle = self.angle[2]
+        elif self.az_vector == "pitch":
+            angle = self.angle[1]
+        elif self.az_vector == "roll":
+            angle = self.angle[0]
+        else:
+            logging.error(f"Invalid az_vector: {self.az_vector}. Must be 'roll', 'pitch', or 'yaw'.")
+            return None
+
+        return yaw_to_azimuth(angle, self.az_offset, flip_az)
 
     def get_altaz(self):
         if not self.connected:
@@ -202,7 +260,7 @@ class Motion:
         return self.connected
 
     def disconnect(self):
-        if self.connected and self.imu:
+        if self.imu:
             self.imu.close()
             self.connected = False
             logging.info("Disconnected from IMU.")
@@ -276,8 +334,13 @@ class Motion:
 
             plt.pause(0.1)  # Pause to allow the plot to update
 
-        logger.info(f"Calibrating altitude offset to {90 - self.get_roll()} degrees")
-        self.alt_offset = 90 - self.get_roll()
+        alt_angle = self.get_roll() if self.alt_vector == "roll" else self.get_pitch() if self.alt_vector == "pitch" else self.get_yaw()
+        if alt_angle is None:
+            logger.error("Cannot calibrate altitude offset, vector angle is None.")
+            return
+        self.alt_offset = 90 - alt_angle
+        logger.info(f"Calibrating altitude offset to {self.alt_offset} degrees")
+        
         cal_key_press = False
 
         # Connect the key press event of the calibration plot to a callback function
@@ -313,15 +376,22 @@ class Motion:
                 pass
             plt.pause(0.1)  # Pause to allow the plot to update
 
-        logger.info(f"Calibrating azimuth offset to {self.get_yaw()} degrees")
-        self.az_offset = self.get_yaw()
+        az_angle = self.get_yaw() if self.az_vector == "yaw" else self.get_roll() if self.az_vector == "roll" else self.get_pitch()
+        if az_angle is None:
+            logger.error("Cannot calibrate azimuth offset, vector angle is None.")
+            return
+
+        self.az_offset = az_angle % 360
+        logger.info(f"Calibrating azimuth offset to {self.az_offset} degrees")
         plt.close('all')
 
         # Write the calibration offsets to the motion_config.json file
         with open('motion_config.json', 'w') as f:
             json.dump({
-                "alt_offset": self.alt_offset,
+                "az_vector": self.az_vector,
                 "az_offset": self.az_offset,
+                "alt_vector": self.alt_vector,
+                "alt_offset": self.alt_offset,
                 "update_rate": self.update_rate
             }, f)
 
@@ -379,40 +449,41 @@ def yaw_to_azimuth(yaw, az_offset=0.0, flip_az=False):
 
     return (azimuth + 180.0) % 360.0 if flip_az else azimuth % 360.0
 
-def roll_to_altitude(roll, alt_offset=0.0):
-    """ Convert roll angle to altitude angle.
+def angle_to_altitude(angle, alt_offset=0.0):
+    """ Convert pitch or roll angle to altitude angle.
         Roll is the angle of rotation around the front-to-back axis.
-        Roll is positive in the counter-clockwise direction 0-180 deg.
-        Roll is negative in the clockwise direction 0-180 deg.
+        Pitch is the angle of rotation around the side-to-side axis.
+        Roll/Pitch is positive in the counter-clockwise direction 0-180 deg.
+        Roll/Pitch is negative in the clockwise direction 0-180 deg.
         Altitude ranges between -90 and 90 degrees.
-        Elevation requires azimuth to flip if roll > 90 or roll < -90.
     """
-    if roll is None:
+       
+    if angle is None:
         return None
 
     # Ensure altitude offset is within -90 to 90 degrees
     alt_offset = 0.0 if alt_offset is None else alt_offset if alt_offset >= -90.0 and alt_offset <= 90.0 else None
 
     if alt_offset is None:
-        raise ValueError("Altitude offset must be between -90 and 90 degrees.")
+        raise ValueError(f"Altitude offset must be between -90 and 90 degrees. Offset provided: {alt_offset}")
     else:
-        roll += alt_offset
+        angle += alt_offset
 
-    # If roll is outside its normal range
-    if roll > 180.0 or roll < -180.0:
-        roll = (roll % 180.0) - 180.0 # Ensure roll is within -180 to 180 degrees
+    # If angle is outside its normal range
+    if angle > 180.0 or angle < -180.0:
+        angle = (angle % 180.0) - 180.0 # Ensure angle is within -180 to 180 degrees
 
     flip_az = False
 
-    # Convert roll to altitude
-    if roll > 90.0:
-        roll = 180.0 - roll # azimuth must flip 180 degrees
+    # Convert angle to altitude
+    if angle > 90.0:
+        angle = 180.0 - angle # azimuth must flip 180 degrees
         flip_az = True
-    elif roll < -90.0:
-        roll = -180.0 - roll # azimuth must flip 180 degrees
+    elif angle < -90.0:
+        angle = -180.0 - angle # azimuth must flip 180 degrees
         flip_az = True
 
-    return max(-90.0, min(90.0, roll)), flip_az
+    return max(-90.0, min(90.0, angle)), flip_az
 
 def main():
 
@@ -423,7 +494,9 @@ def main():
     args = parser.parse_args()
 
     motion = Motion(args.imu, args.baud)
-    motion.connect()
+    if not motion.connect():
+        logging.error("Failed to connect to IMU, exiting...")
+        return
 
     motion.calibrate()
 
@@ -431,8 +504,8 @@ def main():
         while True:
 
             alt, az = motion.get_altaz()
-            logging.info(f"Roll: {motion.get_roll()}, Pitch: {motion.get_pitch()}, Yaw: {motion.get_yaw()}")
             logging.info(f"Altitude: {alt}, Azimuth: {az}")
+            logging.info(f"Roll: {motion.get_roll()}, Pitch: {motion.get_pitch()}, Yaw: {motion.get_yaw()}")
             time.sleep(1)
     except KeyboardInterrupt:
         logging.info("Keyboard interrupt...")
@@ -458,7 +531,7 @@ def main():
     plt.title('IMU Angle History')
     plt.legend()
     plt.grid()
-    plt.show()
+    plt.pause(0.1)
 
 if __name__ == "__main__":
     main()
