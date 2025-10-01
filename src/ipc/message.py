@@ -23,7 +23,7 @@ class Message:
         """
 
         # The message body is a byte array containing the data stream representation.
-        self.msg_data = None   
+        self.msg_data = bytearray()
         self.msg_length = 0  
 
     def from_data(self, data):

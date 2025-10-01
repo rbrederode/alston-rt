@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 HOST_IP = socket.gethostbyname(socket.gethostname())
 HOST_PORT = 60000
 
-MAX_BLOCK_SIZE = 65535   # Define a maximum block size for sending data
+MAX_BLOCK_SIZE = 65531   # Define a maximum block size for sending data
 
 class TCPServer:
     """TCP Server class to handle connections and data from/to clients using IPv4.
@@ -49,6 +49,9 @@ class TCPServer:
         self.event_q = queue if queue else Queue() # Queue to keep track of events
     
         self.started = False # Flag to indicate if the server has been started or stopped
+
+        self.recv_buffer = bytearray() # Buffer to store incoming data
+        self.recv_msg = message.Message() # Message being received
         self.max_block_size = max_block_size if max_block_size > 0 else MAX_BLOCK_SIZE
 
         self._send_lock = threading.Lock() # Lock to ensure thread-safe sending of messages
@@ -97,7 +100,71 @@ class TCPServer:
 
         logger.info(f"{event}")
 
-    def _process_msg(self, client_socket, msg):
+    def _process_msg_nonblocking(self, client_socket, msg):
+
+        """Process incoming msg events from the client in non-blocking mode."""
+
+        print(f"ENTER NON-BLOCKING with msg:", type(msg))
+
+        try:
+            data = client_socket.recv(4 + MAX_BLOCK_SIZE)  # non-blocking, might be 0..HEADER + MAX_BLOCK_SIZE bytes
+        except BlockingIOError:
+            return  # no data ready
+        except ConnectionResetError:
+            self._process_disconnect(client_socket)
+            return
+
+        # Check if the connection has been closed i.e. zero bytes received
+        if not data:
+            self._process_disconnect(client_socket)
+            return
+
+        # Append data to the receive buffer
+        self.recv_buffer.extend(data)
+
+        # Try to parse all complete blocks
+        while True:
+            # Need at least 4 bytes for header
+            if len(self.recv_buffer) < 4:
+                break
+
+            block_size, remaining_blocks = struct.unpack('>HH', self.recv_buffer[:4])
+
+            print(f"Block size: {block_size}, Remaining blocks: {remaining_blocks}, Buffer length: {len(self.recv_buffer)}")
+
+            # Check if the full block has arrived
+            if len(self.recv_buffer) < 4 + block_size:
+                break  # wait for more data
+
+            # Extract one block following the 4 byte header
+            block = bytes(self.recv_buffer[4:4 + block_size])
+
+            # Trim from buffer
+            del self.recv_buffer[:4 + block_size]
+
+            # Add block to message
+            self.recv_msg.msg_data.extend(block)
+
+            # If last block -> full message complete
+            if remaining_blocks == 0:
+
+                self.recv_msg.msg_length = len(self.recv_msg.msg_data)
+
+                msg = message.Message()
+                msg.from_data(self.recv_msg.msg_data)
+
+                event = events.DataEvent(
+                    self, client_socket, client_socket.getpeername(),
+                    msg.msg_data, datetime.now()
+                )
+                self.event_q.put(event)
+
+                print(f"TCP Server {self.description} received message on {self.host} port {self.port} from {client_socket.getpeername()} Message:\n{msg}")
+                self.recv_msg = message.Message()  # Reset for next message
+
+        print(f"EXIT NON-BLOCKING with msg:", type(msg))
+
+    def _process_msg_blocking(self, client_socket, msg):
         """Process incoming msg events from the client and assemble the msg body from the received data."""
         try:
             client_socket.setblocking(True)  # Temporarily set to blocking mode to read the full message
@@ -117,7 +184,7 @@ class TCPServer:
                     self._process_disconnect(client_socket)
                     return
 
-                # Unpack the 4-byte big-endian header ('>HH' means two big-endian unsigned shorts)
+                # Unpack the 4-byte big-endian header ('>HH' 139s two big-endian unsigned shorts)
                 block_size, remaining_blocks = struct.unpack('>HH', msg_header)
 
                 # Step 2:Read the block of data
@@ -170,12 +237,12 @@ class TCPServer:
                 else:
                     try:
                         if mask & selectors.EVENT_READ:
-                            self._process_msg(key.fileobj, key.data)
+                            self._process_msg_nonblocking(key.fileobj, key.data)
                         elif mask & selectors.EVENT_WRITE:
                             # Handle write events if needed
                             pass
                     except Exception as e:
-                        logger.error(f"TCP Server {self.description} unhandled exception error on {self.host} port {self.port} from {key.fileobj.getpeername()} Data (hex): {key.data.hex()} Exception: {e}")
+                        logger.error(f"TCP Server {self.description} unhandled exception error on {self.host} port {self.port} from {key.fileobj.getpeername()} Data (hex): {key.data} Exception: {e}")
 
     def start(self):
         """Start the TCP server i.e. listen for incoming connections
@@ -327,7 +394,7 @@ if __name__ == "__main__":
     Timer.manager = TimerManager()
     Timer.manager.start()
 
-    server = TCPServer(queue=queue, host='192.168.0.18')
+    server = TCPServer(queue=queue, host='192.168.0.16')
     server.start()
     time.sleep(1000) # Keep the server running for 1000 seconds for testing
     server.stop()    
