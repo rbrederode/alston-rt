@@ -100,11 +100,9 @@ class TCPServer:
 
         logger.info(f"{event}")
 
-    def _process_msg_nonblocking(self, client_socket, msg):
+    def _process_msg(self, client_socket, msg):
 
         """Process incoming msg events from the client in non-blocking mode."""
-
-        print(f"ENTER NON-BLOCKING with msg:", type(msg))
 
         try:
             data = client_socket.recv(4 + MAX_BLOCK_SIZE)  # non-blocking, might be 0..HEADER + MAX_BLOCK_SIZE bytes
@@ -130,8 +128,6 @@ class TCPServer:
 
             block_size, remaining_blocks = struct.unpack('>HH', self.recv_buffer[:4])
 
-            print(f"Block size: {block_size}, Remaining blocks: {remaining_blocks}, Buffer length: {len(self.recv_buffer)}")
-
             # Check if the full block has arrived
             if len(self.recv_buffer) < 4 + block_size:
                 break  # wait for more data
@@ -148,8 +144,6 @@ class TCPServer:
             # If last block -> full message complete
             if remaining_blocks == 0:
 
-                self.recv_msg.msg_length = len(self.recv_msg.msg_data)
-
                 msg = message.Message()
                 msg.from_data(self.recv_msg.msg_data)
 
@@ -158,11 +152,10 @@ class TCPServer:
                     msg.msg_data, datetime.now()
                 )
                 self.event_q.put(event)
-
-                print(f"TCP Server {self.description} received message on {self.host} port {self.port} from {client_socket.getpeername()} Message:\n{msg}")
                 self.recv_msg = message.Message()  # Reset for next message
 
-        print(f"EXIT NON-BLOCKING with msg:", type(msg))
+                logger.info(f"TCP Server {self.description} received message on {self.host} port {self.port} from {client_socket.getpeername()} Message:\n{msg}")
+
 
     def _process_msg_blocking(self, client_socket, msg):
         """Process incoming msg events from the client and assemble the msg body from the received data."""
@@ -237,7 +230,7 @@ class TCPServer:
                 else:
                     try:
                         if mask & selectors.EVENT_READ:
-                            self._process_msg_nonblocking(key.fileobj, key.data)
+                            self._process_msg(key.fileobj, key.data)
                         elif mask & selectors.EVENT_WRITE:
                             # Handle write events if needed
                             pass
@@ -394,7 +387,7 @@ if __name__ == "__main__":
     Timer.manager = TimerManager()
     Timer.manager.start()
 
-    server = TCPServer(queue=queue, host='192.168.0.16')
+    server = TCPServer(queue=queue, host='192.168.0.18')
     server.start()
     time.sleep(1000) # Keep the server running for 1000 seconds for testing
     server.stop()    
