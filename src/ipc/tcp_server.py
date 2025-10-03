@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 HOST_IP = socket.gethostbyname(socket.gethostname())
 HOST_PORT = 60000
 
-MAX_BLOCK_SIZE = 65531   # Define a maximum block size for sending data
+MAX_BLOCK_SIZE = 65535   # Define a maximum block size for sending data (65,535 bytes to fit in 64KB packet)
 
 class TCPServer:
     """TCP Server class to handle connections and data from/to clients using IPv4.
@@ -105,7 +105,7 @@ class TCPServer:
         """Process incoming msg events from the client in non-blocking mode."""
 
         try:
-            data = client_socket.recv(4 + MAX_BLOCK_SIZE)  # non-blocking, might be 0..HEADER + MAX_BLOCK_SIZE bytes
+            data = client_socket.recv(MAX_BLOCK_SIZE)  # non-blocking, might return 0..MAX_BLOCK_SIZE bytes
         except BlockingIOError:
             return  # no data ready
         except ConnectionResetError:
@@ -128,9 +128,9 @@ class TCPServer:
 
             block_size, remaining_blocks = struct.unpack('>HH', self.recv_buffer[:4])
 
-            # Check if the full block has arrived
+            # Check if a full block has arrived
             if len(self.recv_buffer) < 4 + block_size:
-                break  # wait for more data
+                break  # wait for at least one block of data
 
             # Extract one block following the 4 byte header
             block = bytes(self.recv_buffer[4:4 + block_size])
@@ -155,64 +155,6 @@ class TCPServer:
                 self.recv_msg = message.Message()  # Reset for next message
 
                 logger.info(f"TCP Server {self.description} received message on {self.host} port {self.port} from {client_socket.getpeername()} Message:\n{msg}")
-
-
-    def _process_msg_blocking(self, client_socket, msg):
-        """Process incoming msg events from the client and assemble the msg body from the received data."""
-        try:
-            client_socket.setblocking(True)  # Temporarily set to blocking mode to read the full message
-
-            full_msg = b''
-            remaining_blocks = 1
-
-            while remaining_blocks > 0:
-
-                # Step 1: Read a 4-byte header to get the 2-byte block size (0-65,535 bytes) and 2-byte remaining blocks (0-65,535 blocks)
-                msg_header = self.recv_all(client_socket, 4)
-
-                # Check if the connection has been closed i.e. zero bytes received
-                if not msg_header or len(msg_header) < 4:  
-                    logger.error(f"TCP Server {self.description} received incomplete header on {self.host} port {self.port} from {client_socket.getpeername()}\n" + \
-                        f"Header (hex):\n{msg_header.hex() if msg_header else 'None'}\n")
-                    self._process_disconnect(client_socket)
-                    return
-
-                # Unpack the 4-byte big-endian header ('>HH' 139s two big-endian unsigned shorts)
-                block_size, remaining_blocks = struct.unpack('>HH', msg_header)
-
-                # Step 2:Read the block of data
-                block = self.recv_all(client_socket, block_size)
-
-                # Check if the connection was closed mid-message
-                if not block or len(block) < block_size:  
-                    logger.error(f"TCP Server {self.description} received incomplete block on {self.host} port {self.port} from {client_socket.getpeername()}\n" + \
-                        f"Block size: {block_size}\nReceived size: {len(block) if block else 0}\nRemaining blocks: {remaining_blocks}\n")
-                    self._process_disconnect(client_socket)
-                    return
-
-                full_msg += block
-
-            # Step 3: Process the received data stream as a message
-            msg.from_data(full_msg)
-
-            # Create a data event and add it to the queue
-            event = events.DataEvent(self, client_socket, client_socket.getpeername(), full_msg, datetime.now())
-            self.event_q.put(event)
-            logger.info(f"TCP Server {self.description} received message on {self.host} port {self.port} from {client_socket.getpeername()} Message:\n{msg}")
-
-        except BlockingIOError:
-            # Resource temporarily unavailable (errno EWOULDBLOCK)
-            pass
-
-        except Exception as e:
-            logger.error(f"TCP Server {self.description} unhandled exception error on {self.host} port {self.port} Message:\n{msg}\nException: {e}")
-            self.sel.unregister(client_socket)
-            client_socket.close()
-            return
-
-        finally:
-            if client_socket is not None and client_socket.fileno() != -1:
-                client_socket.setblocking(False) # Set back to non-blocking mode
 
     def _process_events(self):
         """ Process events in a loop until the server is stopped. """
@@ -387,7 +329,7 @@ if __name__ == "__main__":
     Timer.manager = TimerManager()
     Timer.manager.start()
 
-    server = TCPServer(queue=queue, host='192.168.0.18')
+    server = TCPServer(queue=queue, host='192.168.0.16')
     server.start()
     time.sleep(1000) # Keep the server running for 1000 seconds for testing
     server.stop()    

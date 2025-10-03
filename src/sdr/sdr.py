@@ -37,19 +37,26 @@ class SDR:
 
     def __init__(self):
         """ Initialize the SDR interface and connect to the first available RTL-SDR device.     """
+        
         with SDR._mutex:
+
+            self.rtlsdr = None
+            self.connected = False
 
             try:
                 self.rtlsdr = RtlSdr()
+                self.connected = True
+            except OSError as e:
+                logger.error(f"SDR could not connect due to OSError: {e}")
             except Exception as e:
                 logger.exception(f"SDR could not connect due to exception: {e}")
-                self.rtlsdr = None
 
-        info = self.get_eeprom_info()
-        if info:
-            logger.info(f"SDR connected, device information: {info}")
-        else:
-            logger.warning("SDR connected but unable to retrieve device information.")
+        if self.rtlsdr:
+            info = self.get_eeprom_info()
+            if info:
+                logger.info(f"SDR connected, device information: {info}")
+            else:
+                logger.warning("SDR connected but unable to retrieve device information.")
 
     def __del__(self):
 
@@ -58,7 +65,11 @@ class SDR:
             if self.rtlsdr:
                 self.rtlsdr.close()
                 self.rtlsdr = None
+                self.connected = False
                 logger.info("SDR connection closed.")
+
+    def get_connected(self):
+        return self.connected
         
     def get_eeprom_info(self):
 
