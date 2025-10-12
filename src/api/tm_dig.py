@@ -56,6 +56,7 @@ PROPERTY_BANDWIDTH      = 'bandwidth'        # Bandwidth in Hz
 PROPERTY_GAIN           = 'gain'             # Gain in dB
 PROPERTY_FREQ_CORRECTION= 'freq_correction'  # Frequency correction in ppm
 PROPERTY_SDP_CONNECTED  = 'sdp_connected'    # SDP connection status (True/False)
+PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 
 PROPERTIES = (
     PROPERTY_CENTER_FREQ,
@@ -64,6 +65,7 @@ PROPERTIES = (
     PROPERTY_GAIN,
     PROPERTY_FREQ_CORRECTION,
     PROPERTY_SDP_CONNECTED,
+    PROPERTY_DEBUG,
 )
 
 # Allowable methods to call on the subsystem 

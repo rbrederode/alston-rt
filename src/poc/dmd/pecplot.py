@@ -8,7 +8,7 @@ import threading
 import numpy as np
 
 from astroplan import Observer, FixedTarget
-from astropy.coordinates import EarthLocation, AltAz, SkyCoord
+from astropy.coordinates import EarthLocation, AltAz, SkyCoord, get_sun
 from astropy.time import Time
 import astropy.units as u
 
@@ -59,6 +59,7 @@ class PECPlot:
 
         # Store last MAX_HISTORY PEC readings (timestamp, alt_pec, az_pec)
         self.pec_hist = np.zeros((MAX_HISTORY, 3))  
+        self.fig = None
 
         logging.info(f"Initializing PECPlot with location: {self.location}, target: {self.target}, motion: {self.motion}, update_rate: {self.update_rate}")
 
@@ -75,7 +76,7 @@ class PECPlot:
         # Start recording periodic error 
         if self._thread is None or not self._thread.is_alive():
             self._stop_event.clear()
-            if self.motion.connect():
+            if self.motion and self.motion.connect():
                 self._thread = threading.Thread(target=self._record_loop)
                 self._thread.start()
                 logging.info("Started recording PEC.")
@@ -90,6 +91,10 @@ class PECPlot:
         if self._thread is not None and self._thread.is_alive():
             self._stop_event.set()
             self._thread.join()
+            self._thread = None
+
+            if self.motion and self.motion.get_connected():
+                self.motion.disconnect()
 
             logging.info("Stopped recording PEC.")
 
@@ -108,13 +113,12 @@ class PECPlot:
             return
 
         if self.motion is None:
-            logging.warning("PEC calculation failed: Motion sensor not detected.")
             self.motion = Motion()
             self.motion.connect()
 
-            if not self.motion.is_connected():
-                logging.warning("PEC calculation failed: Motion sensor connection failed.")
-                return
+        if not self.motion.get_connected():
+            logging.warning("PEC calculation failed: Motion sensor connection failed.")
+            return
 
         now = Time(datetime.datetime.now().astimezone()) # Current datetime in UTC
         tgt_altaz = self.observer.altaz(now, self.target)
@@ -144,45 +148,48 @@ class PECPlot:
 
         # Obtain the current thread lock before accessing shared resources (pec_hist)
         with self._lock:
-            try:
-                # Find first valid index where timestamp is not zero
-                first_idx = np.where(self.pec_hist[:,0]!=0)[0][0]
-            except IndexError:
-                logging.warning("No valid PEC data available for plotting.")
-                return
+            pec_hist_copy = self.pec_hist.copy()
 
-            # Create a figure and axes if none were provided as parameters
-            self.fig = plt.figure(num=600, figsize=FIG_SIZE) if figure is None else figure
-            self.ax = plt.subplot(111, polar=False) if axes is None else axes
+        try:
+            # Find first valid index where timestamp is not zero
+            first_idx = np.where(pec_hist_copy[:,0]!=0)[0][0]
+        except IndexError:
+            logging.warning("Valid PEC data not available for plotting.")
+            return
 
-            # Clear previous plot
-            self.ax.cla()
+        # Create a figure and axes if none were provided as parameters
+        self.fig = plt.figure(num=600, figsize=FIG_SIZE) if figure is None else figure
+        self.ax = plt.subplot(111, polar=False) if axes is None else axes
 
-            dates = [datetime.datetime.fromtimestamp(ts) for ts in self.pec_hist[:, 0] if ts > 0]
-            alt_pec = self.pec_hist[self.pec_hist[:, 0] > 0, 1]
-            az_pec = self.pec_hist[self.pec_hist[:, 0] > 0, 2]
+        # Clear previous plot
+        self.ax.cla()
 
-            alt_pec_rms = np.sqrt(np.mean(np.square(alt_pec - np.mean(alt_pec)))) if alt_pec.size > 0 else 0
-            az_pec_rms = np.sqrt(np.mean(np.square(az_pec - np.mean(az_pec)))) if az_pec.size > 0 else 0
+        dates = [datetime.datetime.fromtimestamp(ts) for ts in pec_hist_copy[:, 0] if ts > 0]
+        alt_pec = pec_hist_copy[pec_hist_copy[:, 0] > 0, 1]
+        az_pec = pec_hist_copy[pec_hist_copy[:, 0] > 0, 2]
 
-            # Plot the PEC history
-            if self.pec_hist is not None:
-                self.ax.fill_between(dates, alt_pec, alpha=0.2, color='tab:blue', label=f'Alt PEC {alt_pec[-1]:.3f}° (RMS: {alt_pec_rms:.3f}°)')
-                self.ax.fill_between(dates, az_pec, alpha=0.2, color='tab:red', label=f'Az PEC {az_pec[-1]:.3f}° (RMS: {az_pec_rms:.3f}°)')
+        alt_pec_rms = np.sqrt(np.mean(np.square(alt_pec - np.mean(alt_pec)))) if alt_pec.size > 0 else 0
+        az_pec_rms = np.sqrt(np.mean(np.square(az_pec - np.mean(az_pec)))) if az_pec.size > 0 else 0
 
-            self.ax.set_title("Periodic Error Correction (PEC)")
-            self.ax.set_ylabel("PEC [Deg]")
-            self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-            self.ax.set_xlabel("Time [HH:MM:SS]")
-            self.ax.grid(True)
-            self.ax.legend(loc='upper right')
+        # Plot the PEC history
+        if pec_hist_copy is not None:
+            self.ax.fill_between(dates, alt_pec, alpha=0.2, color='tab:blue', label=f'Alt PEC {alt_pec[-1]:.3f}° (RMS: {alt_pec_rms:.3f}°)')
+            self.ax.fill_between(dates, az_pec, alpha=0.2, color='tab:red', label=f'Az PEC {az_pec[-1]:.3f}° (RMS: {az_pec_rms:.3f}°)')
 
-            plt.draw()
-            plt.pause(0.001)
+        self.ax.set_title("Periodic Error Correction (PEC)")
+        self.ax.set_ylabel("PEC [Deg]")
+        self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+        self.ax.set_xlabel("Time [HH:MM:SS]")
+        self.ax.grid(True)
+        self.ax.legend(loc='upper right')
+
+        plt.draw()
+        plt.pause(0.001)
 
     def __del__(self):
         self.stop_recording()
-        plt.close(self.fig)
+        if self.fig is not None:
+            plt.close(self.fig)
 
         logging.info("PECPlot resources released.")
 
@@ -190,7 +197,13 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     location = EarthLocation(lat=53.8*u.deg, lon=-2.8*u.deg, height=100*u.m)
-    target_coord = SkyCoord(ra=10.684*u.deg, dec=41.269*u.deg, frame='icrs')  # Example: Andromeda Galaxy
+            
+    # Get the Sun's position at the current date and time
+    current_time = Time.now()
+    target_coord = get_sun(current_time)  # Sun's position at current time
+    
+    # Alternative: Use a fixed target like Andromeda Galaxy
+    # target_coord = SkyCoord(ra=10.684*u.deg, dec=41.269*u.deg, frame='icrs')  # Example: Andromeda Galaxy
     motion = Motion(device="auto", baudrate=9600)
 
     pec_plot = PECPlot(location=location, target_coord=target_coord, motion=motion, update_rate=1.0)
@@ -204,7 +217,6 @@ def main():
     except KeyboardInterrupt:
         logging.info("Keyboard interrupt...")
     finally:
-        motion.disconnect()
         pec_plot.stop_recording()
 
 if __name__ == "__main__":

@@ -1,1 +1,1 @@
-{"alt_offset": 0.69677734375, "az_offset": -13.9141845703125, "update_rate": 1.0}
+{"az_vector": "yaw", "az_offset": 10.5, "alt_vector": "roll", "alt_offset": 0.17578125, "update_rate": 1}

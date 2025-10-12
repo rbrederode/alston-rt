@@ -59,14 +59,18 @@ PROPERTY_CENTER_FREQ    = 'center_freq'      # Center frequency in Hz
 PROPERTY_SAMPLE_RATE    = 'sample_rate'      # Sample rate in samples per second
 PROPERTY_BANDWIDTH      = 'bandwidth'        # Bandwidth in Hz
 PROPERTY_SDR_GAIN       = 'gain'             # Gain in dB
-PROPERTY_TIMESTAMP      = 'timestamp'        # Timestamp of samples in ISO 8601 format with timezone info
+PROPERTY_READ_COUNTER   = 'read_counter'     # Read counter
+PROPERTY_READ_START     = 'read_start'       # Epoch seconds corresponding to start timestamp of sample read
+PROPERTY_READ_END       = 'read_end'         # Epoch seconds corresponding to end timestamp of sample read
 
 PROPERTIES = (
     PROPERTY_CENTER_FREQ,
     PROPERTY_SAMPLE_RATE,
     PROPERTY_BANDWIDTH,
     PROPERTY_SDR_GAIN,
-    PROPERTY_TIMESTAMP
+    PROPERTY_READ_COUNTER,
+    PROPERTY_READ_START,
+    PROPERTY_READ_END,
 )
 
 # Allowable msg fields and types defining their format     
@@ -89,8 +93,8 @@ MSG_FIELDS = {
     "msg_type":     {"enum": MSG_TYPES},                            # Message type (one of MSG_TYPES)
     "action_code":  {"enum": ACTION_CODES},                         # Action to be taken (one of ACTION_CODES)
     "metadata":     {
-        "type": "list",                                             # Metadata is a list
-        "value_type": "dict",                                       # Each value is a dict
+        "type":         "list",                                     # Metadata is a list
+        "value_type":   "dict",                                     # Each value is a dict
         "value_schema": METADATA_FIELD},                            # Each value should match METADATA_FIELD
     "status":       {"enum": STATUS},                               # Status of response (e.g. success, error)
     "message":      {"type": "str"},                                # Additional information about the status
@@ -100,7 +104,6 @@ MSG_FIELDS = {
 MSG_FIELDS_DEFINITIONS = {
     "adv": {
         "required": {"msg_type", "action_code", "metadata"},
-        "conditional": {},
         "optional": {"status", "message"},   
     },
     "rsp": {
@@ -172,7 +175,10 @@ class SDP_DIG(API):
         # Check for conditional fields
         conditional_fields = MSG_FIELDS_DEFINITIONS[msg_type].get('conditional', set())
         for field in conditional_fields:
-            pass # No conditional fields defined yet
+            # Switch based on the field and its conditions
+            if field == "value":
+                if api_call.get('action_code') == ACTION_CODE_SAMPLES and 'value' not in api_call or not isinstance(api_call['value'], int):
+                    raise XAPIValidationFailed(f"Message of type '{msg_type}' with action_code '{api_call.get('action_code')}' missing required field 'value' containing digitiser read counter as an integer")
 
         # Validate each field's value against its expected type and format
         for field, value in api_call.items():
