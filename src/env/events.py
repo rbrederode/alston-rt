@@ -80,10 +80,26 @@ class DataEvent:
         if self.data is None:
             return f"DataEvent@{self.timestamp} - {self.local_sap.description} received NO data from {self.remote_addr}\n"
         else:
-            hex_data = ' '.join(self.data[i:i+1].hex() for i, val in enumerate(self.data))
-            return f"DataEvent@{self.timestamp} - {self.local_sap.description} received data from {self.remote_addr}\n" + \
-                f"Data (ascii): {self.data}\n" + \
-                f"Data (hex):   {hex_data}\n"
+            display_length = min(len(self.data), 1024)
+            display_data = self.data[0:display_length]
+
+            lines = []
+            line_length = 30
+            for i in range(0, display_length, line_length):
+                chunk = display_data[i:i+line_length]
+                hex_part = ' '.join(f"{b:02x}" for b in chunk)
+                # Pad hex_part to always align (30 bytes * 3 chars per byte minus 1 for last space)
+                hex_part = hex_part.ljust((line_length * 3) - 1)
+                ascii_part = chunk.decode('ascii', errors='replace').replace('�', '.').replace('?', '.')
+                # Pad ascii_part to 30 chars for alignment
+                ascii_part = ascii_part.ljust(line_length)
+                lines.append(f"{hex_part}  {ascii_part}")
+
+            return (
+                f"DataEvent (hex)"+" "*(line_length*3+1-len("DataEvent (hex)"))+"DataEvent (ascii)\n" +
+                '\n'.join(lines) +
+                f"\nDisplaying {display_length} of {len(self.data)} bytes in the msg\n"
+            )
 
 class TimerEvent:
 
@@ -118,12 +134,12 @@ class TimerEvent:
 class InitEvent:
     """ Event indicating that an environment component has been initialised and is ready to operate.
     """
-    def __init__(self, component_name: str, timestamp=None):
-        self.component_name = component_name
+    def __init__(self, app_name: str, timestamp=None):
+        self.app_name = app_name
         self.timestamp = timestamp
 
     def __str__(self):
-        return f"InitEvent@{self.timestamp} - Component {self.component_name}"
+        return f"InitEvent@{self.timestamp} - App {self.app_name}"
 
 class StatusUpdateEvent:
 

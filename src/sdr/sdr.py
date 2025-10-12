@@ -42,6 +42,7 @@ class SDR:
 
             self.rtlsdr = None
             self.connected = False
+            self.read_counter = 0
 
             try:
                 self.rtlsdr = RtlSdr()
@@ -50,6 +51,13 @@ class SDR:
                 logger.error(f"SDR could not connect due to OSError: {e}")
             except Exception as e:
                 logger.exception(f"SDR could not connect due to exception: {e}")
+
+            # Cached rtlsdr properties
+            self.gain = self.rtlsdr.gain if self.rtlsdr.gain is not None else None
+            self.center_freq = self.rtlsdr.center_freq if self.rtlsdr.center_freq is not None else None
+            self.sample_rate = self.rtlsdr.sample_rate if self.rtlsdr.sample_rate is not None else None
+            self.bandwidth = self.rtlsdr.bandwidth if self.rtlsdr.bandwidth is not None else None
+            self.freq_correction = self.rtlsdr.freq_correction if self.rtlsdr.freq_correction is not None else None
 
         if self.rtlsdr:
             info = self.get_eeprom_info()
@@ -156,27 +164,30 @@ class SDR:
 
     @sdr_guard(default=None)
     def get_center_freq(self):
-        return self.rtlsdr.center_freq
+        return self.rtlsdr.center_freq # Hz
 
     @sdr_guard(default=None)
     def set_center_freq(self, value):
         self.rtlsdr.center_freq = value
+        self.center_freq = value
 
     @sdr_guard(default=None)
     def get_sample_rate(self):
-        return self.rtlsdr.sample_rate
+        return self.rtlsdr.sample_rate # Hz
 
     @sdr_guard(default=None)
     def set_sample_rate(self, value):
         self.rtlsdr.sample_rate = value
+        self.sample_rate = value
 
     @sdr_guard(default=None)
     def get_bandwidth(self):
-        return self.rtlsdr.bandwidth
+        return self.rtlsdr.bandwidth # MHz
 
     @sdr_guard(default=None)
     def set_bandwidth(self, value):
         self.rtlsdr.bandwidth = value
+        self.bandwidth = value
 
     @sdr_guard(default=None)
     def get_gain(self):
@@ -185,14 +196,16 @@ class SDR:
     @sdr_guard(default=None)
     def set_gain(self, value):
         self.rtlsdr.gain = value
+        self.gain = value
 
     @sdr_guard(default=None)
     def get_freq_correction(self):
-        return self.rtlsdr.freq_correction
+        return self.rtlsdr.freq_correction # ppm
 
     @sdr_guard(default=None)
     def set_freq_correction(self, value):
         self.rtlsdr.freq_correction = value
+        self.freq_correction = value
 
     @sdr_guard(default=None)
     def get_gains(self):
@@ -206,18 +219,75 @@ class SDR:
     def set_direct_sampling(self, value):
         self.rtlsdr.direct_sampling = value
 
-    @sdr_guard(default=None)
-    def read_bytes(self, num_bytes=DEFAULT_READ_SIZE):
-        return self.rtlsdr.read_bytes(num_bytes)
+    def read_bytes(self, num_bytes=DEFAULT_READ_SIZE) -> (bytes, dict):
+        """ Read a specified number of bytes from the SDR device.
+            :param num_bytes: Number of bytes to read
+            :returns: 
+                A numpy array of uint8 samples read from the SDR
+                A dictionary of metadata associated with the byte read
+        """
+        x = bytes(num_bytes)
 
-    @sdr_guard(default=None)
-    def read_samples(self, num_samples=DEFAULT_READ_SIZE):
-        time_enter = time.time()
-        x = self.rtlsdr.read_samples(num_samples)
-        x = np.array(x, dtype=np.complex64)
-        time_exit = time.time()
-        logger.info(f"SDR READ SAMPLES: requested {num_samples} samples, read {x.size} samples in {time_exit - time_enter:.3f} seconds")
-        return x
+        with SDR._mutex:
+
+            if self.rtlsdr is None:
+                logger.warning("SDR device not connected.")
+                return None, None
+            
+            # Record start/end times associated with sample set (in epoch seconds)
+            read_start = time.time()
+            x = self.rtlsdr.read_bytes(num_bytes)
+            read_end = time.time()
+            
+            # Increment read counter and copy to local variable for access outside the mutex
+            self.read_counter += 1
+            count = self.read_counter
+
+        metadata = {
+            'read_counter': count,
+            'num_bytes': len(x),
+            'read_start': read_start,
+            'read_end': read_end,
+        }
+        logger.debug(f"SDR READ BYTES: requested {num_bytes} bytes, read {len(x)} bytes, start={read_start}, end={read_end}, duration={(read_end-read_start):.3f} seconds")
+        return x, metadata
+
+    def read_samples(self, num_samples=DEFAULT_READ_SIZE) -> (np.ndarray, dict):
+        """ Read a specified number of samples from the SDR device.
+            :param num_samples: Number of samples to read
+            :returns: 
+                A numpy array of complex64 samples read from the SDR
+                A dictionary of metadata associated with the sample read
+        """
+        x = np.zeros(int(num_samples), dtype=np.complex128)
+
+        with SDR._mutex:
+
+            if self.rtlsdr is None:
+                logger.warning("SDR device not connected.")
+                return None, None
+
+            # Record start/end times associated with sample set (in epoch seconds)
+            read_start = time.time()
+            x = self.rtlsdr.read_samples(num_samples)
+            read_end = time.time()
+
+            # Increment read counter and copy to local variable for access outside the mutex
+            self.read_counter += 1
+            count = self.read_counter
+
+        # Convert from complex128 to complex64 to save resources (network, memory, CPU)
+        x = np.array(x, dtype=np.complex64) 
+
+        metadata = {
+            'read_counter': count,
+            'num_samples': x.size,
+            'read_start': read_start,
+            'read_end': read_end,
+        }
+
+        logger.debug(f"SDR READ SAMPLES: requested {num_samples} samples, read {x.size} samples, start={read_start}, end={read_end}, duration={(read_end-read_start):.3f} seconds")
+        return x, metadata
 
 def main():
 

@@ -79,7 +79,7 @@ class Processor(threading.Thread):
                 break
 
             try:
-                self._event = self._event_q.get(timeout=0.1)  
+                self._event = self._event_q.get(timeout=1)  # Wait for an event for up to 1 second
                 self._event_timestamp = time.time()
 
                 try:

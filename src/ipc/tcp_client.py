@@ -104,15 +104,21 @@ class TCPClient:
 
     def _process_disconnect(self):
         """Process a disconnect from a client and deregister the connection from the selector."""
-        
-        # Create a disconnect event and add it to the queue
-        event = events.DisconnectEvent(self, self.client_socket, self.client_socket.getpeername(), datetime.now())
-        self.event_q.put(event)
 
-        # Unregister the connection from the selector
-        self.sel.unregister(self.client_socket)
-        self.client_socket.close()  # Close the socket connection
+        if self.client_socket is None or self.client_socket.fileno() == -1:
+            event = events.DisconnectEvent(self, self.client_socket, (f'{self.host}', f'{self.port}'), datetime.now())
+            self.event_q.put(event) # Create a disconnect event and add it to the queue
+        else:
+            event = events.DisconnectEvent(self, self.client_socket, (f'{self.host}', f'{self.port}'), datetime.now())
+            self.event_q.put(event) # Create a disconnect event and add it to the queue
+
+            # Unregister the connection from the selector
+            self.sel.unregister(self.client_socket)
+            self.client_socket.close()  # Close the socket connection
+
         self.connected = False  # Set the client to not connected
+        self.recv_buffer = bytearray() # Clear the receive buffer
+        self.recv_msg = message.Message() # Reset the receive message
 
         logging.info(f"TCP Client {self.description} disconnected from host {self.host} port {self.port}")
 
@@ -123,11 +129,16 @@ class TCPClient:
 
         """Process incoming msg events on the client socket in non-blocking mode."""
 
+        if self.client_socket is None or self.client_socket.fileno() == -1:
+            logging.error(f"TCP Client {self.description} socket is invalid. Cannot receive message.\n{msg}")
+            return
+
         try:
             data = self.client_socket.recv(MAX_BLOCK_SIZE)  # non-blocking, might return 0..MAX_BLOCK_SIZE bytes
         except BlockingIOError:
             return  # no data ready
-        except ConnectionResetError:
+        except (ConnectionResetError, OSError) as e:
+            logging.exception(f"TCP Client {self.description} socket connection reset / OSError. Cannot receive message.\n{msg}")
             self._process_disconnect()
             return
 
@@ -167,13 +178,13 @@ class TCPClient:
                 msg.from_data(self.recv_msg.msg_data)
 
                 event = events.DataEvent(
-                    self, self.client_socket, self.client_socket.getpeername(),
+                    self, self.client_socket, (f'{self.host}', f'{self.port}'),
                     msg.msg_data, datetime.now()
                 )
                 self.event_q.put(event)
                 self.recv_msg = message.Message()  # Reset for next message
 
-                logger.info(f"TCP Client {self.description} received message on {self.host} port {self.port} from {self.client_socket.getpeername()} Message:\n{msg}")
+                logger.debug(f"TCP Client {self.description} received message from {self.host} port {self.port} Message:\n{msg}")
 
     def _process_events(self):
         """ Process events in a loop until the client is stopped. """
@@ -193,6 +204,8 @@ class TCPClient:
                                 self._process_msg(key.data)
                             except Exception as e:
                                 logging.error(f"TCP Client {self.description} unhandled exception while processing events for {self.host} port {self.port} Data (hex): {key.data.msg_data.hex() if key.data.msg_data else ''} Exception: {e}")
+                                self.process_disconnect()
+                                break
 
     def connect(self) -> int:
         """Establish a socket connection.
@@ -265,7 +278,7 @@ class TCPClient:
             for key in list(self.sel.get_map().values()):
                 if key.data is not None:
                     try:
-                        logger.debug(f"TCP Client {self.description} sending message to {key.fileobj.getpeername()}\n{msg}")
+                        logger.debug(f"TCP Client {self.description} sending message to host {self.host} port {self.port}\n{msg}")
 
                         data = msg.to_data()  # Convert the message to bytes 
 
@@ -292,10 +305,13 @@ class TCPClient:
                             key.fileobj.sendall(header + block)
                             offset += block_size
 
-                        logger.info(f"TCP Client {self.description} sent message to {key.fileobj.getpeername()} in {total_len // self.max_block_size + 1} blocks.\n{message.Message.__str__(msg)}")
-                    except (OSError, BrokenPipeError, TimeoutError, ConnectionResetError) as e:
-                        logger.error(f"TCP Client {self.description} error sending message to host {self.host} port {self.port}\n{e}")
-
+                        logger.debug(f"TCP Client {self.description} sent message to peer in {total_len // self.max_block_size + 1} blocks.\n{message.Message.__str__(msg)}")
+                    except (OSError,  TimeoutError ) as e:
+                        logger.error(f"TCP Client {self.description} OS error / timeout sending message to host {self.host} port {self.port}\n{e}")
+                        self._process_disconnect()
+                    except (BrokenPipeError,ConnectionResetError) as e:
+                        logger.error(f"TCP Client {self.description} connection reset / broken pipe error while sending message to host {self.host} port {self.port}\n{e}")
+                        self._process_disconnect()
                     except Exception as e:
                         logger.error(f"TCP Client {self.description} general exception sending message to host {self.host} port {self.port}\n{e}")
                         self._process_disconnect()
@@ -367,7 +383,7 @@ if __name__ == "__main__":
     set_sample_rate_apicall["msg_type"] = "req"
     set_sample_rate_apicall["action_code"] = "set"
     set_sample_rate_apicall["property"] = "sample_rate"
-    set_sample_rate_apicall["value"] = 2.4e6
+    set_sample_rate_apicall["value"] = 2.048e6
 
     get_sample_rate_apicall = {}
     get_sample_rate_apicall["msg_type"] = "req"
@@ -378,13 +394,19 @@ if __name__ == "__main__":
     set_center_freq_apicall["msg_type"] = "req"
     set_center_freq_apicall["action_code"] = "set"
     set_center_freq_apicall["property"] = "center_freq"
-    set_center_freq_apicall["value"] = 1.42e6
+    set_center_freq_apicall["value"] = 1420.40e6
+
+    set_gain_apicall = {}
+    set_gain_apicall["msg_type"] = "req"
+    set_gain_apicall["action_code"] = "set"
+    set_gain_apicall["property"] = "gain"
+    set_gain_apicall["value"] = 25
 
     read_samples_apicall = {}
     read_samples_apicall["msg_type"] = "req"
     read_samples_apicall["action_code"] = "method"
     read_samples_apicall["method"] = "read_samples"
-    read_samples_apicall["params"] = {"num_samples": 2.4e6, "duration": 30.0} # Sample rate/s and duration in seconds
+    read_samples_apicall["params"] = {"num_samples": 2.048e6, "duration": 30.0} # Sample rate/s and duration in seconds
 
     api_msg = message.APIMessage()
 
@@ -410,7 +432,7 @@ if __name__ == "__main__":
     test1 = AppProcessor(name="Test1", event_q=queue, driver=Driver())
     test1.start()
 
-     # Start the TCP client and connect to the server
+    # Start the TCP client and connect to the server
 
     client = TCPClient(queue=queue)
     client.connect()
@@ -458,10 +480,21 @@ if __name__ == "__main__":
     )
 
     client.send(api_msg)
+
+    time.sleep(10)
+
+    api_msg.set_json_api_header(
+        api_version="1.0",
+        dt=datetime.now(timezone.utc),
+        from_system="tm",
+        to_system="dig",
+        api_call=set_gain_apicall
+    )
+
+    client.send(api_msg)
+
     time.sleep(100)
     client.stop()    
     
-    # print content of the queue
-    while not queue.empty():
-        event = queue.get()
-        print(f"Event: {event}")
+    AppProcessor.stop_all()
+    Timer.manager.stop()

@@ -210,7 +210,7 @@ class App:
     def get_interface(self, system_name: str):
         """Gets the interface for a given system name.
             : param system_name: The name of the system the interface is for
-            : return: Tuple of (API, endpoint) if found, else None
+            : return: The API and endpoint if found, else None
         """
         if system_name not in self.interfaces:
             raise XBase(f"App {self.app_name} has no registered interface for system '{system_name}'")
