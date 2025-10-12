@@ -1,11 +1,14 @@
 from rtlsdr import RtlSdr, RtlSdrTcpClient
 
 import numpy as np
+import math
 import sys
 import subprocess
 import threading
 import time
 import functools
+
+from util.xbase import XSoftwareFailure
 
 import logging
 logger = logging.getLogger(__name__)
@@ -55,9 +58,9 @@ class SDR:
             # Cached rtlsdr properties
             self.gain = self.rtlsdr.gain if self.rtlsdr.gain is not None else None
             self.center_freq = self.rtlsdr.center_freq if self.rtlsdr.center_freq is not None else None
-            self.sample_rate = self.rtlsdr.sample_rate if self.rtlsdr.sample_rate is not None else None
             self.bandwidth = self.rtlsdr.bandwidth if self.rtlsdr.bandwidth is not None else None
             self.freq_correction = self.rtlsdr.freq_correction if self.rtlsdr.freq_correction is not None else None
+            self.sample_rate = int(math.ceil(self.rtlsdr.sample_rate)) if self.rtlsdr.sample_rate is not None else None
 
         if self.rtlsdr:
             info = self.get_eeprom_info()
@@ -158,7 +161,7 @@ class SDR:
 
             for _ in range(time_in_secs):  # Discard samples for each second in the duration
                 discard = np.zeros(int(sample_rate), dtype=np.complex128)  # Initialize a numpy array to hold the samples
-                discard = self.read_samples(num_samples=sample_rate) # Read samples from the SDR
+                discard = self.read_samples() # Read samples from the SDR
                 logger.info(f"SDR stabilising: Discarded {discard.size} samples, Sample Rate {sample_rate/1e6} MHz, Center Frequency {self.get_center_freq()/1e6} MHz, Gain {self.get_gain()} dB, Sample Power {np.sum(np.abs(discard)**2):.2f} [a.u.]")
             del discard  # Free up memory
 
@@ -178,7 +181,7 @@ class SDR:
     @sdr_guard(default=None)
     def set_sample_rate(self, value):
         self.rtlsdr.sample_rate = value
-        self.sample_rate = value
+        self.sample_rate = int(math.ceil(value))
 
     @sdr_guard(default=None)
     def get_bandwidth(self):
@@ -219,14 +222,16 @@ class SDR:
     def set_direct_sampling(self, value):
         self.rtlsdr.direct_sampling = value
 
-    def read_bytes(self, num_bytes=DEFAULT_READ_SIZE) -> (bytes, dict):
-        """ Read a specified number of bytes from the SDR device.
-            :param num_bytes: Number of bytes to read
+    def read_bytes(self) -> (bytes, dict):
+        """ Read self.sample_rate number of bytes from the SDR device.
             :returns: 
                 A numpy array of uint8 samples read from the SDR
                 A dictionary of metadata associated with the byte read
         """
-        x = bytes(num_bytes)
+        if not self.sample_rate:
+            raise XSoftwareFailure("SDR - Sample rate must be set before sampling: {self.sample_rate}")
+
+        x = bytes(self.sample_rate) 
 
         with SDR._mutex:
 
@@ -235,9 +240,9 @@ class SDR:
                 return None, None
             
             # Record start/end times associated with sample set (in epoch seconds)
-            read_start = time.time()
-            x = self.rtlsdr.read_bytes(num_bytes)
-            read_end = time.time()
+            read_start = time.perf_counter()
+            x = self.rtlsdr.read_bytes(self.sample_rate)
+            read_end = time.perf_counter()
             
             # Increment read counter and copy to local variable for access outside the mutex
             self.read_counter += 1
@@ -252,14 +257,17 @@ class SDR:
         logger.debug(f"SDR READ BYTES: requested {num_bytes} bytes, read {len(x)} bytes, start={read_start}, end={read_end}, duration={(read_end-read_start):.3f} seconds")
         return x, metadata
 
-    def read_samples(self, num_samples=DEFAULT_READ_SIZE) -> (np.ndarray, dict):
-        """ Read a specified number of samples from the SDR device.
-            :param num_samples: Number of samples to read
+    def read_samples(self) -> (np.ndarray, dict):
+        """ Read self.sample_rate number of bytes from the SDR device.
             :returns: 
                 A numpy array of complex64 samples read from the SDR
                 A dictionary of metadata associated with the sample read
         """
-        x = np.zeros(int(num_samples), dtype=np.complex128)
+
+        if not self.sample_rate:
+            raise XSoftwareFailure("SDR - Sample rate must be set before sampling: {self.sample_rate}")
+        
+        x = np.zeros(self.sample_rate, dtype=np.complex128)
 
         with SDR._mutex:
 
@@ -268,9 +276,9 @@ class SDR:
                 return None, None
 
             # Record start/end times associated with sample set (in epoch seconds)
-            read_start = time.time()
-            x = self.rtlsdr.read_samples(num_samples)
-            read_end = time.time()
+            read_start = time.perf_counter()
+            x = self.rtlsdr.read_samples(self.sample_rate)
+            read_end = time.perf_counter()
 
             # Increment read counter and copy to local variable for access outside the mutex
             self.read_counter += 1
@@ -286,7 +294,7 @@ class SDR:
             'read_end': read_end,
         }
 
-        logger.debug(f"SDR READ SAMPLES: requested {num_samples} samples, read {x.size} samples, start={read_start}, end={read_end}, duration={(read_end-read_start):.3f} seconds")
+        #logger.info(f"SDR READ SAMPLES: requested {self.sample_rate} samples, read {x.size} samples, start={read_start}, end={read_end}, duration={(read_end-read_start):.3f} seconds")
         return x, metadata
 
 def main():
