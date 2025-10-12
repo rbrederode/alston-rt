@@ -240,9 +240,9 @@ class SDR:
                 return None, None
             
             # Record start/end times associated with sample set (in epoch seconds)
-            read_start = time.perf_counter()
+            read_start = time.time()
             x = self.rtlsdr.read_bytes(self.sample_rate)
-            read_end = time.perf_counter()
+            read_end = time.time()
             
             # Increment read counter and copy to local variable for access outside the mutex
             self.read_counter += 1
@@ -276,9 +276,9 @@ class SDR:
                 return None, None
 
             # Record start/end times associated with sample set (in epoch seconds)
-            read_start = time.perf_counter()
+            read_start = time.time()
             x = self.rtlsdr.read_samples(self.sample_rate)
-            read_end = time.perf_counter()
+            read_end = time.time()
 
             # Increment read counter and copy to local variable for access outside the mutex
             self.read_counter += 1

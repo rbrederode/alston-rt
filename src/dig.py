@@ -122,8 +122,9 @@ class Digitiser(App):
 
             self.stream_samples = True
 
-            # Start reading samples immediately (timer_action=0), 5 times to buffer initial latency
-            for i in range(1, 6):
+            # Start reading samples immediately (timer_action=0) 
+            # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
+            for i in range(1, 3):
                 action.set_timer_action(Action.Timer(name=f"stream_samples_{i}", timer_action=0))
 
             if self.sdp_connected and payload is not None:
