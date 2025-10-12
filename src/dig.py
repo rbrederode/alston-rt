@@ -124,7 +124,7 @@ class Digitiser(App):
 
             # Start reading samples immediately (timer_action=0), 5 times to buffer initial latency
             for i in range(1, 6):
-                action.set_timer_action(Action.Timer(name=f"stream_samples {i}", timer_action=0))
+                action.set_timer_action(Action.Timer(name=f"stream_samples_{i}", timer_action=0))
 
             if self.sdp_connected and payload is not None:
                 # Prepare adv msg to send samples to sdp
@@ -206,12 +206,13 @@ class Digitiser(App):
         action = Action()
 
         if event.name.startswith("stream_samples"):
-            result = self.handle_method_call({"method": "read_samples", "params": {"num_samples": 2400000.0}})
+            result = self.handle_method_call({"method": "read_samples", "params": {}})
             status, message, value, payload = self._unpack_result(result)
 
+            # If the digitiser is set to stream samples
             if self.stream_samples:
-                # Stream again immediately
-                action.set_timer_action(Action.Timer(name=f"stream_samples", timer_action=0)) 
+                # Start the same stream_samples timer immediately e.g. 'stream_samples_2'
+                action.set_timer_action(Action.Timer(name=event.name, timer_action=0)) 
 
             if self.sdp_connected and payload is not None:
                 # Prepare adv msg to send samples to sdp

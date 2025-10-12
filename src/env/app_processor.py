@@ -1,6 +1,8 @@
 from env.processor import Processor
 from env.events import InitEvent, StatusUpdateEvent
 from queue import Queue, Empty
+from datetime import datetime, timezone
+import time
 from api.api import API
 from ipc.tcp_server import TCPServer
 from ipc.message import AppMessage, APIMessage
@@ -39,8 +41,11 @@ class AppProcessor(Processor):
             event.notify_update_completed()
     
     def process_event(self, event) -> bool:
+
+        start_time = time.time()
+        st = datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat()
         
-        logger.debug(f"AppProcessor {self.name} processing event:\n{event}")
+        logger.info(f"AppProcessor {self.name} started  processing event {type(event)} at {st}")
 
         try:
             if isinstance(event, InitEvent):
@@ -142,7 +147,9 @@ class AppProcessor(Processor):
                 return False  # Event not processed
 
         finally:
-            pass
+            end_time = time.time()
+            et = datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat()
+            logger.info(f"AppProcessor {self.name} finished processing event {type(event)} at {et} taking {(end_time-start_time):.3f} seconds")
 
         return True
 
