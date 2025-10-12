@@ -10,6 +10,7 @@ import time
 import struct
 import traceback
 import json
+import argparse
 from queue import Queue
 from datetime import datetime, timezone
 
@@ -379,6 +380,10 @@ if __name__ == "__main__":
             ]
     )
 
+    arg_parser = argparse.ArgumentParser(description="set_debug")
+    arg_parser.add_argument("--host", type=str, required=False, help="TCP server host",default="localhost")
+    arg_parser.add_argument("--port", type=int, required=False, help="TCP server port", default=50000)
+ 
     set_sample_rate_apicall = {}
     set_sample_rate_apicall["msg_type"] = "req"
     set_sample_rate_apicall["action_code"] = "set"
@@ -434,7 +439,7 @@ if __name__ == "__main__":
 
     # Start the TCP client and connect to the server
 
-    client = TCPClient(queue=queue)
+    client = TCPClient(queue=queue, host=arg_parser.parse_args().host, port=arg_parser.parse_args().port)
     client.connect()
     
     time.sleep(1)
