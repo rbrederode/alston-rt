@@ -200,7 +200,7 @@ class SDR:
             logger.info(f"SDR gaussianity test at gain={self.get_gain()} dB failed: P-Values: Real={p_r:.3f} OR Imaginary={p_i:.3f} less than threshold {p_threshold} with power {np.sum(np.abs(x)**2):.2f} [a.u.]")
             return False, (p_r, p_i)
 
-    def get_auto_gain(self, sample_rate=2.4e6, time_in_secs=1, p_threshold=0.05) -> (int, float):
+    def get_auto_gain(self, sample_rate=2.4e6, time_in_secs=1, p_threshold=0.05) -> (int, int):
         """Iterate through all SDR gain settings to find the optimal gain for Gaussianity.
             :param sample_rate: Sample rate in Hz
             :param time_in_secs: Duration in seconds to sample for each gain setting
@@ -256,7 +256,7 @@ class SDR:
             gauss_gain = Glist[np.argmax(p_r_list)] if max_p_r > 0.0 else orig_gain
             logger.warning(f"Propose SDR gain {gauss_gain} dB based on maximum p_r value {max_p_r}\n")
 
-        return gauss_gain, max_p_r
+        return gauss_gain
 
     @sdr_guard(default=None)
     def get_center_freq(self):
@@ -348,7 +348,7 @@ class SDR:
             'read_end': read_end,
         }
         logger.debug(f"SDR READ BYTES: requested {num_bytes} bytes, read {len(x)} bytes, start={read_start}, end={read_end}, duration={(read_end-read_start):.3f} seconds")
-        return x, metadata
+        return metadata, x
 
     def read_samples(self) -> (np.ndarray, dict):
         """ Read self.sample_rate number of bytes from the SDR device.
@@ -388,7 +388,7 @@ class SDR:
         }
 
         #logger.info(f"SDR READ SAMPLES: requested {self.sample_rate} samples, read {x.size} samples, start={read_start}, end={read_end}, duration={(read_end-read_start):.3f} seconds")
-        return x, metadata
+        return metadata, x
 
 def main():
 

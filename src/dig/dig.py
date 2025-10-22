@@ -294,8 +294,11 @@ class Digitiser(App):
             return tm_dig.STATUS_ERROR, f"Digitiser method {method} not found on SDR", None, None
 
         result = method(**args) if args is not None else method() if callable(method) else method
-
-        return tm_dig.STATUS_SUCCESS, f"Digitiser method {method.__name__} invoked on SDR", result[1] if len(result)>1 else None, result[0] if len(result)>1 else result
+        # Check whether result is a tuple of (value, payload) or just a value
+        if isinstance(result, tuple):
+            return tm_dig.STATUS_SUCCESS, f"Digitiser method {method.__name__} invoked on SDR", result[0], result[1]
+        else:
+            return tm_dig.STATUS_SUCCESS, f"Digitiser method {method.__name__} invoked on SDR", result, None
 
     def _construct_adv_to_tm(self, property, value, message) -> APIMessage:
         """ Constructs an advice message to the Telescope Manager.
