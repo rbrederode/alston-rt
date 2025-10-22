@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timezone
 
 from models.dsh import Feed
+from util import gen_file_prefix
 from util.xbase import XSoftwareFailure
 
 logger = logging.getLogger(__name__)
@@ -203,7 +204,8 @@ class Scan:
         if output_dir is None or output_dir == '':
             output_dir = "./"
 
-        prefix = gen_file_prefix(self, None)
+        prefix = util.gen_file_prefix(dt=self.read_start, feed=self.feed, gain=self.gain, duration=self.duration, 
+            sample_rate=self.sample_rate, center_freq=self.center_freq, channels=self.channels, entity_id=self.id)
 
         try:
             if include_iq:
@@ -285,9 +287,12 @@ class Scan:
         try:
             self.init_data_arrays(sample_rate=self.sample_rate, duration=self.duration, channels=self.channels)
 
+            prefix = util.gen_file_prefix(dt=self.read_start, feed=self.feed, gain=self.gain, duration=self.duration, 
+                sample_rate=self.sample_rate, center_freq=self.center_freq, channels=self.channels, entity_id=self.id)
+
             if include_iq:
                 # Load raw IQ samples 
-                filename = gen_file_prefix(self, "raw") + ".iq"
+                filename = prefix + "-raw" + ".iq"
                 with open(f"{input_dir}/{filename}", 'rb') as f:
                     self.raw = np.fromfile(f, dtype=np.complex64)
                     self.raw = self.raw.reshape(-1, self.channels)
@@ -307,7 +312,7 @@ class Scan:
                     remove_dc_spike(self.channels, self.spr[sec,:])
             else:
                 # Load summed power spectrum only
-                filename = gen_file_prefix(self, "load") + ".csv" if self.feed == Feed.NONE else gen_file_prefix(self, "spr") + ".csv"
+                filename = prefix + "-load" + ".csv" if self.feed == Feed.NONE else prefix + "-spr" + ".csv"
                 with open(f"{input_dir}/{filename}", 'r') as f:
                     self.spr = np.loadtxt(f, delimiter=",")
                     self.spr = self.spr.reshape(self.duration, self.channels)
@@ -372,26 +377,6 @@ def remove_dc_spike(channels, arr):
 
     # Replace values above one standard deviation with the mean of the samples surrounding the DC spike
     arr[start:end][mask] = np.mean(arr[start:end][~mask])
-
-def gen_file_prefix(scan: Scan, filetype: str) -> str:
-    """ Generate a file prefix for the scan based on its metadata.
-        :param scan: The scan object for which to generate the file prefix
-        :param filetype: The type of file being generated (e.g., "raw", "spr", "meta")
-        :returns: A string representing the file prefix
-    """
-    if scan is None:
-        return "-unknown-scan-"
-
-    return scan.read_start.strftime("%Y%m%dT%H%M%S") + \
-        "-f" + str(scan.feed) + \
-        "-g" + str(scan.gain) + \
-        "-du" + str(scan.duration) + \
-        "-bw" + str(round(scan.sample_rate/1e6,2)) + \
-        "-cf" + str(round(scan.center_freq/1e6,2)) + \
-        "-ch" + str(scan.channels) + \
-        "-scan " + str(scan.id) + \
-        ("-" + filetype if filetype is not None else '')
-        
 
 if __name__ == "__main__":
 

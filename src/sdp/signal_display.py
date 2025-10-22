@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sdp.scan import Scan, gen_file_prefix
+    from sdp.scan import Scan
     
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,6 +10,7 @@ import matplotlib as mpl
 
 from matplotlib.gridspec import GridSpec
 from queue import Queue
+from util import gen_file_prefix
 
 import logging
 logger = logging.getLogger(__name__)
@@ -176,7 +177,10 @@ class SignalDisplay:
         if output_dir is None or output_dir == "":
             output_dir = "."
 
-        filename = f"{output_dir}/" + gen_file_prefix(self.scan, "sigfig") + ".png"
+        prefix = gen_file_prefix(dt=self.scan.read_start, feed=self.scan.feed, gain=self.scan.gain, duration=self.scan.duration, 
+            sample_rate=self.scan.sample_rate, center_freq=self.scan.center_freq, channels=self.scan.channels, entity_id=self.scan.id, filetype="sigfig")
+
+        filename = f"{output_dir}/" + prefix + ".png"
 
         self.fig.savefig(filename)
         logger.info(f"Signal display scan {self.scan.id} figure saved to {filename}")

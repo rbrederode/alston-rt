@@ -139,7 +139,7 @@ class TCPClient:
         except BlockingIOError:
             return  # no data ready
         except (ConnectionResetError, OSError) as e:
-            logging.exception(f"TCP Client {self.description} socket connection reset / OSError. Cannot receive message.\n{msg}")
+            logging.error(f"TCP Client {self.description} socket connection reset / OSError. Cannot receive message.\n{msg}")
             self._process_disconnect()
             return
 
@@ -317,8 +317,11 @@ class TCPClient:
                         logger.error(f"TCP Client {self.description} general exception sending message to host {self.host} port {self.port}\n{e}")
                         self._process_disconnect()
                     finally:
+                        # If the message exceeds the maximum block size i.e. we entered blocking mode, return the socket to non-blocking mode
                         if total_len > self.max_block_size:
-                            key.fileobj.setblocking(False)  # Ensure the socket is set back to non-blocking mode
+                            # Check if the socket is still valid before setting it back to non-blocking mode
+                            if key.fileobj:
+                                key.fileobj.setblocking(False)  # Ensure the socket is set back to non-blocking mode
 
             time_exit = time.time()
             logger.info(f"TCP Client {self.description} SEND {len(data)} bytes duration: {(time_exit - time_enter)*1000:.2f} ms")
