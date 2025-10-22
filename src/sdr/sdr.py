@@ -182,7 +182,7 @@ class SDR:
                 return False, (0.0, 0.0)
 
             x = np.zeros(samples, dtype=np.complex128)
-            self.rtlsdr.read_samples(samples)
+            x = self.rtlsdr.read_samples(samples)
 
         # Take a random subset of samples to avoid warning and speed up test
         idx = np.random.choice(samples, size=sample_limit, replace=False)
