@@ -16,7 +16,7 @@ from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from util import log
 from obs.scan import Scan
-from .signal_display import SignalDisplay
+from signal_display import SignalDisplay
 
 CHANNELS = 1024 # Size of FFT to compute for each block of samples
 SCAN_DURATION = 60 # Duration of each scan in seconds
@@ -130,7 +130,7 @@ class SDP(App):
                 elif prop == sdp_dig.PROPERTY_FEED:
                     feed = value
 
-            logger.debug(f"SDP received digitiser samples message with metadata: center_freq={center_freq}, sample rate={sample_rate}, read counter={read_counter}, load terminated={load_terminated}")
+            logger.debug(f"SDP received digitiser samples message with metadata: feed={feed}, center_freq={center_freq}, gain={gain}, sample rate={sample_rate}, read counter={read_counter}")
 
             with self._rlock:                    
                 # Loop through scans in the queue until we find one that matches the read_counter
@@ -176,9 +176,10 @@ class SDP(App):
                     logger.info(f"SDP scan is complete: {match}")
                     match.save_to_disk(output_dir=OUTPUT_DIR, include_iq=False)
                     match.del_iq()
-                    self.signal_display.save_scan_figure(scan=match, output_dir=OUTPUT_DIR)
                     self.scan_q.get()  # Remove the completed scan from the queue
                     self.scan_q.task_done()
+                    
+                    
 
         # Prepare rsp msg to dig acknowledging receipt of the incoming api message
         dig_rsp = APIMessage(api_msg=api_msg, api_version=self.dig_api.get_api_version())
@@ -246,12 +247,13 @@ def main():
             while not scan.is_complete():
                 sdp.signal_display.display()
                 time.sleep(1.0)  # Update display every second
-                if time.time() - start > (2 * scan.duration):  # Timeout after 2 * scan duration
+                if time.time() - start > (1.2 * scan.duration):  # Timeout after 1.2 * scan duration
                     logger.warning(f"SDP giving up on incomplete scan after timeout: {scan}")
                     break
             
             # Final display call to ensure complete rendering
             sdp.signal_display.display()
+            sdp.signal_display.save_scan_figure(output_dir=OUTPUT_DIR)
                 
     except KeyboardInterrupt:
         pass

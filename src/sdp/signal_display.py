@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sdp.scan import Scan
+    from sdp.scan import Scan, gen_file_prefix
     
 import numpy as np
 import matplotlib.pyplot as plt
@@ -53,7 +53,7 @@ class SignalDisplay:
         self.sig[4] = self.fig.add_subplot(self.gs1[1]) # Total power timeline
 
         self.fig.subplots_adjust(top=0.78)
-        self.fig.suptitle(f"Scan: {scan.id}-{scan.id} Center Frequency: {scan.center_freq/1e6:.2f} MHz, Gain: {scan.gain} dB, Sample Rate: {scan.sample_rate/1e6:.2f} MHz, FFT Size: {scan.fft_size}", fontsize=12, y=0.96)
+        self.fig.suptitle(f"Scan: {scan.id}-{scan.id} Center Frequency: {scan.center_freq/1e6:.2f} MHz, Gain: {scan.gain} dB, Sample Rate: {scan.sample_rate/1e6:.2f} MHz, Channels: {scan.channels}", fontsize=12, y=0.96)
 
         self.extent = [(scan.center_freq + scan.sample_rate / -2) / 1e6, (scan.center_freq + scan.sample_rate / 2) / 1e6, scan.duration, 0]
 
@@ -79,7 +79,7 @@ class SignalDisplay:
             self.sig[2].cla()
             self.pwr_im = self.sig[2].imshow(self.scan.spr / self.scan.bsl, aspect='auto', extent=self.extent)
             self.fig.colorbar(self.pwr_im, ax=self.sig[2], label='Power Spectrum [a.u.]')
-            self.sig[4].plot([1], [np.sum(self.scan.spr[0, :])], color='red', label='Total Power')  # Plot total power across all fft bins for the first second
+            self.sig[4].plot([1], [np.sum(self.scan.spr[0, :])], color='red', label='Total Power')  # Plot total power across all channels for the first second
             self.sec = 0
 
         else:
@@ -93,7 +93,7 @@ class SignalDisplay:
             # Update the existing power spectrum image with new data
             self.pwr_im.set_data(self.scan.spr / self.scan.bsl)
 
-        # Plot total power across all fft bins for each second up to the current second
+        # Plot total power across all channels for each second up to the current second
         self.sig[4].plot(
             np.arange(1, l_sec + 1), 
             [np.sum(self.scan.spr[s, :]) for s in range(l_sec)], 
@@ -106,14 +106,14 @@ class SignalDisplay:
 
         # Plot the summed power spectrum and sky signal for the current second
         self.sig[0].plot(
-            np.linspace(self.extent[0], self.extent[1], self.scan.fft_size), 
-            self.scan.spr.flatten()[(l_sec-1)*self.scan.fft_size:(l_sec)*self.scan.fft_size], 
+            np.linspace(self.extent[0], self.extent[1], self.scan.channels), 
+            self.scan.spr.flatten()[(l_sec-1)*self.scan.channels:(l_sec)*self.scan.channels], 
             color='red', 
             label='Signal (SPR)'
         )
 
         self.sig[0].plot(
-            np.linspace(self.extent[0], self.extent[1], self.scan.fft_size), 
+            np.linspace(self.extent[0], self.extent[1], self.scan.channels), 
             self.scan.bsl, 
             color='black', 
             label=label
@@ -121,27 +121,29 @@ class SignalDisplay:
         self.sig[0].legend(loc='lower right')
 
         self.sig[1].plot(
-            np.linspace(self.extent[0], self.extent[1], self.scan.fft_size), 
-            self.scan.spr.flatten()[(l_sec-1)*self.scan.fft_size:(l_sec)*self.scan.fft_size] / self.scan.bsl, 
+            np.linspace(self.extent[0], self.extent[1], self.scan.channels), 
+            self.scan.spr.flatten()[(l_sec-1)*self.scan.channels:(l_sec)*self.scan.channels] / self.scan.bsl, 
             color='orange', 
             label='Signal (SPR/BSL)'
         )
         self.sig[1].legend(loc='lower right')
 
-        row_start = int(np.ceil((l_sec-1) * self.scan.sample_rate / self.scan.fft_size))
-        row_end = int(np.ceil(l_sec * self.scan.sample_rate / self.scan.fft_size))
-        # Plot 10% of raw IQ samples for the current second
-        indices = np.linspace(row_start, row_end - 1, int(self.scan.raw.shape[0]*0.01), dtype=int)
+        row_start = int(np.ceil((l_sec-1) * self.scan.sample_rate / self.scan.channels))
+        row_end = int(np.ceil(l_sec * self.scan.sample_rate / self.scan.channels))
 
-        mean_real = np.mean(np.abs(self.scan.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
-        mean_imag = np.mean(np.abs(self.scan.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
+        if hasattr(self.scan, 'raw'):
+            # Plot 10% of raw IQ samples for the current second
+            indices = np.linspace(row_start, row_end - 1, int(self.scan.raw.shape[0]*0.01), dtype=int)
 
-        self.sig[3].bar(0, mean_real, color='blue', label='I')
-        self.sig[3].bar(1, mean_imag, color='orange', label='Q')
-        # Draw a line at the 33% and 66% marks
-        self.sig[3].axhline(y=33, color='green', linestyle='--', label='33%')
-        self.sig[3].axhline(y=66, color='red', linestyle='--', label='66%')
-        self.sig[3].legend(loc='lower right')
+            mean_real = np.mean(np.abs(self.scan.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
+            mean_imag = np.mean(np.abs(self.scan.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
+
+            self.sig[3].bar(0, mean_real, color='blue', label='I')
+            self.sig[3].bar(1, mean_imag, color='orange', label='Q')
+            # Draw a line at the 33% and 66% marks
+            self.sig[3].axhline(y=33, color='green', linestyle='--', label='33%')
+            self.sig[3].axhline(y=66, color='red', linestyle='--', label='66%')
+            self.sig[3].legend(loc='lower right')
         
         if l_sec == self.scan.duration:
             tpw = np.zeros(self.scan.duration, dtype=np.float64)  # Initialise (scans * duration * iterations) array for total power sky timeline
@@ -174,7 +176,6 @@ class SignalDisplay:
         if output_dir is None or output_dir == "":
             output_dir = "."
 
-        from .scan import gen_file_prefix  # lazy import to avoid circular dependency
         filename = f"{output_dir}/" + gen_file_prefix(self.scan, "sigfig") + ".png"
 
         self.fig.savefig(filename)

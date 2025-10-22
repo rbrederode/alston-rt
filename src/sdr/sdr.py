@@ -173,7 +173,7 @@ class SDR:
         p_threshold = 0.05 # p-value threshold for Gaussian detection
         sample_limit = 5000  # limit for Shapiro–Wilk
 
-        samples = int(duration * sample_rate)
+        samples = int(time_in_secs * sample_rate)
 
         with SDR._mutex:
 
