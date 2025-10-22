@@ -80,7 +80,7 @@ class Processor(threading.Thread):
 
             try:
                 self._event = self._event_q.get(timeout=1)  # Wait for an event for up to 1 second
-                self._event_timestamp = time.time()
+                self._event_timestamp = time.perf_counter()
 
                 try:
                     self.process_event(self._event)

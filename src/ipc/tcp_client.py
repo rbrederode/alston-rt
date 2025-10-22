@@ -388,7 +388,7 @@ if __name__ == "__main__":
     set_sample_rate_apicall["msg_type"] = "req"
     set_sample_rate_apicall["action_code"] = "set"
     set_sample_rate_apicall["property"] = "sample_rate"
-    set_sample_rate_apicall["value"] = 2.048e6
+    set_sample_rate_apicall["value"] = 2.4e6
 
     get_sample_rate_apicall = {}
     get_sample_rate_apicall["msg_type"] = "req"
@@ -401,6 +401,12 @@ if __name__ == "__main__":
     set_center_freq_apicall["property"] = "center_freq"
     set_center_freq_apicall["value"] = 1420.40e6
 
+    get_auto_gain_apicall = {}
+    get_auto_gain_apicall["msg_type"] = "req"
+    get_auto_gain_apicall["action_code"] = "method"
+    get_auto_gain_apicall["method"] = "get_auto_gain"
+    get_auto_gain_apicall["params"] = {"sample_rate": 2.4e6, "time_in_secs": 1}
+
     set_gain_apicall = {}
     set_gain_apicall["msg_type"] = "req"
     set_gain_apicall["action_code"] = "set"
@@ -411,7 +417,7 @@ if __name__ == "__main__":
     read_samples_apicall["msg_type"] = "req"
     read_samples_apicall["action_code"] = "method"
     read_samples_apicall["method"] = "read_samples"
-    read_samples_apicall["params"] = {"num_samples": 2.048e6, "duration": 30.0} # Sample rate/s and duration in seconds
+    read_samples_apicall["params"] = {} # No parameters required for this method
 
     api_msg = message.APIMessage()
 
@@ -475,6 +481,20 @@ if __name__ == "__main__":
     )
 
     client.send(api_msg)
+
+    time.sleep(1)
+
+    api_msg.set_json_api_header(
+        api_version="1.0",
+        dt=datetime.now(timezone.utc),
+        from_system="tm",
+        to_system="dig",
+        api_call=get_auto_gain_apicall
+    )
+
+    client.send(api_msg)
+
+    time.sleep(60)
 
     api_msg.set_json_api_header(
         api_version="1.0",

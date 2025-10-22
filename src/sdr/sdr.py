@@ -1,4 +1,5 @@
 from rtlsdr import RtlSdr, RtlSdrTcpClient
+from scipy.stats import shapiro, normaltest, norm
 
 import numpy as np
 import math
@@ -35,7 +36,6 @@ class SDR:
         This class provides methods to connect to the SDR, retrieve device information,
         enable/disable the bias tee, and stabilize the device by discarding initial samples.
     """
-
     _mutex = threading.RLock()      # Mutex controlling access to the SDR
 
     def __init__(self):
@@ -56,11 +56,11 @@ class SDR:
                 logger.exception(f"SDR could not connect due to exception: {e}")
 
             # Cached rtlsdr properties
-            self.gain = self.rtlsdr.gain if self.rtlsdr.gain is not None else None
-            self.center_freq = self.rtlsdr.center_freq if self.rtlsdr.center_freq is not None else None
-            self.bandwidth = self.rtlsdr.bandwidth if self.rtlsdr.bandwidth is not None else None
-            self.freq_correction = self.rtlsdr.freq_correction if self.rtlsdr.freq_correction is not None else None
-            self.sample_rate = int(math.ceil(self.rtlsdr.sample_rate)) if self.rtlsdr.sample_rate is not None else None
+            self.gain = self.rtlsdr.gain if self.rtlsdr is not None else None
+            self.center_freq = self.rtlsdr.center_freq if self.rtlsdr is not None else None
+            self.bandwidth = self.rtlsdr.bandwidth if self.rtlsdr is not None else None
+            self.freq_correction = self.rtlsdr.freq_correction if self.rtlsdr is not None else None
+            self.sample_rate = int(math.ceil(self.rtlsdr.sample_rate)) if self.rtlsdr is not None else None
 
         if self.rtlsdr:
             info = self.get_eeprom_info()
@@ -164,6 +164,99 @@ class SDR:
                 discard = self.read_samples() # Read samples from the SDR
                 logger.info(f"SDR stabilising: Discarded {discard.size} samples, Sample Rate {sample_rate/1e6} MHz, Center Frequency {self.get_center_freq()/1e6} MHz, Gain {self.get_gain()} dB, Sample Power {np.sum(np.abs(discard)**2):.2f} [a.u.]")
             del discard  # Free up memory
+
+    def _get_gain_gaussianity(self, sample_rate=2.4e6, time_in_secs=1):
+        """
+        Get the Gaussianity p-values (Shapiro-Wilk) of the SDR samples over a specified duration.
+        """
+
+        p_threshold = 0.05 # p-value threshold for Gaussian detection
+        sample_limit = 5000  # limit for Shapiro–Wilk
+
+        samples = int(duration * sample_rate)
+
+        with SDR._mutex:
+
+            if self.rtlsdr is None:
+                logger.warning("SDR device not connected.")
+                return False, (0.0, 0.0)
+
+            x = np.zeros(samples, dtype=np.complex128)
+            self.rtlsdr.read_samples(samples)
+
+        # Take a random subset of samples to avoid warning and speed up test
+        idx = np.random.choice(samples, size=sample_limit, replace=False)
+        r_samples = x.real[idx]
+        i_samples = x.imag[idx]
+
+        # Run Gaussianity test (Shapiro–Wilk)
+        stat_r, p_r = shapiro(r_samples)
+        stat_i, p_i = shapiro(i_samples)
+
+        if p_r > p_threshold and p_i > p_threshold:
+            logger.info(f"SDR gaussianity test at gain={self.get_gain()} dB passed: P-Values: Real={p_r:.3f} AND Imaginary={p_i:.3f} greater than threshold {p_threshold} with power {np.sum(np.abs(x)**2):.2f} [a.u.]")
+            return True, (p_r, p_i)
+        else:
+            logger.info(f"SDR gaussianity test at gain={self.get_gain()} dB failed: P-Values: Real={p_r:.3f} OR Imaginary={p_i:.3f} less than threshold {p_threshold} with power {np.sum(np.abs(x)**2):.2f} [a.u.]")
+            return False, (p_r, p_i)
+
+    def get_auto_gain(self, sample_rate=2.4e6, time_in_secs=1, p_threshold=0.05) -> int:
+        """Iterate through all SDR gain settings to find the optimal gain for Gaussianity.
+            :param sample_rate: Sample rate in Hz
+            :param time_in_secs: Duration in seconds to sample for each gain setting
+            :param p_threshold: p-value threshold for Gaussian detection
+            :returns:
+            Return the gain setting that meets the Gaussianity criteria.
+        """
+
+        # Gain settings
+        Glist = [1,3,7,9,12,14,16,17,19,21,23,25,28,30,32,34,36,37,39,40,42,43,44,45,48,50]
+
+        # Lists to hold p-values per gain
+        p_r_list = []
+        p_i_list = []
+
+        with SDR._mutex:
+
+            if self.rtlsdr is None:
+                logger.warning("SDR device not connected.")
+                return None
+
+            # Remember original SDR gain setting
+            orig_gain = self.gain 
+
+            # Loop over each gain setting
+            for gain in Glist:
+
+                self.set_gain(gain)  # Set the SDR gain
+                result, (p_r, p_i) = self._get_gain_gaussianity(sample_rate=sample_rate, time_in_secs=time_in_secs)
+
+                p_r_list.append(p_r)
+                p_i_list.append(p_i)
+
+            gaussian = False
+            gauss_gain = None
+            for i in range(len(Glist) - 1):
+                if (p_r_list[i] > p_threshold and p_i_list[i] > p_threshold and
+                    p_r_list[i+1] > p_threshold and p_i_list[i+1] > p_threshold):
+                    gaussian = True
+                    gauss_gain = Glist[i+1]
+                    break
+
+            self.set_gain(orig_gain)  # Restore original gain setting
+
+        # If we find a gaussian gain
+        if gaussian:
+            logger.info(f"SDR optimal gain for gaussianity: {gauss_gain} dB\n")
+        else: 
+            logger.warning("\nNo SDR gain meets Gaussianity criteria — check signal chain.\n")
+
+            max_p_r = np.max(p_r_list)
+            # Set gauss gain to gain in Glist corresponding to maximum p_r_list else orig_gain if max=0.0
+            gauss_gain = Glist[np.argmax(p_r_list)] if max_p_r > 0.0 else orig_gain
+            logger.warning(f"Propose SDR gain {gauss_gain} dB based on maximum p_r value {max_p_r}\n")
+        
+        return gauss_gain
 
     @sdr_guard(default=None)
     def get_center_freq(self):

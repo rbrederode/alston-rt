@@ -6,9 +6,10 @@ EXC_ID_STREAM_UNABLE_TO_ENCODE              = 0x0001
 EXC_ID_API_VALIDATION_FAILED                = 0x0002
 EXC_ID_API_UNSUPPORTED_VERSION              = 0x0003
 EXC_ID_SOFTWARE_FAILURE                     = 0x0004
-EXC_ID_INVALID_PARAM                        = 0x0005
-EXC_ID_INVALID_LENGTH                       = 0x0006
-EXC_ID_INVALID_VALUE                        = 0x0007
+EXC_ID_SCHEDULER_FAILURE                    = 0x0005
+EXC_ID_INVALID_PARAM                        = 0x0006
+EXC_ID_INVALID_LENGTH                       = 0x0007
+EXC_ID_INVALID_VALUE                        = 0x0008
 
 class XBase(Exception):
     
@@ -52,3 +53,8 @@ class XSoftwareFailure(XBase):
 
     def __init__(self, message: str=None, data: bytes=None):
         super().__init__(EXC_ID_SOFTWARE_FAILURE, message, data)
+
+class XSchedulerFailure(XBase):
+
+    def __init__(self, message: str=None, data: bytes=None):
+        super().__init__(EXC_ID_SCHEDULER_FAILURE, message, data)

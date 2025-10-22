@@ -49,7 +49,8 @@ TO = (
     TM
 )
 
-# Allowable properties to get or set 
+# Allowable properties to get or set
+PROPERTY_FEED           = 'feed'             # Feed identifier
 PROPERTY_CENTER_FREQ    = 'center_freq'      # Center frequency in Hz
 PROPERTY_SAMPLE_RATE    = 'sample_rate'      # Sample rate in samples per second
 PROPERTY_BANDWIDTH      = 'bandwidth'        # Bandwidth in Hz
@@ -59,6 +60,7 @@ PROPERTY_SDP_CONNECTED  = 'sdp_connected'    # SDP connection status (True/False
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 
 PROPERTIES = (
+    PROPERTY_FEED,
     PROPERTY_CENTER_FREQ,
     PROPERTY_SAMPLE_RATE,
     PROPERTY_BANDWIDTH,
@@ -74,13 +76,15 @@ METHOD_GET_TUNER_TYPE   = 'get_tuner_type' # Get the type of tuner in the device
 METHOD_SET_DIRECT_SAMPLING = 'set_direct_sampling' # Set direct sampling mode (0=off, 1=I-ADC, 2=Q-ADC)
 METHOD_READ_BYTES       = 'read_bytes'       # Read raw bytes from the device
 METHOD_READ_SAMPLES     = 'read_samples'     # Read samples from the device
+METHOD_GET_AUTO_GAIN    = 'get_auto_gain'    # Determine optimal gain setting e.g. 20 dB
 
 METHODS = (
     METHOD_GET_GAINS,
     METHOD_GET_TUNER_TYPE,
     METHOD_SET_DIRECT_SAMPLING,
     METHOD_READ_BYTES,
-    METHOD_READ_SAMPLES
+    METHOD_READ_SAMPLES,
+    METHOD_GET_AUTO_GAIN,
 )
 
 # Allowable status codes for responses

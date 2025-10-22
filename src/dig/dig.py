@@ -14,6 +14,7 @@ from ipc.message import APIMessage
 from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
+from models.dsh import Feed
 from util import log
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,9 @@ class Digitiser(App):
 
         # Software Defined Radio (internal) interface
         self.sdr = SDR()
+        self.feed = Feed.NONE
         self.stream_samples = False # Flag indicating if we are currently streaming samples (from the SDR)
+        self.load_terminated = False # Flag indicating whether a 'load terminator' has been placed in the signal path
 
     def add_args(self, arg_parser): 
         """ Specifies the digitiser's command line arguments.
@@ -64,6 +67,8 @@ class Digitiser(App):
         """ Processes initialisation events.
         """
         logger.debug(f"Digitiser initialisation event")
+
+        self.feed = Feed.F1420_H3T  # Default feed (1420 MHz 3 Turn Helical Feed)
 
         action = Action()
         return action
@@ -278,7 +283,7 @@ class Digitiser(App):
 
         method = api_call['method']
 
-        allowed_keys = {"num_samples", "num_bytes"}
+        allowed_keys = {"sample_rate", "time_in_secs"}
         args = {k: v for k, v in api_call.get('params', {}).items() if k in allowed_keys}
 
         logger.debug(f"Digitiser method call: {method} with params {args}")
@@ -334,6 +339,7 @@ class Digitiser(App):
         )
         
         metadata = [   
+            {"property": "feed", "value": self.feed},                    # Feed Id
             {"property": "center_freq", "value": self.sdr.center_freq},  # Hz    
             {"property": "sample_rate", "value": self.sdr.sample_rate},  # Hz
             {"property": "bandwidth", "value": self.sdr.bandwidth},      # MHz
