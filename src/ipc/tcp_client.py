@@ -319,9 +319,10 @@ class TCPClient:
                     finally:
                         # If the message exceeds the maximum block size i.e. we entered blocking mode, return the socket to non-blocking mode
                         if total_len > self.max_block_size:
-                            # Check if the socket is still valid before setting it back to non-blocking mode
-                            if key.fileobj:
+                            try:
                                 key.fileobj.setblocking(False)  # Ensure the socket is set back to non-blocking mode
+                            except Exception as e:
+                                logger.error(f"TCP Client {self.description} socket not valid anymore while setting non-blocking mode while sending message to host {self.host} port {self.port}\n{e}")
 
             time_exit = time.time()
             logger.info(f"TCP Client {self.description} SEND {len(data)} bytes duration: {(time_exit - time_enter)*1000:.2f} ms")
