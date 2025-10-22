@@ -67,6 +67,9 @@ class Scan:
             self.spr = None  # Summed power spectrum for each second in the duration of the scan
             self.bsl = None  # Baseline power spectrum over duration of the scan
 
+            self.mean_real = 0.0  # Mean of real value of the raw samples (I)
+            self.mean_imag = 0.0  # Mean of imaginary value of the raw samples (Q)
+
             # Initialize data arrays for the scan
             self.init_data_arrays(sample_rate=self.sample_rate, duration=self.duration, channels=self.channels)
 
@@ -148,7 +151,8 @@ class Scan:
         iq = iq[:int(self.sample_rate - (self.sample_rate % self.channels))].astype(np.complex64)  # Discard excess samples that don't fit into the channels
         iq = iq.reshape(-1, self.channels) # Reshape to have rows each of size channels columns
 
-        row = int((sec - 1) * self.sample_rate / self.channels)  # Calculate the starting row index (zero based) using sec
+        row_start = int((sec - 1) * self.sample_rate / self.channels)   # Calculate the starting row index (zero based) using sec
+        row_end = int(sec * self.sample_rate / self.channels)           # Calculate the ending row index (zero based) using sec
 
         pwr = np.zeros((iq.shape[0], self.channels), dtype=np.float64)  # Temporary array to hold power spectrum for the loaded samples
         # For each row i.e. 'shape[0]' in the reshaped sample set, calculate and record the power spectrum
@@ -160,10 +164,15 @@ class Scan:
 
         # Store the raw, power and summed spectrum data in the appropriate rows of the scan data arrays
         #with self._rlock:
-        self.raw[row:row + iq.shape[0],:] = iq
-        self.pwr[row:row + iq.shape[0],:] = pwr
+        self.raw[row_start:row_start + iq.shape[0],:] = iq
+        self.pwr[row_start:row_start + iq.shape[0],:] = pwr
         self.spr[sec - 1,:] = spr  # sec is 1-based index, so adjust for 0-based array index
         self.loaded_sec[sec - 1] = True  # Mark this second as loaded
+
+        indices = np.linspace(row_start, row_end - 1, int(self.raw.shape[0]*0.01), dtype=int)
+
+        self.mean_real = np.mean(np.abs(self.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
+        self.mean_imag = np.mean(np.abs(self.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
 
         # Count how many rows have self.loaded_sec marked as True
         actual_rows = np.count_nonzero(self.loaded_sec)
@@ -204,7 +213,7 @@ class Scan:
         if output_dir is None or output_dir == '':
             output_dir = "./"
 
-        prefix = util.gen_file_prefix(dt=self.read_start, feed=self.feed, gain=self.gain, duration=self.duration, 
+        prefix = gen_file_prefix(dt=self.read_start, feed=self.feed, gain=self.gain, duration=self.duration, 
             sample_rate=self.sample_rate, center_freq=self.center_freq, channels=self.channels, entity_id=self.id)
 
         try:
@@ -273,10 +282,10 @@ class Scan:
                 self.center_freq = meta["center_freq"]
                 self.gain = meta["gain"]
                 self.feed = meta["feed"]
+                self.scan_created = datetime.fromisoformat(meta["scan_created"]).timestamp() if meta["scan_created"] is not None else None
                 self.read_start = datetime.fromisoformat(meta["read_start"]) if meta["read_start"] is not None else None
                 self.read_end = datetime.fromisoformat(meta["read_end"]) if meta["read_end"] is not None else None
-                self.scan_created = datetime.fromisoformat(meta["scan_created"]).timestamp() if meta["scan_created"] is not None else None
-
+                
         except Exception as e:
             logger.error(f"Scan - Failed to read metadata from {input_dir}/{read_file}: {e}")
             return False
@@ -287,7 +296,7 @@ class Scan:
         try:
             self.init_data_arrays(sample_rate=self.sample_rate, duration=self.duration, channels=self.channels)
 
-            prefix = util.gen_file_prefix(dt=self.read_start, feed=self.feed, gain=self.gain, duration=self.duration, 
+            prefix = gen_file_prefix(dt=self.read_start, feed=self.feed, gain=self.gain, duration=self.duration, 
                 sample_rate=self.sample_rate, center_freq=self.center_freq, channels=self.channels, entity_id=self.id)
 
             if include_iq:
@@ -310,15 +319,16 @@ class Scan:
                     # Calculate the sum of the power spectrum for each frequency bin in a given second
                     self.spr[sec,:] = np.sum(self.pwr[row_start:row_end,:], axis=0)  # Sum the power spectrum in a given sec for each frequency bin (in columns)
                     remove_dc_spike(self.channels, self.spr[sec,:])
+
+                self.loaded_sec = [True] * self.duration
             else:
                 # Load summed power spectrum only
                 filename = prefix + "-load" + ".csv" if self.feed == Feed.NONE else prefix + "-spr" + ".csv"
                 with open(f"{input_dir}/{filename}", 'r') as f:
                     self.spr = np.loadtxt(f, delimiter=",")
-                    self.spr = self.spr.reshape(self.duration, self.channels)
+                    self.spr = self.spr.reshape(-1, self.channels)
 
-            # Mark all seconds as loaded
-            self.loaded_sec = [True] * self.duration
+                self.loaded_sec = [True] * self.spr.shape[0]
 
         except Exception as e:
             logger.error(f"Scan - Failed to load data from {input_dir}: {e}")
@@ -347,9 +357,9 @@ class Scan:
                 "center_freq": self.center_freq,
                 "gain": self.gain,
                 "feed": self.feed,
+                "scan_created": datetime.fromtimestamp(self.scan_created, tz=timezone.utc).isoformat(),
                 "read_start": self.read_start.isoformat() if self.read_start is not None else None,
-                "read_end": self.read_end.isoformat() if self.read_end is not None else None,
-                "scan_created": datetime.fromtimestamp(self.scan_created, tz=timezone.utc).isoformat()
+                "read_end": self.read_end.isoformat() if self.read_end is not None else None
             }
         return meta
 

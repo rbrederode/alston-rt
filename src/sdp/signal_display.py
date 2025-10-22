@@ -129,22 +129,12 @@ class SignalDisplay:
         )
         self.sig[1].legend(loc='lower right')
 
-        row_start = int(np.ceil((l_sec-1) * self.scan.sample_rate / self.scan.channels))
-        row_end = int(np.ceil(l_sec * self.scan.sample_rate / self.scan.channels))
-
-        if hasattr(self.scan, 'raw'):
-            # Plot 10% of raw IQ samples for the current second
-            indices = np.linspace(row_start, row_end - 1, int(self.scan.raw.shape[0]*0.01), dtype=int)
-
-            mean_real = np.mean(np.abs(self.scan.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
-            mean_imag = np.mean(np.abs(self.scan.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
-
-            self.sig[3].bar(0, mean_real, color='blue', label='I')
-            self.sig[3].bar(1, mean_imag, color='orange', label='Q')
-            # Draw a line at the 33% and 66% marks
-            self.sig[3].axhline(y=33, color='green', linestyle='--', label='33%')
-            self.sig[3].axhline(y=66, color='red', linestyle='--', label='66%')
-            self.sig[3].legend(loc='lower right')
+        self.sig[3].bar(0, self.scan.mean_real, color='blue', label='I')
+        self.sig[3].bar(1, self.scan.mean_imag, color='orange', label='Q')
+        # Draw a line at the 33% and 66% marks
+        self.sig[3].axhline(y=33, color='green', linestyle='--', label='33%')
+        self.sig[3].axhline(y=66, color='red', linestyle='--', label='66%')
+        self.sig[3].legend(loc='lower right')
         
         if l_sec == self.scan.duration:
             tpw = np.zeros(self.scan.duration, dtype=np.float64)  # Initialise (scans * duration * iterations) array for total power sky timeline

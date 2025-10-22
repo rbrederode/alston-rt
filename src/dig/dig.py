@@ -68,8 +68,6 @@ class Digitiser(App):
         """
         logger.debug(f"Digitiser initialisation event")
 
-        self.feed = Feed.F1420_H3T  # Default feed (1420 MHz 3 Turn Helical Feed)
-
         action = Action()
         return action
 

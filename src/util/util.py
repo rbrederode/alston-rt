@@ -13,8 +13,8 @@ def gen_file_prefix(
     sample_rate:float,
     center_freq:float,
     channels:int,
-    entity_id:int | None,
-    filetype: str | None) -> str:
+    entity_id:int = None,
+    filetype: str = None) -> str:
 
     """ Generate a filename prefix based on metadata parameters.
         :param dt: The datetime object representing the entity start time
@@ -36,7 +36,7 @@ def gen_file_prefix(
         "-bw" + str(round(sample_rate/1e6,2)) + \
         "-cf" + str(round(center_freq/1e6,2)) + \
         "-ch" + str(channels) + \
-        ("-" + str(entity_id) if entity_id is not None else "") + \
+        ("-id" + str(entity_id) if entity_id is not None else "") + \
         ("-" + filetype if filetype is not None else '')
 
 def find_json_object_end(data:bytes) -> int:
