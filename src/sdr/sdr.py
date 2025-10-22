@@ -200,7 +200,7 @@ class SDR:
             logger.info(f"SDR gaussianity test at gain={self.get_gain()} dB failed: P-Values: Real={p_r:.3f} OR Imaginary={p_i:.3f} less than threshold {p_threshold} with power {np.sum(np.abs(x)**2):.2f} [a.u.]")
             return False, (p_r, p_i)
 
-    def get_auto_gain(self, sample_rate=2.4e6, time_in_secs=1, p_threshold=0.05) -> int:
+    def get_auto_gain(self, sample_rate=2.4e6, time_in_secs=1, p_threshold=0.05) -> (int, float):
         """Iterate through all SDR gain settings to find the optimal gain for Gaussianity.
             :param sample_rate: Sample rate in Hz
             :param time_in_secs: Duration in seconds to sample for each gain setting
@@ -220,7 +220,7 @@ class SDR:
 
             if self.rtlsdr is None:
                 logger.warning("SDR device not connected.")
-                return None
+                return None, None
 
             # Remember original SDR gain setting
             orig_gain = self.gain 
@@ -255,8 +255,8 @@ class SDR:
             # Set gauss gain to gain in Glist corresponding to maximum p_r_list else orig_gain if max=0.0
             gauss_gain = Glist[np.argmax(p_r_list)] if max_p_r > 0.0 else orig_gain
             logger.warning(f"Propose SDR gain {gauss_gain} dB based on maximum p_r value {max_p_r}\n")
-        
-        return gauss_gain
+
+        return gauss_gain, max_p_r
 
     @sdr_guard(default=None)
     def get_center_freq(self):
