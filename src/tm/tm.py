@@ -92,7 +92,7 @@ class TelescopeManager(App):
 
         action = Action()
 
-        if api_call['msg_type'] == 'rsp' and api_call['action_code'] == 'set':
+        if api_call['msg_type'] == 'rsp':
             dt = api_msg.get("timestamp")
             if dt:
                 action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
@@ -111,6 +111,13 @@ class TelescopeManager(App):
                 dig_req = self._construct_req_to_dig(property="get_auto_gain", value=2.4e6, message="")
                 action.set_msg_to_remote(dig_req)
                 action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dig_req.get_timestamp()}", timer_action=Action.Timer.TIMER_START, echo_data=dig_req))
+            elif 'get_auto_gain' in api_call.get('message', ''):
+                dig_req = self._construct_req_to_dig(property="gain", value=api_call.get('value', 0), message="")
+                action.set_msg_to_remote(dig_req)
+                action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dig_req.get_timestamp()}", timer_action=Action.Timer.TIMER_START, echo_data=dig_req))
+            elif 'set_gain' in api_call.get('message', ''):
+                dig_req = self._construct_req_to_dig(property="read_samples", value=None, message="")
+                action.set_msg_to_remote(dig_req)
             
         return action
 
@@ -151,6 +158,7 @@ class TelescopeManager(App):
 
         dig_req = APIMessage(api_version=self.dig_api.get_api_version())
 
+        # If property is get_auto_gain or read_samples
         if property == "get_auto_gain":
             dig_req.set_json_api_header(
                 api_version=self.dig_api.get_api_version(), 
@@ -162,6 +170,18 @@ class TelescopeManager(App):
                     "action_code": "method", 
                     "method": property, 
                     "params": {"sample_rate": value, "time_in_secs": 1}
+            })
+        elif property == "read_samples":
+            dig_req.set_json_api_header(
+                api_version=self.dig_api.get_api_version(), 
+                dt=datetime.now(timezone.utc), 
+                from_system=self.app_name, 
+                to_system="dig", 
+                api_call={
+                    "msg_type": "req", 
+                    "action_code": "method", 
+                    "method": property, 
+                    "params": {}
             })
         else:
             dig_req.set_json_api_header(
