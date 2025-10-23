@@ -18,6 +18,8 @@ USABLE_BANDWIDTH = 0.65  # Percentage of usable bandwidth for a scan i.e. full b
 MAX_SCAN_DURATION = 60  # Maximum duration of a single scan in seconds, to keep memory and processing manageable
 SCAN_OVERHEAD_FACTOR = 1.2  # Factor to account for overhead in sampling i.e. 60 seconds of samples takes ~70 seconds to sample
 
+INPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  
+
 def generate_obs_id() -> str:
     """Generate a random observation id.
 
@@ -32,7 +34,7 @@ class Observation:
             obs_id: str | None = None, 
             desc:str=None, 
             target: Target=None, 
-            center_freq:float=None, 
+            freq_ctr:float=None, 
             bandwidth:float=None, 
             sample_rate:float=None, 
             channels:int=None, 
@@ -63,7 +65,7 @@ class Observation:
 
             self.target = target       # Target object
 
-            self.freq_ctr = center_freq     # Center frequency (Hz)
+            self.freq_ctr = freq_ctr        # Center frequency (Hz)
             self.bandwidth = bandwidth      # Bandwidth (Hz)
             self.sample_rate = sample_rate  # Sample rate (Hz)
             self.channels = channels        # Number of channels (fft size)
@@ -204,12 +206,12 @@ class Observation:
                     "kind": self.target.kind if self.target else None,
                     "coord": self.target.coord.to_string() if self.target and self.target.coord else None
                 },
-                "center_freq": self.freq_ctr,
                 "bandwidth": self.bandwidth,
                 "sample_rate": self.sample_rate,
                 "channels": self.channels,
                 "duration": self.duration,
                 "freq_min": self._freq_min,
+                "freq_ctr": self.freq_ctr,
                 "freq_max": self._freq_max,
                 "freq_scans": self._freq_scans,
                 "freq_overlap": self._freq_overlap,
@@ -291,7 +293,7 @@ if __name__ == "__main__":
     # Example usage of the Observation class
     target_coord = SkyCoord(ra="00h42m44.3s", dec="+41d16m9s", frame=ICRS())  # Andromeda Galaxy
     target = Target(name="Andromeda Galaxy", kind="sidereal", coord=target_coord)
-    observation = Observation(desc="Test Observation", target=target, center_freq=1420e6, bandwidth=3.0e6, sample_rate=2.4e6, channels=1024, duration=300)
+    observation = Observation(desc="Test Observation", target=target, freq_ctr=1420.4e6, bandwidth=2.4e6, sample_rate=2.4e6, channels=1024, duration=120)
 
     logger.info("-"*40)
     logger.info("Testing Sidereal Target:")
@@ -300,4 +302,4 @@ if __name__ == "__main__":
 
     print(observation.get_metadata())
 
-    observation.load_baselines(input_dir="./")
+    observation.load_baselines(input_dir=INPUT_DIR)

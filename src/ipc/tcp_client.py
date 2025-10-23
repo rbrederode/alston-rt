@@ -98,7 +98,7 @@ class TCPClient:
     def _process_connection(self):
         """Accept incoming connection events from a client and register the connection with the selector."""
 
-        event = events.ConnectEvent(self, self.client_socket, (self.host, self.port), datetime.now())
+        event = events.ConnectEvent(local_sap=self, remote_conn=self, remote_addr=(self.host, self.port), timestamp=datetime.now())
         self.event_q.put(event)
 
         logging.info(f"TCP Client {self.description} connected to host {self.host} port {self.port}")
@@ -107,10 +107,10 @@ class TCPClient:
         """Process a disconnect from a client and deregister the connection from the selector."""
 
         if self.client_socket is None or self.client_socket.fileno() == -1:
-            event = events.DisconnectEvent(self, self.client_socket, (f'{self.host}', f'{self.port}'), datetime.now())
+            event = events.DisconnectEvent(local_sap=self, remote_conn=None, remote_addr=(self.host, self.port), timestamp=datetime.now())
             self.event_q.put(event) # Create a disconnect event and add it to the queue
         else:
-            event = events.DisconnectEvent(self, self.client_socket, (f'{self.host}', f'{self.port}'), datetime.now())
+            event = events.DisconnectEvent(local_sap=self, remote_conn=None, remote_addr=(self.host, self.port), timestamp=datetime.now())
             self.event_q.put(event) # Create a disconnect event and add it to the queue
 
             # Unregister the connection from the selector
@@ -179,9 +179,7 @@ class TCPClient:
                 msg.from_data(self.recv_msg.msg_data)
 
                 event = events.DataEvent(
-                    self, self.client_socket, (f'{self.host}', f'{self.port}'),
-                    msg.msg_data, datetime.now()
-                )
+                    local_sap=self, remote_conn=self, remote_addr=(self.host, self.port), data=msg.msg_data, timestamp=datetime.now())
                 self.event_q.put(event)
                 self.recv_msg = message.Message()  # Reset for next message
 

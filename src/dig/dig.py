@@ -60,6 +60,7 @@ class Digitiser(App):
 
         arg_parser.add_argument("--tm_host", type=str, required=False, help="TCP host to listen on for Telescope Manager commands", default="localhost")
         arg_parser.add_argument("--tm_port", type=int, required=False, help="TCP port to listen on for Telescope Manager commands", default=50000)
+        
         arg_parser.add_argument("--sdp_host", type=str, required=False, help="TCP server host to connect to for downstream Science Data Processor transport",default="localhost")
         arg_parser.add_argument("--sdp_port", type=int, required=False, help="TCP server port to connect to for downstream Science Data Processor transport", default=60000)
 

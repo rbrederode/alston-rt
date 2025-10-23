@@ -353,6 +353,7 @@ class Scan:
                 "scan_status": self.scan_status,
                 "duration": self.duration,
                 "sample_rate": self.sample_rate,
+                "bandwidth": self.sample_rate,
                 "channels": self.channels,
                 "center_freq": self.center_freq,
                 "gain": self.gain,

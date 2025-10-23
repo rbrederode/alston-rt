@@ -201,7 +201,7 @@ class AppProcessor(Processor):
 
             # If the destination endpoint is the same as the local_sap of the originating event, send the message on the originating connection (socket)
             if endpoint == local_sap and remote_conn is not None:
-                local_sap.send(msg_to_send, remote_conn)  # Send the message on the originating event's connection
+                remote_conn.send(msg_to_send)  # Send the message on the originating event's connection
             else:
                 endpoint.send(msg_to_send)  # Send the message on the registered endpoint's default connection (socket)
         

@@ -296,11 +296,11 @@ class SDR:
 
     @sdr_guard(default=None)
     def get_freq_correction(self):
-        return self.rtlsdr.freq_correction # ppm
+        return self.rtlsdr.ppm # ppm
 
     @sdr_guard(default=None)
     def set_freq_correction(self, value):
-        self.rtlsdr.freq_correction = value
+        self.rtlsdr.ppm = value
         self.freq_correction = value
 
     @sdr_guard(default=None)
