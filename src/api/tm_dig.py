@@ -71,12 +71,13 @@ PROPERTIES = (
 )
 
 # Allowable methods to call on the subsystem 
-METHOD_GET_GAINS        = 'get_gains'           # Get a list of available gain settings
-METHOD_GET_TUNER_TYPE   = 'get_tuner_type' # Get the type of tuner in the device
-METHOD_SET_DIRECT_SAMPLING = 'set_direct_sampling' # Set direct sampling mode (0=off, 1=I-ADC, 2=Q-ADC)
-METHOD_READ_BYTES       = 'read_bytes'       # Read raw bytes from the device
-METHOD_READ_SAMPLES     = 'read_samples'     # Read samples from the device
-METHOD_GET_AUTO_GAIN    = 'get_auto_gain'    # Determine optimal gain setting e.g. 20 dB
+METHOD_GET_GAINS            = 'get_gains'           # Get a list of available gain settings
+METHOD_GET_TUNER_TYPE       = 'get_tuner_type'      # Get the type of tuner in the device
+METHOD_SET_DIRECT_SAMPLING  = 'set_direct_sampling' # Set direct sampling mode (0=off, 1=I-ADC, 2=Q-ADC)
+METHOD_READ_BYTES           = 'read_bytes'          # Read raw bytes from the device
+METHOD_READ_SAMPLES         = 'read_samples'        # Read samples from the device
+METHOD_GET_AUTO_GAIN        = 'get_auto_gain'       # Determine optimal gain setting e.g. 20 dB
+METHOD_GET_GAIN_GAUSSIANITY = 'get_gain_gaussianity' # Run gaussianity test (Shapiro–Wilk) on current gain setting
 
 METHODS = (
     METHOD_GET_GAINS,
@@ -85,6 +86,7 @@ METHODS = (
     METHOD_READ_BYTES,
     METHOD_READ_SAMPLES,
     METHOD_GET_AUTO_GAIN,
+    METHOD_GET_GAIN_GAUSSIANITY,
 )
 
 # Allowable status codes for responses
@@ -141,9 +143,9 @@ MSG_FIELDS_DEFINITIONS = {
         "required": {"msg_type", "action_code", "status"},
         "optional": {"message"},
         "optional": {"property"},   # Copied from req/adv
-        "optional": {"value"},      # Copied from req/adv
+        "optional": {"value"},      
         "optional": {"method"},     # Copied from req/adv
-        "optional": {"params"}      # Copied from req/adv
+        "optional": {"params"}      
     },
 }
 

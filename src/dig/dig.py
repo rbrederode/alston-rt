@@ -19,7 +19,7 @@ from util import log
 
 logger = logging.getLogger(__name__)
 
-MSG_TIMEOUT = 30000 # Timeout in milliseconds for messages awaiting acknowledgement
+MSG_TIMEOUT = 10000 # Timeout in milliseconds for messages awaiting acknowledgement
 
 class Digitiser(App):
 

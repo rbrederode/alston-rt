@@ -1,5 +1,5 @@
 from env.processor import Processor
-from env.events import InitEvent, StatusUpdateEvent
+from env.events import InitEvent, StatusUpdateEvent, ConfigEvent
 from queue import Queue, Empty
 from datetime import datetime, timezone
 import time
@@ -32,6 +32,17 @@ class AppProcessor(Processor):
 
         Processor.free_thread()
 
+    def process_config_event(self, event: ConfigEvent):
+
+        Processor.single_thread()
+
+        handler_method = "process_config"
+
+        self.performActions(getattr(self.driver, handler_method)(event))
+        logger.debug(f"AppProcessor {self.name} config resync'ed")
+
+        Processor.free_thread()
+
     def process_status_update(self, event: StatusUpdateEvent):
         
         try:
@@ -54,6 +65,7 @@ class AppProcessor(Processor):
                     self.initialise_app()
                 except Exception as e:
                     logger.error(f"AppProcessor: Error initialising app: {e}")
+                    return False
 
             elif isinstance(event, StatusUpdateEvent):
 
@@ -61,6 +73,7 @@ class AppProcessor(Processor):
                     self.process_status_update(event)
                 except Exception as e:
                     logger.error(f"AppProcessor: Error processing status update event {event}: {e}")
+                    return False
 
             elif isinstance(event, events.TimerEvent):
 
@@ -141,6 +154,14 @@ class AppProcessor(Processor):
                 if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
                     self.performActions(getattr(self.driver, handler_method)(event),
                         event.local_sap, event.remote_conn, event.remote_addr)
+                return True
+
+            if isinstance(event, events.ConfigEvent):
+                try:
+                    self.process_config_event(event)
+                except Exception as e:
+                    logger.error(f"AppProcessor: Error processing config event {event}: {e}")
+                    return False
                 return True
 
             else:

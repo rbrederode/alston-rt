@@ -165,10 +165,11 @@ class SDR:
                 logger.info(f"SDR stabilising: Discarded {discard.size} samples, Sample Rate {sample_rate/1e6} MHz, Center Frequency {self.get_center_freq()/1e6} MHz, Gain {self.get_gain()} dB, Sample Power {np.sum(np.abs(discard)**2):.2f} [a.u.]")
             del discard  # Free up memory
 
-    def _get_gain_gaussianity(self, sample_rate=2.4e6, time_in_secs=1):
+    def get_gain_gaussianity(self, sample_rate=None, time_in_secs=1):
         """
         Get the Gaussianity p-values (Shapiro-Wilk) of the SDR samples over a specified duration.
         """
+        sample_rate = sample_rate if sample_rate is not None else self.sample_rate
 
         p_threshold = 0.05 # p-value threshold for Gaussian detection
         sample_limit = 5000  # limit for Shapiro–Wilk
@@ -200,7 +201,7 @@ class SDR:
             logger.info(f"SDR gaussianity test at gain={self.get_gain()} dB failed: P-Values: Real={p_r:.3f} OR Imaginary={p_i:.3f} less than threshold {p_threshold} with power {np.sum(np.abs(x)**2):.2f} [a.u.]")
             return False, (p_r, p_i)
 
-    def get_auto_gain(self, sample_rate=2.4e6, time_in_secs=1, p_threshold=0.05) -> (int, int):
+    def get_auto_gain(self, sample_rate=None, time_in_secs=1, p_threshold=0.05) -> (int, int):
         """Iterate through all SDR gain settings to find the optimal gain for Gaussianity.
             :param sample_rate: Sample rate in Hz
             :param time_in_secs: Duration in seconds to sample for each gain setting
@@ -208,7 +209,6 @@ class SDR:
             :returns:
             Return the gain setting that meets the Gaussianity criteria.
         """
-
         # Gain settings
         Glist = [1,3,7,9,12,14,16,17,19,21,23,25,28,30,32,34,36,37,39,40,42,43,44,45,48,50]
 
@@ -224,12 +224,13 @@ class SDR:
 
             # Remember original SDR gain setting
             orig_gain = self.gain 
+            sample_rate = sample_rate if sample_rate is not None else self.sample_rate
 
             # Loop over each gain setting
             for gain in Glist:
 
                 self.set_gain(gain)  # Set the SDR gain
-                result, (p_r, p_i) = self._get_gain_gaussianity(sample_rate=sample_rate, time_in_secs=time_in_secs)
+                result, (p_r, p_i) = self.get_gain_gaussianity(sample_rate=sample_rate, time_in_secs=time_in_secs)
 
                 p_r_list.append(p_r)
                 p_i_list.append(p_i)
