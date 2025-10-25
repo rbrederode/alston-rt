@@ -34,7 +34,7 @@ class SDP(App):
         self.tm_system = "tm"
         self.tm_api = tm_sdp.TM_SDP()
         # Telescope Manager TCP Server
-        self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), port=self.get_args().tm_port)
+        self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
         self.tm_endpoint.start()
         self.tm_connected = False
         # Register Telescope Manager interface with the App
@@ -44,7 +44,7 @@ class SDP(App):
         self.dig_system = "dig"
         self.dig_api = sdp_dig.SDP_DIG()
         # Digitiser TCP Server
-        self.dig_endpoint = TCPServer(description=self.dig_system, queue=self.get_queue(), port=self.get_args().dig_port)
+        self.dig_endpoint = TCPServer(description=self.dig_system, queue=self.get_queue(), host=self.get_args().dig_host, port=self.get_args().dig_port)
         self.dig_endpoint.start()
         self.dig_connected = False
         # Register Digitiser interface with the App
@@ -62,7 +62,10 @@ class SDP(App):
         """
         super().add_args(arg_parser)
 
+        arg_parser.add_argument("--tm_host", type=str, required=False, help="TCP host to listen on for Telescope Manager commands", default="localhost")
         arg_parser.add_argument("--tm_port", type=int, required=False, help="TCP port for Telescope Manager commands", default=50001)
+        
+        arg_parser.add_argument("--dig_host", type=str, required=False, help="TCP host to listen on for Digitiser commands", default="localhost")
         arg_parser.add_argument("--dig_port", type=int, required=False, help="TCP server port for upstream Digitiser transport", default=60000)
 
     def process_init(self) -> Action:
