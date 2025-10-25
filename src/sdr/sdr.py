@@ -47,6 +47,12 @@ class SDR:
             self.connected = False
             self.read_counter = 0
 
+            info = self.get_eeprom_info()
+            if info:
+                logger.info(f"SDR connected, device information: {info}")
+            else:
+                logger.warning("SDR connected but unable to retrieve device information.")
+
             try:
                 self.rtlsdr = RtlSdr()
                 self.connected = True
@@ -61,13 +67,6 @@ class SDR:
             self.bandwidth = self.rtlsdr.bandwidth if self.rtlsdr is not None else None
             self.freq_correction = self.rtlsdr.freq_correction if self.rtlsdr is not None else None
             self.sample_rate = int(math.ceil(self.rtlsdr.sample_rate)) if self.rtlsdr is not None else None
-
-        if self.rtlsdr:
-            info = self.get_eeprom_info()
-            if info:
-                logger.info(f"SDR connected, device information: {info}")
-            else:
-                logger.warning("SDR connected but unable to retrieve device information.")
 
     def __del__(self):
 
@@ -85,10 +84,6 @@ class SDR:
     def get_eeprom_info(self):
 
         with SDR._mutex:
-
-            if self.rtlsdr is None:
-                logger.warning("SDR device not connected.")
-                return None
 
             try:
                 result = subprocess.run(['rtl_eeprom', '-d', '0'], capture_output=True, text=True)
@@ -325,13 +320,13 @@ class SDR:
         if not self.sample_rate:
             raise XSoftwareFailure("SDR - Sample rate must be set before sampling: {self.sample_rate}")
 
-        x = bytes(self.sample_rate) 
-
         with SDR._mutex:
 
             if self.rtlsdr is None:
                 logger.warning("SDR device not connected.")
                 return None, None
+
+            x = bytes(self.sample_rate) 
             
             # Record start/end times associated with sample set (in epoch seconds)
             read_start = time.time()
@@ -360,14 +355,14 @@ class SDR:
 
         if not self.sample_rate:
             raise XSoftwareFailure("SDR - Sample rate must be set before sampling: {self.sample_rate}")
-        
-        x = np.zeros(self.sample_rate, dtype=np.complex128)
 
         with SDR._mutex:
 
             if self.rtlsdr is None:
                 logger.warning("SDR device not connected.")
                 return None, None
+        
+            x = np.zeros(self.sample_rate, dtype=np.complex128)
 
             # Record start/end times associated with sample set (in epoch seconds)
             read_start = time.time()
