@@ -244,6 +244,12 @@ class Digitiser(App):
 
         return action
 
+    def set_feed(self, feed_id: int):
+        """ Sets the current feed ID.
+        """
+        self.feed = feed_id
+        logger.info(f"Digitiser feed set to {self.feed}")
+
     def handle_field_set(self, api_call):
         """ Handles field set api calls.
                 : returns: (status, message, value, payload)
@@ -251,15 +257,15 @@ class Digitiser(App):
         prop_name = 'set_' + api_call['property']
         prop_value = api_call['value']
 
-        if not hasattr(self.sdr, prop_name):
-            return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} not found on SDR", None, None
+        setter = getattr(self.sdr, prop_name) if hasattr(self.sdr, prop_name) else (getattr(self, prop_name) if hasattr(self, prop_name) else None)
 
-        setter = getattr(self.sdr, prop_name)
-        if callable(setter):
+        if setter and callable(setter):
             setter(prop_value)
             return tm_dig.STATUS_SUCCESS, f"Digitiser set property {prop_name} to {prop_value}", prop_value, None
         else:
             return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} is not callable", None, None
+
+        return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} not found", None, None
 
     def handle_field_get(self, api_call):
         """ Handles field get api calls.
@@ -267,37 +273,36 @@ class Digitiser(App):
         """
         prop_name = 'get_' + api_call['property']
 
-        if not hasattr(self.sdr, prop_name):
-            return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} not found on SDR", None, None
-
-        getter = getattr(self.sdr, prop_name)
-        value = getter() if callable(getter) else getter
-
-        return tm_dig.STATUS_SUCCESS, f"Digitiser {prop_name} value {value}", value, None
+        getter = getattr(self.sdr, prop_name) if hasattr(self.sdr, prop_name) else (getattr(self, prop_name) if hasattr(self, prop_name) else None)
+        
+        if getter:
+            value = getter() if callable(getter) else getter
+            return tm_dig.STATUS_SUCCESS, f"Digitiser {prop_name} value {value}", value, None
+        else:
+            return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} not found", None, None
 
     def handle_method_call(self, api_call):
         """ Handles method api calls.
                 : returns: (status, message, value, payload)
         """
-
-        method = api_call['method']
+        method = api_call.get('method', None)
 
         allowed_keys = {"sample_rate", "time_in_secs"}
         args = {k: v for k, v in api_call.get('params', {}).items() if k in allowed_keys}
 
         logger.debug(f"Digitiser method call: {method} with params {args}")
 
-        try:
-            method = getattr(self.sdr, method)
-        except AttributeError:
-            return tm_dig.STATUS_ERROR, f"Digitiser method {method} not found on SDR", None, None
+        call = getattr(self.sdr, method) if hasattr(self.sdr, method) else (getattr(self, method) if hasattr(self, method) else None)
 
-        result = method(**args) if args is not None else method() if callable(method) else method
-        # Check whether result is a tuple of (value, payload) or just a value
-        if isinstance(result, tuple):
-            return tm_dig.STATUS_SUCCESS, f"Digitiser method {method.__name__} invoked on SDR", result[0], result[1]
+        if call:
+            result = call(**args) if args is not None else call() if callable(call) else call
+            # Check whether result is a tuple of (value, payload) or just a value
+            if isinstance(result, tuple):
+                return tm_dig.STATUS_SUCCESS, f"Digitiser method {method.__name__} invoked on SDR", result[0], result[1]
+            else:
+                return tm_dig.STATUS_SUCCESS, f"Digitiser method {method.__name__} invoked on SDR", result, None
         else:
-            return tm_dig.STATUS_SUCCESS, f"Digitiser method {method.__name__} invoked on SDR", result, None
+            return tm_dig.STATUS_ERROR, f"Digitiser method {method} not found", None, None
 
     def _construct_adv_to_tm(self, property, value, message) -> APIMessage:
         """ Constructs an advice message to the Telescope Manager.
