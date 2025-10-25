@@ -3,13 +3,13 @@ import threading
 import datetime
 import time
 import asyncio
-import yappi
 
 from queue import Queue, Empty
 from api.api import API
 from ipc.tcp_server import TCPServer
 from ipc.message import AppMessage, APIMessage
 from ipc.action import Action
+from models.health import HealthState
 from util.xbase import XBase
 from util.timer import Timer, TimerManager
 from env import events
@@ -48,6 +48,8 @@ class App:
         self.processors = []                    # List to hold processor threads
 
         self.start_timer_manager()              # Ensure timer manager is started before any timers are created
+
+        self.healthstate = HealthState.UNKNOWN
 
     def __del__(self):
         self.stop()
@@ -135,12 +137,10 @@ class App:
             self.queue.queue.clear()
 
         logger.info(f"App {self.app_name} stopped")
+        self.healthstate = HealthState.UNKNOWN
 
     def start_processors(self):
         """Starts all processor threads."""
-
-        yappi.set_clock_type("cpu")  # Use CPU time for profiling
-        yappi.start(builtins=True, profile_threads=True)
 
         for i in range(self.num_processors):
             processor = AppProcessor(name=f"{self.app_name}-Processor-{i+1}", event_q=self.queue, driver=self)
@@ -152,11 +152,7 @@ class App:
         Processor.stop_all()
         self.processors = []
 
-        yappi.stop()
-        stats = yappi.get_func_stats()
-        stats.save(f"{self.app_name}_yappi_stats.prof", type="pstat")
-        stats.print_all()
-        yappi.clear_stats()
+        self.healthstate = HealthState.UNKNOWN
 
     def start_status_thread(self):
         """Starts a thread to periodically enqueue status update events."""

@@ -14,13 +14,16 @@ from ipc.message import APIMessage
 from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
+from models.health import HealthState
+from models.comms import CommunicationStatus
 from util import log
 from obs.scan import Scan
 from signal_display import SignalDisplay
 
 CHANNELS = 1024 # Size of FFT to compute for each block of samples
 SCAN_DURATION = 60 # Duration of each scan in seconds
-OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
+#OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
+OUTPUT_DIR = '/Users/r.brederode/samples'  # Directory to store samples
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +39,7 @@ class SDP(App):
         # Telescope Manager TCP Server
         self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
         self.tm_endpoint.start()
-        self.tm_connected = False
+        self.tm_connected = CommunicationStatus.NOT_ESTABLISHED
         # Register Telescope Manager interface with the App
         self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint)
 
@@ -46,7 +49,7 @@ class SDP(App):
         # Digitiser TCP Server
         self.dig_endpoint = TCPServer(description=self.dig_system, queue=self.get_queue(), host=self.get_args().dig_host, port=self.get_args().dig_port)
         self.dig_endpoint.start()
-        self.dig_connected = False
+        self.dig_connected = CommunicationStatus.NOT_ESTABLISHED
         # Register Digitiser interface with the App
         self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint)
 
@@ -64,7 +67,7 @@ class SDP(App):
 
         arg_parser.add_argument("--tm_host", type=str, required=False, help="TCP host to listen on for Telescope Manager commands", default="localhost")
         arg_parser.add_argument("--tm_port", type=int, required=False, help="TCP port for Telescope Manager commands", default=50001)
-        
+
         arg_parser.add_argument("--dig_host", type=str, required=False, help="TCP host to listen on for Digitiser commands", default="localhost")
         arg_parser.add_argument("--dig_port", type=int, required=False, help="TCP server port for upstream Digitiser transport", default=60000)
 
@@ -81,14 +84,14 @@ class SDP(App):
         """
         logger.info(f"Science Data Processor connected to Digitiser: {event.remote_addr}")
 
-        self.dig_connected = True
+        self.dig_connected = CommunicationStatus.ESTABLISHED
 
     def process_dig_disconnected(self, event) -> Action:
         """ Processes Digitiser disconnected events.
         """
         logger.info(f"Science Data Processor disconnected from Digitiser: {event.remote_addr}")
 
-        self.dig_connected = False
+        self.dig_connected = CommunicationStatus.NOT_ESTABLISHED
 
         # Flush any pending scans
         while not self.scan_q.empty():
@@ -139,11 +142,40 @@ class SDP(App):
                 # Loop through scans in the queue until we find one that matches the read_counter
                 # This handles situations where samples are received out of order
                 match = None
-                for scan in self.scan_q.queue:
+
+                pending_scans = [s for s in list(self.scan_q.queue) if s.get_status() == "Empty" or s.get_status() == "WIP"]
+                abort_scans = []
+
+                for scan in pending_scans:
                     start_idx, end_idx = scan.get_start_end_idx()
                     if read_counter >= start_idx and read_counter <= end_idx:
-                        match = scan
-                        break
+
+                        # Verify that the digitiser metadata still matches the scan parameters
+                        if scan.center_freq == center_freq and scan.feed == feed:
+                            match = scan
+                            break
+                        else:
+                            logger.warning(f"SDP scan parameters no longer match digitiser sample metadata for scan id {scan.id}: "
+                                           f"scan(center_freq={scan.center_freq}, sample_rate={scan.sample_rate}, gain={scan.gain}, feed={scan.feed}) vs "
+                                           f"metadata(center_freq={center_freq}, sample_rate={sample_rate}, gain={gain}, feed={feed})"
+                            )
+                            abort_scans.append(scan)
+
+                    # If the Digitiser read_counter has moved passed this scan by more than its duration
+                    elif read_counter > end_idx + scan.duration: 
+                        abort_scans.append(scan)  # add it to the abort list
+
+                # If we found scans to abort, do so
+                for scan in abort_scans:
+                    scan.abort()
+                    scan.save_to_disk(output_dir=OUTPUT_DIR, include_iq=False)
+                    # Remove this specific scan from the underlying queue 
+                    try:
+                        self.scan_q.queue.remove(scan)
+                        # Balance the unfinished task count for the removed item
+                        self.scan_q.task_done()
+                    except ValueError:
+                        logger.warning(f"Attempted to remove scan {scan} from queue but it was not found")
 
                 # If no matching scan was found, create a new scan
                 if match is None:
@@ -165,6 +197,7 @@ class SDP(App):
                 logger.debug(f"SDP loading samples into scan: {match}")                        
                 # Convert payload to complex64 numpy array
                 iq_samples = np.frombuffer(payload, dtype=np.complex64)
+              
                 if match.load_samples(sec=(read_counter - match.get_start_end_idx()[0] + 1), 
                         iq=iq_samples,
                         read_start=read_start,
@@ -175,12 +208,18 @@ class SDP(App):
                     status = sdp_dig.STATUS_ERROR
                     message = f"SDP failed to load samples into scan id: {match.id}"
 
-                if match.is_complete():
+                if match.get_status() == "Complete":
                     logger.info(f"SDP scan is complete: {match}")
+              
                     match.save_to_disk(output_dir=OUTPUT_DIR, include_iq=False)
                     match.del_iq()
-                    self.scan_q.get()  # Remove the completed scan from the queue
-                    self.scan_q.task_done()
+                    # Remove the specific completed scan from the queue safely
+                    with self._rlock:
+                        try:
+                            self.scan_q.queue.remove(match)
+                            self.scan_q.task_done()
+                        except ValueError:
+                            logger.warning(f"Completed scan {match} not found in queue when removing")
                     
                     
 
@@ -203,14 +242,14 @@ class SDP(App):
         """
         logger.info(f"Science Data Processor connected to Telescope Manager: {event.remote_addr}")
 
-        self.tm_connected = True
+        self.tm_connected = CommunicationStatus.ESTABLISHED
 
     def process_tm_disconnected(self, event) -> Action:
         """ Processes Telescope Manager disconnected events.
         """
         logger.info(f"Science Data Processor disconnected from Telescope Manager: {event.remote_addr}")
 
-        self.tm_connected = False
+        self.tm_connected = CommunicationStatus.NOT_ESTABLISHED
 
     def process_tm_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Telescope Manager service access point (SAP)
@@ -229,6 +268,16 @@ class SDP(App):
         action = Action()
         return action
 
+    def get_health_state(self) -> HealthState:
+        """ Returns the current health state of this application.
+        """
+        if self.dig_connected != CommunicationStatus.ESTABLISHED:
+            return HealthState.DEGRADED
+        elif self.tm_connected != CommunicationStatus.ESTABLISHED:
+            return HealthState.DEGRADED
+        else:
+            return HealthState.OK
+
 def main():
     sdp = SDP()
     sdp.start()
@@ -238,21 +287,20 @@ def main():
             # If there is a scan in the queue, process it, else sleep & continue 
             try:
                 scan = sdp.scan_q.queue[0]
+                if scan.get_status() == "Empty":
+                    raise IndexError  # No samples loaded yet, skip processing
             except IndexError:
                 time.sleep(0.1)
                 continue
 
             sdp.signal_display.set_scan(scan)
 
-            # Call display until the scan is complete or we give up
+            # Call display while the scan is being loaded 
+            # Scan will transition to "Complete" or "Aborted" when done
             # This allows for interactive display of the scan as samples are loaded
-            start = time.time()
-            while not scan.is_complete():
+            while scan.get_status() == "WIP":
                 sdp.signal_display.display()
-                time.sleep(1.0)  # Update display every second
-                if time.time() - start > (1.2 * scan.duration):  # Timeout after 1.2 * scan duration
-                    logger.warning(f"SDP giving up on incomplete scan after timeout: {scan}")
-                    break
+                time.sleep(1)  # Update display every second
             
             # Final display call to ensure complete rendering
             sdp.signal_display.display()

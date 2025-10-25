@@ -48,6 +48,15 @@ class AppProcessor(Processor):
         try:
             event.notify_dequeued()
             # Process status update of App here
+
+            handler_method = "get_health_state"
+            if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
+                self.driver.healthstate = getattr(self.driver, handler_method)()
+            else:
+                self.driver.healthstate = HealthState.UNKNOWN
+
+            logger.info(f"AppProcessor {self.name} health state is {self.driver.healthstate.name}")
+
         finally:
             event.notify_update_completed()
     

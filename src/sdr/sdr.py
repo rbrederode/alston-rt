@@ -9,6 +9,7 @@ import threading
 import time
 import functools
 
+from models.comms import CommunicationStatus
 from util.xbase import XSoftwareFailure
 
 import logging
@@ -44,7 +45,7 @@ class SDR:
         with SDR._mutex:
 
             self.rtlsdr = None
-            self.connected = False
+            self.connected = CommunicationStatus.NOT_ESTABLISHED
             self.read_counter = 0
 
             info = self.get_eeprom_info()
@@ -55,7 +56,7 @@ class SDR:
 
             try:
                 self.rtlsdr = RtlSdr()
-                self.connected = True
+                self.connected = CommunicationStatus.ESTABLISHED
             except OSError as e:
                 logger.error(f"SDR could not connect due to OSError: {e}")
             except Exception as e:
@@ -75,10 +76,13 @@ class SDR:
             if self.rtlsdr:
                 self.rtlsdr.close()
                 self.rtlsdr = None
-                self.connected = False
+                self.connected = CommunicationStatus.NOT_ESTABLISHED
                 logger.info("SDR connection closed.")
 
-    def get_connected(self):
+    def get_connected(self) -> CommunicationStatus:
+        """ Get the current connection status of the SDR device.
+            :returns: CommunicationStatus indicating if the SDR is connected
+        """
         return self.connected
         
     def get_eeprom_info(self):

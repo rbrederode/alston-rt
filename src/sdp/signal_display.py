@@ -11,6 +11,7 @@ import matplotlib as mpl
 from matplotlib.gridspec import GridSpec
 from queue import Queue
 from util import gen_file_prefix
+from pathlib import Path
 
 import logging
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ class SignalDisplay:
         self.sig[4] = self.fig.add_subplot(self.gs1[1]) # Total power timeline
 
         self.fig.subplots_adjust(top=0.78)
-        self.fig.suptitle(f"Scan: {scan.id}-{scan.id} Center Frequency: {scan.center_freq/1e6:.2f} MHz, Gain: {scan.gain} dB, Sample Rate: {scan.sample_rate/1e6:.2f} MHz, Channels: {scan.channels}", fontsize=12, y=0.96)
+        self.fig.suptitle(f"Feed: {scan.feed} Scan: {scan.id} Center Freq: {scan.center_freq/1e6:.2f} MHz, Gain: {scan.gain} dB, Sample Rate: {scan.sample_rate/1e6:.2f} MHz, Channels: {scan.channels}", fontsize=12, y=0.96)
 
         self.extent = [(scan.center_freq + scan.sample_rate / -2) / 1e6, (scan.center_freq + scan.sample_rate / 2) / 1e6, scan.duration, 0]
 
@@ -172,8 +173,12 @@ class SignalDisplay:
 
         filename = f"{output_dir}/" + prefix + ".png"
 
-        self.fig.savefig(filename)
-        logger.info(f"Signal display scan {self.scan.id} figure saved to {filename}")
+        # Expand user (~) and ensure the directory exists before saving
+        filepath = Path(filename).expanduser()
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        self.fig.savefig(str(filepath))
+        logger.info(f"Signal display scan {self.scan.id} figure saved to {filepath}")
         return True
 
     def init_pwr_spectrum_axes(self, axes, title, extent, units='[a.u.]'):

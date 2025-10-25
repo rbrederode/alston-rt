@@ -12,6 +12,7 @@ _config_to_property = {
 }
 
 _config_to_feed = {
+    "NONE": dsh.Feed.NONE,
     "H3T_1420": dsh.Feed.H3T_1420,
     "H7T_1420": dsh.Feed.H7T_1420,
     "LF_400": dsh.Feed.LF_400,

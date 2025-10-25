@@ -22,6 +22,8 @@ from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.dsh import Feed
+from models.health import HealthState
+from models.comms import CommunicationStatus
 from util import log
 from util.xbase import XBase, XStreamUnableToExtract
 
@@ -48,7 +50,7 @@ class TelescopeManager(App):
         # Digitiser TCP Client
         self.dig_endpoint = TCPClient(description=self.dig_system, queue=self.get_queue(), host=self.get_args().dig_host, port=self.get_args().dig_port)
         self.dig_endpoint.connect()
-        self.dig_connected = False
+        self.dig_connected = CommunicationStatus.NOT_ESTABLISHED
         # Register Digitiser interface with the App
         self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint)
 
@@ -58,7 +60,7 @@ class TelescopeManager(App):
         # Science Data Processor TCP Client
         self.sdp_endpoint = TCPClient(description=self.sdp_system, queue=self.get_queue(), host=self.get_args().sdp_host, port=self.get_args().sdp_port)
         self.sdp_endpoint.connect()
-        self.sdp_connected = False
+        self.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
         # Register Science Data Processor interface with the App
         self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint)
 
@@ -79,7 +81,6 @@ class TelescopeManager(App):
         logger.debug(f"TM initialisation event")
 
         action = Action()
-        action.set_timer_action(Action.Timer(name="read_samples", timer_action=MSG_TIMEOUT))
         return action
 
     def process_config(self, event: ConfigEvent) -> Action:
@@ -137,7 +138,7 @@ class TelescopeManager(App):
                     logger.error(f"Telescope Manager invalid FEED value at row {i}: {new_item}")
                     continue
 
-            if update and self.dig_connected:
+            if update and self.dig_connected == CommunicationStatus.ESTABLISHED:
                 dig_req = self._construct_req_to_dig(property=property, method=method, value=value, message="")
                 action.set_msg_to_remote(dig_req)
                 action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dig_req.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=dig_req))
@@ -149,9 +150,10 @@ class TelescopeManager(App):
         """
         logger.info(f"Telescope Manager connected to Digitiser: {event.remote_addr}")
 
-        self.dig_connected = True
+        self.dig_connected = CommunicationStatus.ESTABLISHED
 
         action = Action()
+        action.set_timer_action(Action.Timer(name="read_samples", timer_action=MSG_TIMEOUT))
         return action
 
     def process_dig_disconnected(self, event) -> Action:
@@ -159,7 +161,7 @@ class TelescopeManager(App):
         """
         logger.info(f"Telescope Manager disconnected from Digitiser: {event.remote_addr}")
 
-        self.dig_connected = False
+        self.dig_connected = CommunicationStatus.NOT_ESTABLISHED
         
     def process_dig_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Digitiser service access point (SAP)
@@ -181,14 +183,14 @@ class TelescopeManager(App):
         """
         logger.info(f"Telescope Manager connected to Science Data Processor: {event.remote_addr}")
 
-        self.sdp_connected = True
+        self.sdp_connected = CommunicationStatus.ESTABLISHED
 
     def process_sdp_disconnected(self, event) -> Action:
         """ Processes Science Data Processor disconnected events.
         """
         logger.info(f"Telescope Manager disconnected from Science Data Processor: {event.remote_addr}")
 
-        self.sdp_connected = False
+        self.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
 
     def process_sdp_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Science Data Processor service access point (SAP)
@@ -207,7 +209,7 @@ class TelescopeManager(App):
         action = Action()
 
         if event.name.startswith("read_samples"):
-            if self.dig_connected:
+            if self.dig_connected == CommunicationStatus.ESTABLISHED:
                 dig_req = self._construct_req_to_dig(method="read_samples")
                 action.set_msg_to_remote(dig_req)
                 action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dig_req.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=dig_req))
@@ -218,6 +220,16 @@ class TelescopeManager(App):
             logger.warning(f"Telescope Manager timed out waiting for acknowledgement from Digitiser for request {event}")
 
         return action
+
+    def get_health_state(self) -> HealthState:
+        """ Returns the current health state of this application.
+        """
+        if self.dig_connected != CommunicationStatus.ESTABLISHED:
+            return HealthState.DEGRADED
+        elif self.sdp_connected != CommunicationStatus.ESTABLISHED:
+            return HealthState.DEGRADED
+        else:
+            return HealthState.OK
 
     def _construct_req_to_dig(self, property=None, method=None, value=None, message=None) -> APIMessage:
         """ Constructs a request message to the Digitiser.
@@ -330,7 +342,7 @@ def main():
         while True:
 
             # Only proceed if connected to the Digitiser
-            if tm.dig_connected:
+            if tm.dig_connected == CommunicationStatus.ESTABLISHED:
                 
                 result = execute_sheets_request(sheet.values().get(
                     spreadsheetId=ALSTON_RADIO_TELESCOPE, 
@@ -346,14 +358,13 @@ def main():
 
                     if values != last_snapshot:
 
-                        logger.info(f"Telescope Manager configuration values changed:\n" +  \
-                            f"Old Values: {last_snapshot}\n" +  \
-                            f"New Values: {values}")
-
                         config = ConfigEvent(old_config=last_snapshot, new_config=values, timestamp=datetime.now(timezone.utc))
                         tm.get_queue().put(config)
 
                         last_snapshot = values
+            else:
+                # Reset the snapshot such that config is re-read upon reconnection
+                last_snapshot = None 
 
             # Poll for config changes every 10 seconds
             time.sleep(10) 

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_STATUS_EMPTY = "Empty"
 SCAN_STATUS_WIP = "WIP"
+SCAN_STATUS_ABORTED = "Aborted"
 SCAN_STATUS_COMPLETE = "Complete"
 
 class Scan:
@@ -21,7 +22,7 @@ class Scan:
     _id_lock = threading.Lock()
     _next_id = 1
 
-    def __init__(self, start_idx: int = 0, duration: int = 60, sample_rate: float = 2.4e6, channels: int = 1024, center_freq: float = 1.42e9, gain: float = 0, feed: Feed = Feed.F1420_H3T):
+    def __init__(self, start_idx: int = 0, duration: int = 60, sample_rate: float = 2.4e6, channels: int = 1024, center_freq: float = 1.42e9, gain: float = 0, feed: Feed = Feed.NONE):
         """ Initialize a scan with the given parameters.
             A scan holds raw IQ samples, power spectrum, summed power spectrum and baseline data arrays.
             The data arrays are initialized to zero and incrementally loaded as samples arrive.
@@ -108,12 +109,28 @@ class Scan:
             self.spr = np.zeros((duration, channels), dtype=np.float64)     # float64 for summed pwr for each second in duration
             self.bsl = np.ones((channels,), dtype=np.float64)               # float64 for baseline power spectrum over duration
 
-    def is_complete(self) -> bool:
+    def get_status(self) -> str:
         """
-        Check if the scan has been completed i.e. all expected samples have been received.
-            :returns: True if the scan is complete, False otherwise
+        Get the current status of the scan.
+            :returns: A string representation of the scan status
         """
-        return self.scan_status == SCAN_STATUS_COMPLETE
+        with self._rlock:
+            return self.scan_status
+
+    def abort(self) -> bool:
+        """
+        Abort the scan.
+            :returns: True if the scan was aborted successfully, False otherwise
+        """
+        with self._rlock:
+            if self.scan_status != SCAN_STATUS_COMPLETE:
+                self.scan_status = SCAN_STATUS_ABORTED
+                self.del_iq()
+                logger.info(f"Scan {self.id} - Aborted.")
+                return True
+            else:
+                logger.warning(f"Scan {self.id} - Cannot abort a completed scan.")
+                return False
 
     def get_loaded_seconds(self) -> int:
         """
@@ -177,14 +194,6 @@ class Scan:
         # Count how many rows have self.loaded_sec marked as True
         actual_rows = np.count_nonzero(self.loaded_sec)
         expected_rows = self.duration
-        
-        # Update scan status based on loaded rows
-        if actual_rows == 0:
-            self.scan_status = SCAN_STATUS_EMPTY
-        elif actual_rows > 0 and actual_rows < expected_rows:
-            self.scan_status = SCAN_STATUS_WIP
-        elif actual_rows >= expected_rows:
-            self.scan_status = SCAN_STATUS_COMPLETE
 
         self.read_start = read_start if self.read_start is None else min(self.read_start, read_start)  # Update read start time
         self.read_end = read_end if self.read_end is None else max(self.read_end, read_end)  # Update read end time
@@ -192,6 +201,14 @@ class Scan:
         if gap is not None:
             logger.info(f"Scan {self.id} - Gap of {gap:.3f} seconds detected between last read end {self.last_read_end} and current read start {read_start}.")
         self.last_read_end = read_end  # Update last read end time
+
+        # Update scan status based on loaded rows
+        if actual_rows == 0:
+            self.scan_status = SCAN_STATUS_EMPTY
+        elif actual_rows > 0 and actual_rows < expected_rows:
+            self.scan_status = SCAN_STATUS_WIP
+        elif actual_rows >= expected_rows:
+            self.scan_status = SCAN_STATUS_COMPLETE
 
         return True
 
@@ -213,6 +230,9 @@ class Scan:
         if output_dir is None or output_dir == '':
             output_dir = "./"
 
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+
         prefix = gen_file_prefix(dt=self.read_start, feed=self.feed, gain=self.gain, duration=self.duration, 
             sample_rate=self.sample_rate, center_freq=self.center_freq, channels=self.channels, entity_id=self.id)
 
@@ -226,7 +246,7 @@ class Scan:
             with open(f"{output_dir}/{filename}", 'w') as f:
                 json.dump(self.get_scan_meta(), f, indent=4)  
 
-            filename = prefix + "-load" + ".csv" if self.feed == Feed.NONE else prefix + "-spr" + ".csv"
+            filename = prefix + "-load" + ".csv" if self.feed == Feed.LOAD else prefix + "-spr" + ".csv"
             with open(f"{output_dir}/{filename}", 'w') as f:
                 np.savetxt(f, self.spr, delimiter=",", fmt="%.6f")
         
@@ -339,7 +359,10 @@ class Scan:
 
     def del_iq(self):
         """ Flush the iq data to the bin """
-        del self.raw
+        with self._rlock:
+            if hasattr(self, 'raw') and self.raw is not None:
+                logger.info(f"Scan {self.id} - Deleting raw IQ data from memory.")
+                del self.raw
 
     def get_scan_meta(self) -> dict:
         """
