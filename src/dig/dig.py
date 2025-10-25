@@ -272,7 +272,13 @@ class Digitiser(App):
         setter = getattr(self.sdr, prop_name) if hasattr(self.sdr, prop_name) else (getattr(self, prop_name) if hasattr(self, prop_name) else None)
 
         if setter and callable(setter):
-            setter(prop_value)
+
+            try:
+                setter(prop_value)
+            except Exception as e:
+                logger.error(f"Digitiser failed to set property {prop_name}: {e}")
+                return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name}: {e}", None, None
+
             return tm_dig.STATUS_SUCCESS, f"Digitiser set property {prop_name} to {prop_value}", prop_value, None
         else:
             return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} is not callable", None, None
@@ -288,6 +294,13 @@ class Digitiser(App):
         getter = getattr(self.sdr, prop_name) if hasattr(self.sdr, prop_name) else (getattr(self, prop_name) if hasattr(self, prop_name) else None)
         
         if getter:
+
+            try:
+                value = getter()
+            except XSoftwareFailure as e:
+                logger.error(f"Digitiser failed to get property {prop_name}: {e}")
+                return tm_dig.STATUS_ERROR, f"Digitiser failed to get property {prop_name}: {e}", None, None
+
             value = getter() if callable(getter) else getter
             return tm_dig.STATUS_SUCCESS, f"Digitiser {prop_name} value {value}", value, None
         else:
@@ -307,7 +320,13 @@ class Digitiser(App):
         call = getattr(self.sdr, method) if hasattr(self.sdr, method) else (getattr(self, method) if hasattr(self, method) else None)
 
         if call:
-            result = call(**args) if args is not None else call() if callable(call) else call
+
+            try:
+                result = call(**args) if args is not None else call() if callable(call) else call
+            except XSoftwareFailure as e:
+                logger.error(f"Digitiser method {method} failed with exception: {e}")
+                return tm_dig.STATUS_ERROR, f"Digitiser method {method} failed with exception: {e}", None, None
+
             # Check whether result is a tuple of (value, payload) or just a value
             if isinstance(result, tuple):
                 return tm_dig.STATUS_SUCCESS, f"Digitiser method {call.__name__} invoked on SDR", result[0], result[1]
