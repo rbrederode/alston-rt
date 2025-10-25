@@ -5,19 +5,19 @@ import time
 from datetime import datetime, timezone
 from rtlsdr import RtlSdr
 
-from env.app import App
-from ipc.message import AppMessage
-from util.xbase import XBase, XStreamUnableToExtract
-from sdr.sdr import SDR
 from api import tm_dig, sdp_dig
+from env.app import App
 from ipc.message import APIMessage
+from ipc.message import AppMessage
 from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.comms import CommunicationStatus
 from models.dsh import Feed
 from models.health import HealthState
+from sdr.sdr import SDR
 from util import log
+from util.xbase import XBase, XStreamUnableToExtract, XSoftwareFailure
 
 logger = logging.getLogger(__name__)
 
