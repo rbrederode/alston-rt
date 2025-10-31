@@ -53,8 +53,7 @@ class Digitiser(App):
         self.sdr = SDR()
         self.feed = Feed.NONE
         self.stream_samples = False # Flag indicating if we are currently streaming samples (from the SDR)
-        self.load_terminated = False # Flag indicating whether a 'load terminator' has been placed in the signal path
-
+ 
     def add_args(self, arg_parser): 
         """ Specifies the digitiser's command line arguments.
         """
@@ -119,6 +118,7 @@ class Digitiser(App):
             "action_code": api_call['action_code'], 
             "status": status, 
             "message": message if message else "",
+            "property": api_call.get('property', ''),
             "value": value if value and isinstance(value, (str, float, int)) else "",
         })
 
@@ -218,8 +218,9 @@ class Digitiser(App):
 
             # If the digitiser is set to stream samples
             if self.stream_samples:
-                # Start the same stream_samples timer immediately e.g. 'stream_samples_2'
-                action.set_timer_action(Action.Timer(name=event.name, timer_action=0)) 
+                # Start the same stream_samples timer immediately if successful, else wait 1 second before retrying
+                wait = 0 if status == tm_dig.STATUS_SUCCESS else 1000 
+                action.set_timer_action(Action.Timer(name=event.name, timer_action=wait)) 
 
             if self.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
                 # Prepare adv msg to send samples to sdp
@@ -244,6 +245,35 @@ class Digitiser(App):
                 except Exception as e:
                     logger.error(f"Digitiser - Error processing user_ref in event: {e}")
 
+        return action
+
+    def process_status_event(self, event) -> Action:
+        """ Processes status update events.
+        """
+
+        status = self.get_app_processor_state()
+        logger.info(f"Digitiser status event: {event}\n{status}")
+
+        if not self.tm_connected == CommunicationStatus.ESTABLISHED:
+            logger.warning("Digitiser cannot send status update to Telescope Manager, not connected.")
+            return Action()
+
+        tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
+        tm_adv.set_json_api_header(
+            api_version=self.tm_api.get_api_version(), 
+            dt=datetime.now(timezone.utc), 
+            from_system=self.app_name, 
+            to_system="tm", 
+            api_call={
+                "msg_type": "adv", 
+                "action_code": "set", 
+                "property": tm_dig.PROPERTY_STATUS_UPDATE, 
+                "value": status, 
+                "message": "Digitiser status update"
+            })
+
+        action = Action()
+        action.set_msg_to_remote(tm_adv)
         return action
 
     def get_health_state(self) -> HealthState:

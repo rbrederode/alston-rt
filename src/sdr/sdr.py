@@ -48,9 +48,9 @@ class SDR:
             self.connected = CommunicationStatus.NOT_ESTABLISHED
             self.read_counter = 0
 
-            info = self.get_eeprom_info()
-            if info:
-                logger.info(f"SDR connected, device information: {info}")
+            self.info = self._read_eeprom_info()
+            if self.info:
+                logger.info(f"SDR connected, device information: {self.info}")
             else:
                 logger.warning("SDR connected but unable to retrieve device information.")
 
@@ -84,8 +84,14 @@ class SDR:
             :returns: CommunicationStatus indicating if the SDR is connected
         """
         return self.connected
+
+    def get_eeprom_info(self) -> dict:
+        """ Retrieve the EEPROM information of the connected RTL-SDR device.
+            :returns: A dictionary containing the Manufacturer, Product, and Serial number of the SDR
+        """
+        return self.info
         
-    def get_eeprom_info(self):
+    def _read_eeprom_info(self):
 
         with SDR._mutex:
 
@@ -321,14 +327,13 @@ class SDR:
                 A numpy array of uint8 samples read from the SDR
                 A dictionary of metadata associated with the byte read
         """
-        if not self.sample_rate:
-            raise XSoftwareFailure("SDR - Sample rate must be set before sampling: {self.sample_rate}")
-
         with SDR._mutex:
 
             if self.rtlsdr is None:
                 logger.warning("SDR device not connected.")
                 return None, None
+
+            self.sample_rate = self.rtlsdr.sample_rate
 
             x = bytes(self.sample_rate) 
             
@@ -356,15 +361,13 @@ class SDR:
                 A numpy array of complex64 samples read from the SDR
                 A dictionary of metadata associated with the sample read
         """
-
-        if not self.sample_rate:
-            raise XSoftwareFailure("SDR - Sample rate must be set before sampling: {self.sample_rate}")
-
         with SDR._mutex:
 
             if self.rtlsdr is None:
                 logger.warning("SDR device not connected.")
                 return None, None
+
+            self.sample_rate = self.rtlsdr.sample_rate
         
             x = np.zeros(self.sample_rate, dtype=np.complex128)
 
