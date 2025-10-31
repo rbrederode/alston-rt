@@ -56,7 +56,9 @@ PROPERTY_SAMPLE_RATE    = 'sample_rate'      # Sample rate in samples per second
 PROPERTY_BANDWIDTH      = 'bandwidth'        # Bandwidth in Hz
 PROPERTY_GAIN           = 'gain'             # Gain in dB
 PROPERTY_FREQ_CORRECTION= 'freq_correction'  # Frequency correction in ppm
-PROPERTY_SDP_CONNECTED  = 'sdp_connected'    # SDP connection status (True/False)
+PROPERTY_STREAMING      = 'streaming'        # Streaming status (True/False)
+PROPERTY_STATUS         = 'status'           # Status update interval in seconds
+PROPERTY_SDP_COMMS      = 'sdp_comms'        # SDP communication status (established/not established)
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 
 PROPERTIES = (
@@ -66,7 +68,9 @@ PROPERTIES = (
     PROPERTY_BANDWIDTH,
     PROPERTY_GAIN,
     PROPERTY_FREQ_CORRECTION,
-    PROPERTY_SDP_CONNECTED,
+    PROPERTY_STREAMING,
+    PROPERTY_STATUS,
+    PROPERTY_SDP_COMMS,
     PROPERTY_DEBUG,
 )
 
@@ -112,7 +116,7 @@ MSG_FIELDS = {
     "msg_type":     {"enum": MSG_TYPES},                            # Message type (one of MSG_TYPES)
     "action_code":  {"enum": ACTION_CODES},                         # Action to be taken (one of ACTION_CODES)
     "property":     {"enum": PROPERTIES},                           # Property name (one of PROPERTIES)
-    "value":        {"type": "(int, float, str)"},                  # Value to set or value returned
+    "value":        {"type": "(int, float, str, dict)"},            # Value to set or value returned
     "method":       {"enum": METHODS},                              # Method name (one of METHODS)
     "params":       {"type": "dict"},                               # Key Value pairs in a dictionary e.g. {"num_samples": 1024}
     "status":       {"enum": STATUS},                               # Status of response (e.g. success, error)
