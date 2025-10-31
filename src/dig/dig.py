@@ -110,21 +110,7 @@ class Digitiser(App):
 
         action = Action()
 
-        # Prepare rsp msg to tm containing result of api call
-        tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
-        tm_rsp.switch_from_to()
-        tm_rsp.set_api_call({
-            "msg_type": "rsp", 
-            "action_code": api_call['action_code'], 
-            "status": status, 
-            "message": message if message else "",
-            "property": api_call.get('property', ''),
-            "value": value if value and isinstance(value, (str, float, int)) else "",
-        })
-
-        action.set_msg_to_remote(tm_rsp)
-
-        if api_call['action_code'] == 'method' and api_call['method'] in ("read_samples", "read_bytes"):
+        if api_call['action_code'] == tm_api.ACTION_METHOD and api_call['method'] in ("read_samples", "read_bytes"):
 
             self.stream_samples = True
 
@@ -150,6 +136,19 @@ class Digitiser(App):
                 # Wait for stream_samples timer to trigger again
                 logger.warning("Digitiser cannot send samples to Science Data Processor, no payload.")
                 
+        # Prepare rsp msg to tm containing result of initial api call
+        tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
+        tm_rsp.switch_from_to()
+        tm_rsp.set_api_call({
+            "msg_type": "rsp", 
+            "action_code": api_call['action_code'], 
+            "status": status, 
+            "message": message if message else "",
+            "property": api_call.get('property', tm_dig.PROPERTY_STREAMING),
+            "value": value if api_call.get('property', None) and isinstance(value, (str, float, int)) else self.stream_samples,
+        })
+       
+        action.set_msg_to_remote(tm_rsp)
         return action
 
     def process_sdp_connected(self, event) -> Action:
@@ -162,8 +161,8 @@ class Digitiser(App):
         action = Action()
 
         if self.tm_connected == CommunicationStatus.ESTABLISHED:
-            # Send SDP connected adv to TM
-            tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_CONNECTED, value=True, message="Connected to SDP")
+            # Send SDP comms adv to TM
+            tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.sdp_connected, message="Comms to SDP established")
             action.set_msg_to_remote(tm_adv)
             action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
 
@@ -178,9 +177,9 @@ class Digitiser(App):
 
         action = Action()
 
-        if not self.tm_connected == CommunicationStatus.ESTABLISHED:
+        if self.tm_connected == CommunicationStatus.ESTABLISHED:
             # Send SDP disconnected adv to TM
-            tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_CONNECTED, value=False, message="Disconnected from SDP")
+            tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.sdp_connected, message="Comms to SDP not established")
             action.set_msg_to_remote(tm_adv)
             action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
 
