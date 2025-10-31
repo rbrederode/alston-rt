@@ -128,7 +128,7 @@ class Digitiser(App):
             elif not self.sdp_connected == CommunicationStatus.ESTABLISHED:
                 logger.warning("Digitiser cannot send samples to Science Data Processor, not connected.")
 
-                tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_CONNECTED, value=False, message="Disconnected from SDP")
+                tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.sdp_connected, message="Comms to SDP not established")
                 action.set_msg_to_remote(tm_adv)
                 action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
 
@@ -266,7 +266,7 @@ class Digitiser(App):
             api_call={
                 "msg_type": "adv", 
                 "action_code": "set", 
-                "property": tm_dig.PROPERTY_STATUS_UPDATE, 
+                "property": tm_dig.PROPERTY_STATUS, 
                 "value": status, 
                 "message": "Digitiser status update"
             })
