@@ -333,7 +333,7 @@ class SDR:
                 logger.warning("SDR device not connected.")
                 return None, None
 
-            self.sample_rate = self.rtlsdr.sample_rate
+            self.sample_rate = int(self.rtlsdr.sample_rate)
 
             x = bytes(self.sample_rate) 
             
@@ -367,7 +367,7 @@ class SDR:
                 logger.warning("SDR device not connected.")
                 return None, None
 
-            self.sample_rate = self.rtlsdr.sample_rate
+            self.sample_rate = int(self.rtlsdr.sample_rate)
         
             x = np.zeros(self.sample_rate, dtype=np.complex128)
 
