@@ -110,7 +110,7 @@ class Digitiser(App):
 
         action = Action()
 
-        if api_call['action_code'] == tm_api.ACTION_METHOD and api_call['method'] in ("read_samples", "read_bytes"):
+        if api_call['action_code'] == self.tm_api.ACTION_METHOD and api_call['method'] in ("read_samples", "read_bytes"):
 
             self.stream_samples = True
 
