@@ -319,8 +319,14 @@ class Digitiser(App):
                 logger.error(f"Digitiser failed to set property {prop_name}: {e}")
                 return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name}: {e}", None, None
 
-            self.dig_model.setattr(prop_name[4:], prop_value)
-            self.dig_model.last_update = datetime.now(timezone.utc)
+            # Update the digitiser model accordingly
+            try:
+                setattr(self.dig_model, prop_name[4:], prop_value)
+                self.dig_model.last_update = datetime.now(timezone.utc)
+            except AttributeError as e:
+                logger.error(f"Digitiser could not update the Digitiser model: Unknown attribute {prop_name[4:]}: {e}")
+            except XAPIValidationFailed as e:
+                logger.error(f"Digitiser could not update the Digitiser model: Validation failed setting {prop_name[4:]}: {e}")
 
             return tm_dig.STATUS_SUCCESS, f"Digitiser set property {prop_name} to {prop_value}", prop_value, None
         else:
