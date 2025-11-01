@@ -57,6 +57,8 @@ class Digitiser(App):
         
         # Software Defined Radio (internal) interface
         self.sdr = SDR()
+        self.dig_model.sdr_eeprom = self.sdr.get_eeprom_info()
+
         self.feed = Feed.NONE # Useful to indicate the feed that is connected to the digitiser
         self.dig_model.streaming = False # Flag indicating if we are currently streaming samples (from the SDR)
  
@@ -259,7 +261,7 @@ class Digitiser(App):
         app_status_str = "\n".join([f"  {k}: {v}" for k, v in app_status.items()])
 
         dig_model_str = json.dumps(self.dig_model.to_dict(), indent=2)
-        logger.info(f"Digitiser model description: {event}\n{dig_model_str}\nApp Status:\n{app_status_str}")
+        logger.debug(f"Digitiser model description: {event}\n{dig_model_str}\nApp Status:\n{app_status_str}")
 
         action = Action()
 
@@ -420,7 +422,7 @@ class Digitiser(App):
         sdp_adv.set_json_api_header(
             api_version=self.sdp_api.get_api_version(), 
             dt=datetime.now(timezone.utc), 
-            from_system=self.app_name, 
+            from_system=self.dig_model.app.app_name, 
             to_system="sdp", 
             api_call={}
         )

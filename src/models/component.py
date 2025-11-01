@@ -84,9 +84,6 @@ class ComponentModel:
                 except Exception:
                     expected_type = None
 
-                # Debug output (useful during development)
-                print(f"from_dict: key={key}, value={value}, expected_type={expected_type}")
-
                 # If we determined an actual Python type, use isinstance checks
                 if isinstance(expected_type, type):
                     if not isinstance(value, expected_type):

@@ -204,7 +204,7 @@ class TelescopeManager(App):
             elif api_call.get('property','') == tm_dig.PROPERTY_SDP_COMMS:
                 self.telmodel.dig.sdp_connected = CommunicationStatus(api_call['value'])
             elif api_call.get('property','') == tm_dig.PROPERTY_STATUS:
-                logger.info(f"Telescope Manager received Digitiser STATUS update: {api_call['value']}")
+                logger.debug(f"Telescope Manager received Digitiser STATUS update: {api_call['value']}")
 
                 self.telmodel.dig.from_dict(api_call['value'])
 
@@ -241,6 +241,22 @@ class TelescopeManager(App):
         logger.info(f"Telescope Manager received Science Data Processor {api_call['msg_type']} message with action code: {api_call['action_code']}")
 
         action = Action()
+
+        if api_call.get('status','') != tm_sdp.STATUS_ERROR:
+
+            # If a status update is received, update the Telescope Model 
+            if api_call.get('property','') == tm_sdp.PROPERTY_STATUS:
+                logger.debug(f"Telescope Manager received Science Data Processor STATUS update: {api_call['value']}")
+
+                self.telmodel.sdp.from_dict(api_call['value'])
+
+        dt = api_msg.get("timestamp")
+        self.telmodel.sdp.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
+
+        # If the api call is a rsp message, stop the corresponding timer
+        if api_call['msg_type'] == tm_sdp.MSG_TYPE_RSP and dt is not None:
+            action.set_timer_action(Action.Timer(name=f"sdp_req_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
+
         return action
 
     def process_timer_event(self, event) -> Action:
@@ -283,9 +299,7 @@ class TelescopeManager(App):
             Status is constantly monitored and updated in the Telescope Model.
         """
         status = self.get_app_processor_state()
-       
-        status_str = "\n".join([f"  {k}: {v}" for k, v in status.items()])
-        logger.info(f"Telescope Manager status event: {event}\n{status_str}")
+        self.telmodel.tm.last_update = datetime.now(timezone.utc)
 
 
     def _construct_req_to_dig(self, property=None, method=None, value=None, message=None) -> APIMessage:
@@ -393,12 +407,13 @@ def main():
 
     sheet = service.spreadsheets()
 
-    last_snapshot = None
+    last_dig_snapshot = None
+    last_sdp_snapshot = None
 
     try:
         while True:
 
-            # Only exchange Digitiser data with the UI if comms is established
+            # Exchange Digitiser data with the UI if comms is established
             if tm.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
                 
                 result = execute_sheets_request(sheet.values().get(
@@ -413,12 +428,12 @@ def main():
                 else:
                     values = result.get("values", [])
 
-                    if values != last_snapshot:
+                    if values != last_dig_snapshot:
 
-                        config = ConfigEvent(old_config=last_snapshot, new_config=values, timestamp=datetime.now(timezone.utc))
+                        config = ConfigEvent(old_config=last_dig_snapshot, new_config=values, timestamp=datetime.now(timezone.utc))
                         tm.get_queue().put(config)
 
-                        last_snapshot = values
+                        last_dig_snapshot = values
 
                 dig_dict = tm.telmodel.dig.to_dict()
                 dig_str = json.dumps(dig_dict, indent=4)
@@ -432,7 +447,20 @@ def main():
 
             else:
                 # Reset the snapshot such that config is re-read upon reconnection
-                last_snapshot = None 
+                last_dig_snapshot = None
+
+            # Exchange SDP data with the UI if comms is established
+            if tm.telmodel.sdp.tm_connected == CommunicationStatus.ESTABLISHED:
+
+                sdp_dict = tm.telmodel.sdp.to_dict()
+                sdp_str = json.dumps(sdp_dict, indent=4)
+
+                execute_sheets_request(sheet.values().update(
+                    spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                    range=UI_TM_API + "C2",                      
+                    valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                    body={"values": [[sdp_str]]}
+                ))
                 
             # Update TM model in Google Sheets
             tm_dict = tm.telmodel.tm.to_dict()

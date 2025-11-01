@@ -38,7 +38,7 @@ class ScienceDataProcessorModel(ComponentModel):
                 health=HealthState.UNKNOWN,
                 last_update=datetime.now(timezone.utc),
             ),
-            "channels": 0,
+            "channels": 1024,
             "tm_connected": CommunicationStatus.NOT_ESTABLISHED,
             "dig_connected": CommunicationStatus.NOT_ESTABLISHED,
             "last_update": datetime.now(timezone.utc)

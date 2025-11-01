@@ -6,21 +6,21 @@ from datetime import datetime, timezone
 import time
 import threading
 
-from env.app import App
-from ipc.message import AppMessage
-from util.xbase import XBase, XStreamUnableToExtract
 from api import sdp_dig, tm_sdp
+from env.app import App
 from ipc.message import APIMessage
 from ipc.action import Action
+from ipc.message import AppMessage
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
-from models.health import HealthState
 from models.comms import CommunicationStatus
-from util import log
+from models.health import HealthState
+from models.sdp import ScienceDataProcessorModel
 from obs.scan import Scan
 from signal_display import SignalDisplay
+from util import log
+from util.xbase import XBase, XStreamUnableToExtract
 
-CHANNELS = 1024 # Size of FFT to compute for each block of samples
 SCAN_DURATION = 60 # Duration of each scan in seconds
 #OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
 OUTPUT_DIR = '/Users/r.brederode/samples'  # Directory to store samples
@@ -29,9 +29,11 @@ logger = logging.getLogger(__name__)
 
 class SDP(App):
 
+    sdp_model = ScienceDataProcessorModel(id="sdp001")
+
     def __init__(self, app_name: str = "sdp"):
 
-        super().__init__(app_name=app_name)
+        super().__init__(app_name=app_name, app_model = self.sdp_model.app)
 
         # Telescope Manager interface (TBD)
         self.tm_system = "tm"
@@ -39,19 +41,21 @@ class SDP(App):
         # Telescope Manager TCP Server
         self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
         self.tm_endpoint.start()
-        self.tm_connected = CommunicationStatus.NOT_ESTABLISHED
         # Register Telescope Manager interface with the App
         self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint)
-
+        # Set initial Telescope Manager connection status
+        self.sdp_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        
         # Digitiser interface
         self.dig_system = "dig"
         self.dig_api = sdp_dig.SDP_DIG()
         # Digitiser TCP Server
         self.dig_endpoint = TCPServer(description=self.dig_system, queue=self.get_queue(), host=self.get_args().dig_host, port=self.get_args().dig_port)
         self.dig_endpoint.start()
-        self.dig_connected = CommunicationStatus.NOT_ESTABLISHED
         # Register Digitiser interface with the App
         self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint)
+        # Set initial Digitiser connection status
+        self.sdp_model.dig_connected = CommunicationStatus.NOT_ESTABLISHED
 
         # Queue to hold scans to be processed
         self.scan_q = Queue()            # Queue of scans to load and process
@@ -84,14 +88,14 @@ class SDP(App):
         """
         logger.info(f"Science Data Processor connected to Digitiser: {event.remote_addr}")
 
-        self.dig_connected = CommunicationStatus.ESTABLISHED
+        self.sdp_model.dig_connected = CommunicationStatus.ESTABLISHED
 
     def process_dig_disconnected(self, event) -> Action:
         """ Processes Digitiser disconnected events.
         """
         logger.info(f"Science Data Processor disconnected from Digitiser: {event.remote_addr}")
 
-        self.dig_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.sdp_model.dig_connected = CommunicationStatus.NOT_ESTABLISHED
 
         # Flush any pending scans
         while not self.scan_q.empty():
@@ -184,7 +188,7 @@ class SDP(App):
                         start_idx=read_counter, 
                         duration=SCAN_DURATION, 
                         sample_rate=sample_rate, 
-                        channels=CHANNELS,
+                        channels=self.sdp_model.channels,
                         center_freq=center_freq,
                         gain=gain,
                         feed=feed
@@ -252,14 +256,14 @@ class SDP(App):
         """
         logger.info(f"Science Data Processor connected to Telescope Manager: {event.remote_addr}")
 
-        self.tm_connected = CommunicationStatus.ESTABLISHED
+        self.sdp_model.tm_connected = CommunicationStatus.ESTABLISHED
 
     def process_tm_disconnected(self, event) -> Action:
         """ Processes Telescope Manager disconnected events.
         """
         logger.info(f"Science Data Processor disconnected from Telescope Manager: {event.remote_addr}")
 
-        self.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.sdp_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
 
     def process_tm_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Telescope Manager service access point (SAP)
@@ -278,12 +282,40 @@ class SDP(App):
         action = Action()
         return action
 
+    def process_status_event(self, event) -> Action:
+        """ Processes status update events.
+        """
+        self.get_app_processor_state()
+
+        action = Action()
+
+        # If connected to Telescope Manager, send status advice message
+        if self.sdp_model.tm_connected == CommunicationStatus.ESTABLISHED:
+    
+            tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
+            tm_adv.set_json_api_header(
+                api_version=self.tm_api.get_api_version(), 
+                dt=datetime.now(timezone.utc), 
+                from_system=self.sdp_model.app.app_name, 
+                to_system="tm", 
+                api_call={
+                    "msg_type": "adv", 
+                    "action_code": "set", 
+                    "property": tm_sdp.PROPERTY_STATUS, 
+                    "value": self.sdp_model.to_dict(), 
+                    "message": "SDP status update"
+                })
+
+            action.set_msg_to_remote(tm_adv)
+
+        return action
+
     def get_health_state(self) -> HealthState:
         """ Returns the current health state of this application.
         """
-        if self.dig_connected != CommunicationStatus.ESTABLISHED:
+        if self.sdp_model.dig_connected != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
-        elif self.tm_connected != CommunicationStatus.ESTABLISHED:
+        elif self.sdp_model.tm_connected != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
         else:
             return HealthState.OK

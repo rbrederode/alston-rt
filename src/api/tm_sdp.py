@@ -49,9 +49,11 @@ TO = (
 
 # Allowable properties to get or set on the system
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
+PROPERTY_STATUS         = 'status'           # Get system status
 
 PROPERTIES = (
     PROPERTY_DEBUG,
+    PROPERTY_STATUS
 )
 
 # Allowable status codes for responses
@@ -77,7 +79,7 @@ MSG_FIELDS = {
     "msg_type":     {"enum": MSG_TYPES},                            # Message type (one of MSG_TYPES)
     "action_code":  {"enum": ACTION_CODES},                         # Action to be taken (one of ACTION_CODES)
     "property":     {"enum": PROPERTIES},                           # Property name (one of PROPERTIES)
-    "value":        {"type": "(int, float, str)"},                  # Value to set or value returned
+    "value":        {"type": "(int, float, str, dict)"},            # Value to set or value returned
     "status":       {"enum": STATUS},                               # Status of response (e.g. success, error)
     "message":      {"type": "str"},                                # Additional information about the status
 }
