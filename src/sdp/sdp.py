@@ -208,6 +208,18 @@ class SDP(App):
                     status = sdp_dig.STATUS_ERROR
                     message = f"SDP failed to load samples into scan id: {match.id}"
 
+                    if match.load_failures >= 3:
+                        logger.error(f"SDP scan id {match.id} has exceeded maximum load failures, aborting scan")
+                        match.abort()
+                        match.save_to_disk(output_dir=OUTPUT_DIR, include_iq=False)
+                        # Remove the specific aborted scan from the queue safely
+                        with self._rlock:
+                            try:
+                                self.scan_q.queue.remove(match)
+                                self.scan_q.task_done()
+                            except ValueError:
+                                logger.warning(f"Aborted scan {match} not found in queue when removing")
+
                 if match.get_status() == "Complete":
                     logger.info(f"SDP scan is complete: {match}")
               
@@ -221,8 +233,6 @@ class SDP(App):
                         except ValueError:
                             logger.warning(f"Completed scan {match} not found in queue when removing")
                     
-                    
-
         # Prepare rsp msg to dig acknowledging receipt of the incoming api message
         dig_rsp = APIMessage(api_msg=api_msg, api_version=self.dig_api.get_api_version())
         dig_rsp.switch_from_to()

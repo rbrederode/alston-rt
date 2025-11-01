@@ -50,6 +50,7 @@ class Scan:
             
             self.scan_status = SCAN_STATUS_EMPTY        # Status of the scan: EMPTY, WIP, COMPLETE
             self.loaded_sec = duration * [False]        # List of seconds for which samples have been loaded
+            self.load_failures = 0                       # Count of load failures
 
             self.duration = duration                    # Duration of the scan in seconds
             self.sample_rate = sample_rate              # Sample rate in Hz
@@ -152,14 +153,17 @@ class Scan:
 
         if sec < 1 or sec > self.duration:
             logger.warning(f"Scan - Invalid second ({sec}) for scan duration {self.duration}")
+            self.load_failures += 1
             return False
 
         if iq is None or len(iq) < self.sample_rate:
             logger.warning(f"Scan - Not enough samples provided. Expected {self.sample_rate}, got {len(iq) if iq is not None else 0}. Skipping samples...")
+            self.load_failures += 1
             return False
 
         if read_start is None or read_end is None or read_start >= read_end:
             logger.warning("Scan - Invalid read start/end timestamps provided. Skipping samples...")
+            self.load_failures += 1
             return False
 
         logger.debug(f"Loading {iq.shape} samples for second {sec} into scan {self.id}")

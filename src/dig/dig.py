@@ -12,7 +12,9 @@ from ipc.message import AppMessage
 from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
+from models.app import AppModel
 from models.comms import CommunicationStatus
+from models.dig import DigitiserModel
 from models.dsh import Feed
 from models.health import HealthState
 from sdr.sdr import SDR
@@ -25,9 +27,11 @@ MSG_TIMEOUT = 10000 # Timeout in milliseconds for messages awaiting acknowledgem
 
 class Digitiser(App):
 
+    dig_model = DigitiserModel(id="dig001")
+
     def __init__(self, app_name: str = "dig"):
 
-        super().__init__(app_name=app_name)
+        super().__init__(app_name=app_name, app_model = self.dig_model.app)
 
         # Telescope Manager interface
         self.tm_system = "tm"
@@ -35,9 +39,10 @@ class Digitiser(App):
         # Telescope Manager TCP Server
         self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
         self.tm_endpoint.start()
-        self.tm_connected = CommunicationStatus.NOT_ESTABLISHED
         # Register Telescope Manager interface with the App
         self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint)
+        # Set initial Telescope Manager connection status
+        self.dig_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
 
         # Science Data Processor Interface
         self.sdp_system = "sdp"
@@ -45,14 +50,15 @@ class Digitiser(App):
         # Science Data Processor TCP Client
         self.sdp_endpoint = TCPClient(description=self.sdp_system, queue=self.get_queue(), host=self.get_args().sdp_host, port=self.get_args().sdp_port)
         self.sdp_endpoint.connect()
-        self.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
         # Register Science Data Processor interface with the App
         self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint)
-
+        # Set initial Science Data Processor connection status
+        self.dig_model.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
+        
         # Software Defined Radio (internal) interface
         self.sdr = SDR()
-        self.feed = Feed.NONE
-        self.stream_samples = False # Flag indicating if we are currently streaming samples (from the SDR)
+        self.feed = Feed.NONE # Useful to indicate the feed that is connected to the digitiser
+        self.dig_model.streaming = False # Flag indicating if we are currently streaming samples (from the SDR)
  
     def add_args(self, arg_parser): 
         """ Specifies the digitiser's command line arguments.
@@ -78,14 +84,14 @@ class Digitiser(App):
         """
         logger.debug(f"Digitiser connected to Telescope Manager: {event.remote_addr}")
 
-        self.tm_connected = CommunicationStatus.ESTABLISHED
+        self.dig_model.tm_connected = CommunicationStatus.ESTABLISHED
 
     def process_tm_disconnected(self, event) -> Action:
         """ Processes Telescope Manager disconnected events.
         """
         logger.debug(f"Digitiser disconnected from Telescope Manager: {event.remote_addr}")
 
-        self.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.dig_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
 
     def process_tm_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Telescope Manager service access point (SAP)
@@ -112,23 +118,23 @@ class Digitiser(App):
 
         if api_call['action_code'] == tm_dig.ACTION_CODE_METHOD and api_call['method'] in ("read_samples", "read_bytes"):
 
-            self.stream_samples = True
+            self.dig_model.streaming = True
 
             # Start reading samples immediately (timer_action=0) 
             # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
             for i in range(1, 3):
                 action.set_timer_action(Action.Timer(name=f"stream_samples_{i}", timer_action=0))
 
-            if self.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
+            if self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
                 # Prepare adv msg to send samples to sdp
                 sdp_adv = self._construct_adv_to_sdp(status, message, value, payload.tobytes())
                 action.set_msg_to_remote(sdp_adv)
                 action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=sdp_adv))
 
-            elif not self.sdp_connected == CommunicationStatus.ESTABLISHED:
+            elif not self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED:
                 logger.warning("Digitiser cannot send samples to Science Data Processor, not connected.")
 
-                tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.sdp_connected, message="Comms to SDP not established")
+                tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.dig_model.sdp_connected, message="Comms to SDP not established")
                 action.set_msg_to_remote(tm_adv)
                 action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
 
@@ -144,8 +150,8 @@ class Digitiser(App):
             "action_code": api_call['action_code'], 
             "status": status, 
             "message": message if message else "",
-            "property": api_call.get('property', tm_dig.PROPERTY_STREAMING),
-            "value": value if api_call.get('property', None) and isinstance(value, (str, float, int)) else self.stream_samples,
+            "property": api_call.get('property', ""),
+            "value": value if api_call.get('property', None) and isinstance(value, (str, float, int)) else "",
         })
        
         action.set_msg_to_remote(tm_rsp)
@@ -156,13 +162,13 @@ class Digitiser(App):
         """
         logger.debug(f"Digitiser connected to Science Data Processor: {event.remote_addr}")
 
-        self.sdp_connected = CommunicationStatus.ESTABLISHED
+        self.dig_model.sdp_connected = CommunicationStatus.ESTABLISHED
 
         action = Action()
 
-        if self.tm_connected == CommunicationStatus.ESTABLISHED:
+        if self.dig_model.tm_connected == CommunicationStatus.ESTABLISHED:
             # Send SDP comms adv to TM
-            tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.sdp_connected, message="Comms to SDP established")
+            tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.dig_model.sdp_connected, message="Comms to SDP established")
             action.set_msg_to_remote(tm_adv)
             action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
 
@@ -173,13 +179,13 @@ class Digitiser(App):
         """
         logger.debug(f"Digitiser disconnected from Science Data Processor: {event.remote_addr}")
 
-        self.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.dig_model.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
 
         action = Action()
 
-        if self.tm_connected == CommunicationStatus.ESTABLISHED:
+        if self.dig_model.tm_connected == CommunicationStatus.ESTABLISHED:
             # Send SDP disconnected adv to TM
-            tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.sdp_connected, message="Comms to SDP not established")
+            tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.dig_model.sdp_connected, message="Comms to SDP not established")
             action.set_msg_to_remote(tm_adv)
             action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
 
@@ -249,38 +255,41 @@ class Digitiser(App):
     def process_status_event(self, event) -> Action:
         """ Processes status update events.
         """
+        app_status = self.get_app_processor_state()
+        app_status_str = "\n".join([f"  {k}: {v}" for k, v in app_status.items()])
 
-        status = self.get_app_processor_state()
-        logger.info(f"Digitiser status event: {event}\n{status}")
-
-        if not self.tm_connected == CommunicationStatus.ESTABLISHED:
-            logger.warning("Digitiser cannot send status update to Telescope Manager, not connected.")
-            return Action()
-
-        tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
-        tm_adv.set_json_api_header(
-            api_version=self.tm_api.get_api_version(), 
-            dt=datetime.now(timezone.utc), 
-            from_system=self.app_name, 
-            to_system="tm", 
-            api_call={
-                "msg_type": "adv", 
-                "action_code": "set", 
-                "property": tm_dig.PROPERTY_STATUS, 
-                "value": status, 
-                "message": "Digitiser status update"
-            })
+        dig_model_str = json.dumps(self.dig_model.to_dict(), indent=2)
+        logger.info(f"Digitiser model description: {event}\n{dig_model_str}\nApp Status:\n{app_status_str}")
 
         action = Action()
-        action.set_msg_to_remote(tm_adv)
+
+        # If connected to Telescope Manager, send status advice message
+        if self.dig_model.tm_connected == CommunicationStatus.ESTABLISHED:
+    
+            tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
+            tm_adv.set_json_api_header(
+                api_version=self.tm_api.get_api_version(), 
+                dt=datetime.now(timezone.utc), 
+                from_system=self.dig_model.app.app_name, 
+                to_system="tm", 
+                api_call={
+                    "msg_type": "adv", 
+                    "action_code": "set", 
+                    "property": tm_dig.PROPERTY_STATUS, 
+                    "value": self.dig_model.to_dict(), 
+                    "message": "Digitiser status update"
+                })
+
+            action.set_msg_to_remote(tm_adv)
+
         return action
 
     def get_health_state(self) -> HealthState:
         """ Returns the current health state of this application.
         """
-        if self.tm_connected != CommunicationStatus.ESTABLISHED:
+        if self.dig_model.tm_connected != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
-        elif self.sdp_connected != CommunicationStatus.ESTABLISHED:
+        elif self.dig_model.sdp_connected != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
         elif self.sdr is None or self.sdr.get_connected() != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
@@ -309,6 +318,9 @@ class Digitiser(App):
             except Exception as e:
                 logger.error(f"Digitiser failed to set property {prop_name}: {e}")
                 return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name}: {e}", None, None
+
+            self.dig.model.setattr(prop_name[4:], prop_value)
+            self.dig_model.last_update = datetime.now(timezone.utc)
 
             return tm_dig.STATUS_SUCCESS, f"Digitiser set property {prop_name} to {prop_value}", prop_value, None
         else:
@@ -375,7 +387,7 @@ class Digitiser(App):
         tm_adv.set_json_api_header(
             api_version=self.tm_api.get_api_version(), 
             dt=datetime.now(timezone.utc), 
-            from_system=self.app_name, 
+            from_system=self.dig_model.app.app_name, 
             to_system="tm", 
             api_call={
                 "msg_type": "adv", 

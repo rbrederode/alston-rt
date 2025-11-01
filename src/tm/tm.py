@@ -21,9 +21,11 @@ from ipc.message import AppMessage, APIMessage
 from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
+from models.app import AppModel
 from models.dsh import Feed
 from models.health import HealthState
 from models.comms import CommunicationStatus
+from models.telescope import TelescopeModel
 from util import log
 from util.xbase import XBase, XStreamUnableToExtract
 
@@ -34,15 +36,16 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # The SHEET ID for the ALSTON RADIO TELESCOPE google sheet
 ALSTON_RADIO_TELESCOPE = "1r73N0VZHSQC6RjRv94gzY50pTgRvaQWfctGGOMZVpzc"
-DIG_CONFIG = "DIG!A4:B15"  # Range for Digitiser configuration
-
-MSG_TIMEOUT = 10000 # Timeout in milliseconds for messages awaiting acknowledgement
+DIG_CONFIG = "DIG!D4:E15"       # Range for Digitiser configuration
+UI_TM_API = "UI_TM_API!"        # Range for UI-TM API data
 
 class TelescopeManager(App):
 
+    telmodel = TelescopeModel()
+
     def __init__(self, app_name: str = "tm"):
 
-        super().__init__(app_name=app_name)
+        super().__init__(app_name=app_name, app_model=self.telmodel.tm.app)
 
         # Digitiser interface
         self.dig_system = "dig"
@@ -50,19 +53,23 @@ class TelescopeManager(App):
         # Digitiser TCP Client
         self.dig_endpoint = TCPClient(description=self.dig_system, queue=self.get_queue(), host=self.get_args().dig_host, port=self.get_args().dig_port)
         self.dig_endpoint.connect()
-        self.dig_connected = CommunicationStatus.NOT_ESTABLISHED
         # Register Digitiser interface with the App
         self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint)
-
+        # Initialise Digitiser comms status
+        self.telmodel.dig.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.tm.dig_connected = CommunicationStatus.NOT_ESTABLISHED
+        
         # Science Data Processor interface 
         self.sdp_system = "sdp"
         self.sdp_api = tm_sdp.TM_SDP()
         # Science Data Processor TCP Client
         self.sdp_endpoint = TCPClient(description=self.sdp_system, queue=self.get_queue(), host=self.get_args().sdp_host, port=self.get_args().sdp_port)
         self.sdp_endpoint.connect()
-        self.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
         # Register Science Data Processor interface with the App
         self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint)
+        # Initialise Science Data Processor comms status
+        self.telmodel.sdp.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.tm.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
 
     def add_args(self, arg_parser): 
         """ Specifies the digitiser's command line arguments.
@@ -108,13 +115,13 @@ class TelescopeManager(App):
                     old_item = event.old_config[i]
                     if new_item != old_item:
                         update = True
-                        logger.info(f"Telescope Manager property {property} changed at row {i}: from {old_item} to {new_item}")
+                        logger.info(f"Telescope property '{property}' changed at row {i}: from {old_item} to {new_item}")
                 else:
                     update = True
-                    logger.info(f"Telescope Manager property {property} added at row {i}: {new_item}")
+                    logger.info(f"Telescope property '{property}' added at row {i}: {new_item}")
             else:
                 update = True
-                logger.info(f"Telescope Manager property {property} initialising at row {i}: {new_item}")
+                logger.info(f"Telescope property '{property}' initialising at row {i}: {new_item}")
 
             if property == tm_dig.PROPERTY_GAIN:
                 # Convert value to uppercase string for comparison
@@ -138,10 +145,14 @@ class TelescopeManager(App):
                     logger.error(f"Telescope Manager invalid FEED value at row {i}: {new_item}")
                     continue
 
-            if update and self.dig_connected == CommunicationStatus.ESTABLISHED:
+            if update and self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
                 dig_req = self._construct_req_to_dig(property=property, method=method, value=value, message="")
                 action.set_msg_to_remote(dig_req)
-                action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dig_req.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=dig_req))
+
+                action.set_timer_action(Action.Timer(
+                    name=f"dig_req_timer:{dig_req.get_timestamp()}", 
+                    timer_action=self.telmodel.tm.app.msg_timeout_ms, 
+                    echo_data=dig_req))
 
         return action
 
@@ -150,10 +161,12 @@ class TelescopeManager(App):
         """
         logger.info(f"Telescope Manager connected to Digitiser: {event.remote_addr}")
 
-        self.dig_connected = CommunicationStatus.ESTABLISHED
+        self.telmodel.dig.tm_connected = CommunicationStatus.ESTABLISHED
+        self.telmodel.tm.dig_connected = CommunicationStatus.ESTABLISHED
 
         action = Action()
-        action.set_timer_action(Action.Timer(name="read_samples", timer_action=MSG_TIMEOUT))
+        # TBD, remove this once we have a UI to control reading samples
+        action.set_timer_action(Action.Timer(name="read_samples", timer_action=10000))
         return action
 
     def process_dig_disconnected(self, event) -> Action:
@@ -161,21 +174,48 @@ class TelescopeManager(App):
         """
         logger.info(f"Telescope Manager disconnected from Digitiser: {event.remote_addr}")
 
-        self.dig_connected = CommunicationStatus.NOT_ESTABLISHED
-        
+        self.telmodel.dig.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.tm.dig_connected = CommunicationStatus.NOT_ESTABLISHED
+
     def process_dig_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Digitiser service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
         logger.info(f"Telescope Manager received digitiser {api_call['msg_type']} message with action code: {api_call['action_code']}")
-
+        
         action = Action()
 
-        if api_call['msg_type'] == 'rsp':
-            dt = api_msg.get("timestamp")
-            if dt:
-                action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
-            
+        if api_call.get('status','') != tm_dig.STATUS_ERROR:
+
+            if api_call.get('property','') == tm_dig.PROPERTY_FEED:
+                self.telmodel.dsh.feed = Feed(api_call['value'])
+            elif api_call.get('property','') == tm_dig.PROPERTY_STREAMING:
+                self.telmodel.dig.streaming = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_GAIN:
+                self.telmodel.dig.gain = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_SAMPLE_RATE:
+                self.telmodel.dig.sample_rate = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_BANDWIDTH:
+                self.telmodel.dig.bandwidth = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_CENTER_FREQ:
+                self.telmodel.dig.center_freq = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_FREQ_CORRECTION:
+                self.telmodel.dig.freq_correction = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_SDP_COMMS:
+                self.telmodel.dig.sdp_connected = CommunicationStatus(api_call['value'])
+            elif api_call.get('property','') == tm_dig.PROPERTY_STATUS:
+                logger.info(f"Telescope Manager received Digitiser STATUS update: {api_call['value']}")
+
+                self.telmodel.dig.from_dict(api_call['value'])
+
+        # Update Telescope Model based on received Digitiser api_call
+        dt = api_msg.get("timestamp")
+        self.telmodel.dig.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
+
+        # If the api call is a rsp message, stop the corresponding timer
+        if api_call['msg_type'] == tm_dig.MSG_TYPE_RSP and dt is not None:
+            action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
+
         return action
 
     def process_sdp_connected(self, event) -> Action:
@@ -183,14 +223,16 @@ class TelescopeManager(App):
         """
         logger.info(f"Telescope Manager connected to Science Data Processor: {event.remote_addr}")
 
-        self.sdp_connected = CommunicationStatus.ESTABLISHED
+        self.telmodel.sdp.tm_connected = CommunicationStatus.ESTABLISHED
+        self.telmodel.tm.sdp_connected = CommunicationStatus.ESTABLISHED
 
     def process_sdp_disconnected(self, event) -> Action:
         """ Processes Science Data Processor disconnected events.
         """
         logger.info(f"Telescope Manager disconnected from Science Data Processor: {event.remote_addr}")
 
-        self.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.sdp.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.tm.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
 
     def process_sdp_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Science Data Processor service access point (SAP)
@@ -209,12 +251,16 @@ class TelescopeManager(App):
         action = Action()
 
         if event.name.startswith("read_samples"):
-            if self.dig_connected == CommunicationStatus.ESTABLISHED:
+            if self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
                 dig_req = self._construct_req_to_dig(method="read_samples")
                 action.set_msg_to_remote(dig_req)
-                action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dig_req.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=dig_req))
+
+                action.set_timer_action(Action.Timer(
+                    name=f"dig_req_timer:{dig_req.get_timestamp()}", 
+                    timer_action=self.telmodel.tm.app.msg_timeout_ms, 
+                    echo_data=dig_req))
             else:
-                action.set_timer_action(Action.Timer(name="read_samples", timer_action=MSG_TIMEOUT))
+                action.set_timer_action(Action.Timer(name="read_samples", timer_action=self.telmodel.tm.app.msg_timeout_ms))
 
         elif event.name.startswith("dig_req_timer"):
             logger.warning(f"Telescope Manager timed out waiting for acknowledgement from Digitiser for request {event}")
@@ -224,12 +270,23 @@ class TelescopeManager(App):
     def get_health_state(self) -> HealthState:
         """ Returns the current health state of this application.
         """
-        if self.dig_connected != CommunicationStatus.ESTABLISHED:
+        if self.telmodel.tm.dig_connected != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
-        elif self.sdp_connected != CommunicationStatus.ESTABLISHED:
+        elif self.telmodel.tm.sdp_connected != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
         else:
             return HealthState.OK
+
+    def process_status_event(self, event) -> Action:
+        """ Processes status update events. 
+            The Telescope Manager does not need to take any action on status events.
+            Status is constantly monitored and updated in the Telescope Model.
+        """
+        status = self.get_app_processor_state()
+       
+        status_str = "\n".join([f"  {k}: {v}" for k, v in status.items()])
+        logger.info(f"Telescope Manager status event: {event}\n{status_str}")
+
 
     def _construct_req_to_dig(self, property=None, method=None, value=None, message=None) -> APIMessage:
         """ Constructs a request message to the Digitiser.
@@ -242,7 +299,7 @@ class TelescopeManager(App):
             dig_req.set_json_api_header(
                 api_version=self.dig_api.get_api_version(), 
                 dt=datetime.now(timezone.utc), 
-                from_system=self.app_name, 
+                from_system=self.app_model.app_name, 
                 to_system="dig", 
                 api_call={
                     "msg_type": "req", 
@@ -254,7 +311,7 @@ class TelescopeManager(App):
             dig_req.set_json_api_header(
                 api_version=self.dig_api.get_api_version(), 
                 dt=datetime.now(timezone.utc), 
-                from_system=self.app_name, 
+                from_system=self.app_model.app_name, 
                 to_system="dig", 
                 api_call={
                     "msg_type": "req", 
@@ -341,8 +398,8 @@ def main():
     try:
         while True:
 
-            # Only proceed if connected to the Digitiser
-            if tm.dig_connected == CommunicationStatus.ESTABLISHED:
+            # Only exchange Digitiser data with the UI if comms is established
+            if tm.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
                 
                 result = execute_sheets_request(sheet.values().get(
                     spreadsheetId=ALSTON_RADIO_TELESCOPE, 
@@ -362,9 +419,31 @@ def main():
                         tm.get_queue().put(config)
 
                         last_snapshot = values
+
+                dig_dict = tm.telmodel.dig.to_dict()
+                dig_str = json.dumps(dig_dict, indent=4)
+
+                execute_sheets_request(sheet.values().update(
+                    spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                    range=UI_TM_API + "B2",                      
+                    valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                    body={"values": [[dig_str]]}
+                ))
+
             else:
                 # Reset the snapshot such that config is re-read upon reconnection
                 last_snapshot = None 
+                
+            # Update TM model in Google Sheets
+            tm_dict = tm.telmodel.tm.to_dict()
+            tm_str = json.dumps(tm_dict, indent=4)
+
+            execute_sheets_request(sheet.values().update(
+                spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                range=UI_TM_API + "A2",
+                valueInputOption="USER_ENTERED",  # allow Sheets to parse as datetime
+                body={"values": [[tm_str]]}
+            ))
 
             # Poll for config changes every 10 seconds
             time.sleep(10) 

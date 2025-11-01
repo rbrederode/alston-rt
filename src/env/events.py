@@ -228,7 +228,7 @@ class StatusUpdateEvent:
             f"Current Status={status_str}, " + \
             f"Total Processing Count={self.total_processing_count}, " + \
             f"Total Processing Time (ms)={self.total_processing_time_ms}, " + \
-            f"Average Processing Time (ms)={self.get_average_processing_time():.2f})"
+            f"Average Processing Time (ms)={self.get_average_processing_time()})"
 
 class ConfigEvent:
 

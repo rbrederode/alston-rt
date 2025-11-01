@@ -1,6 +1,9 @@
-import pytest
+from __future__ import annotations
 from datetime import datetime
-from models.dsh import Feed
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models.dsh import Feed
 
 import logging
 logger = logging.getLogger(__name__)

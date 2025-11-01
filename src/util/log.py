@@ -20,7 +20,7 @@ logging.getLogger("ipc.tcp_server").setLevel(logging.INFO)  # Only INFO and abov
 logging.getLogger("ipc.tcp_client").setLevel(logging.INFO)  # Only INFO and above for tcp_client
 logging.getLogger("util.timer").setLevel(logging.INFO)  # Only INFO and above for timer
 logging.getLogger("env.processor").setLevel(logging.INFO)  # Only INFO and above for processor
-logging.getLogger("env.app_processor").setLevel(logging.INFO)  # Only INFO and above for app processor
+logging.getLogger("env.app_processor").setLevel(logging.DEBUG)  # Only INFO and above for app processor
 logging.getLogger("api.tm_dig").setLevel(logging.INFO)  # Only INFO and above for tm_dig api
 logging.getLogger("api.sdp_dig").setLevel(logging.INFO)  # Only INFO and above for sdp_dig api
 logging.getLogger("sdp.scan").setLevel(logging.INFO)  # Only INFO and above for sdp.scan

@@ -51,11 +51,15 @@ class AppProcessor(Processor):
 
             handler_method = "get_health_state"
             if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
-                self.driver.healthstate = getattr(self.driver, handler_method)()
+                self.driver.app_model.health = getattr(self.driver, handler_method)()
             else:
-                self.driver.healthstate = HealthState.UNKNOWN
+                self.driver.app_model.health = HealthState.UNKNOWN
 
-            logger.info(f"AppProcessor {self.name} health state is {self.driver.healthstate.name}")
+            logger.info(f"AppProcessor {self.name} health state is {self.driver.app_model.health.name}")
+
+            handler_method = "process_status_event"
+            if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
+                self.performActions(getattr(self.driver, handler_method)(event))
 
         finally:
             event.notify_update_completed()
@@ -117,13 +121,23 @@ class AppProcessor(Processor):
                     api_transl_msg = api.translate(api_msg.get_json_api_header())
                     api.validate(api_transl_msg)
 
-                    if api_msg.get_to_system() != self.driver.app_name:
+                    # Resolve the driver's application name safely. Some tests or
+                    # non-App drivers may provide `app_name` directly or not have
+                    # an `app_model` at all. Fall back to the driver's attribute
+                    # or the driver class name to avoid AttributeError.
+                    if getattr(self.driver, "app_model", None) is not None and hasattr(self.driver.app_model, "app_name"):
+                        driver_app_name = self.driver.app_model.app_name
+                    else:
+                        logger.error(f"AppProcessor {self.name} driver has no app_model or app_name attribute")
+                        driver_app_name = getattr(self.driver, "app_name", None) or type(self.driver).__name__
+
+                    if api_msg.get_to_system() != driver_app_name:
                         rsp_msg = APIMessage(api_msg.get_json_api_header())
                         rsp_msg.switch_from_to()
 
                         api_call = rsp_msg.get_api_call()
                         api_call['status'] = 'error'
-                        api_call['message'] = f"Message not intended for {self.driver.app_name}, but for {api_msg.get_to_system()}"
+                        api_call['message'] = f"Message not intended for {driver_app_name}, but for {api_msg.get_to_system()}"
 
                         rsp_msg.set_api_call(api_call)
                         logger.warning(f"AppProcessor {self.name} received API message intended for {api_msg.get_to_system()} i.e. not for this App {rsp_msg}")

@@ -51,3 +51,10 @@ class HealthState(enum.IntEnum):
     This is also an initial state, indicating that health state has not
     yet been determined.
     """
+
+if __name__ == "__main__":
+    for state in HealthState:
+        print(f"{state.name} = {state.value}")
+
+    hs = HealthState['UNKNOWN']
+    print(f"hs: {hs} ({hs.value}: {hs.name})")

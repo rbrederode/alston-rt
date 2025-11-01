@@ -4,10 +4,10 @@ from models import dsh
 # Map Configuration items to attribute names
 _config_to_property = {
     "Feed": tm_dig.PROPERTY_FEED,
-    "Sample Rate": tm_dig.PROPERTY_SAMPLE_RATE,
-    "Center Frequency": tm_dig.PROPERTY_CENTER_FREQ,
+    "Sample_Rate": tm_dig.PROPERTY_SAMPLE_RATE,
+    "Center_Freq": tm_dig.PROPERTY_CENTER_FREQ,
     "Bandwidth": tm_dig.PROPERTY_BANDWIDTH,
-    "Frequency Correction": tm_dig.PROPERTY_FREQ_CORRECTION,
+    "Freq_Correction": tm_dig.PROPERTY_FREQ_CORRECTION,
     "Gain": tm_dig.PROPERTY_GAIN,
 }
 
