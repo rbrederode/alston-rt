@@ -227,7 +227,7 @@ class Digitiser(App):
                 wait = 0 if status == tm_dig.STATUS_SUCCESS else 1000 
                 action.set_timer_action(Action.Timer(name=event.name, timer_action=wait)) 
 
-            if self.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
+            if self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
                 # Prepare adv msg to send samples to sdp
                 sdp_adv = self._construct_adv_to_sdp(status, message, value, payload.tobytes())
                 action.set_msg_to_remote(sdp_adv)
