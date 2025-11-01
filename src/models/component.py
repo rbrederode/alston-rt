@@ -49,20 +49,20 @@ class ComponentModel:
             allowed = self.allowed_transitions[name].get(old_value, set())
             if old_value is not None and new_value not in allowed:
                 raise XInvalidTransition(
-                    f"Component model attempting invalid transition for '{name}': {old_value.name} → {new_value.name}"
+                    f"Component model attempting invalid transition for name: {name}: {old_value.name} → {new_value.name}"
                 )
 
     def __getattr__(self, name):
         if name in self._data:
             return self._data[name]
-        raise XSoftwareFailure(f"Component model attribute '{name}' not found")
+        raise XSoftwareFailure(f"Component model attribute name: {name} not found")
 
     def __setattr__(self, name, value):
         if name.startswith("_"):
             super().__setattr__(name, value)
             return
         if name not in self.schema.schema:
-            raise AttributeError(f"Invalid attribute '{name}' for {type(self).__name__}")
+            raise AttributeError(f"Invalid attribute name: {name} for {type(self).__name__}")
         self._validate_transition(name, value)
         self._data[name] = value
         self._validate_schema()  # enforce schema after update
