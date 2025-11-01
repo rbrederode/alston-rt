@@ -7,5 +7,6 @@ astroplan
 witmotion
 pyrtlsdr
 scipy
+schema
 geopy
 pytest

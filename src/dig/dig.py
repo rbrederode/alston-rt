@@ -222,7 +222,7 @@ class Digitiser(App):
             status, message, value, payload = self._unpack_result(result)
 
             # If the digitiser is set to stream samples
-            if self.stream_samples:
+            if self.dig_model.streaming:
                 # Start the same stream_samples timer immediately if successful, else wait 1 second before retrying
                 wait = 0 if status == tm_dig.STATUS_SUCCESS else 1000 
                 action.set_timer_action(Action.Timer(name=event.name, timer_action=wait)) 
