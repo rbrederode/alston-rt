@@ -107,7 +107,7 @@ class Digitiser(App):
         """
         logger.debug(f"Digitiser received Telescope Manager message:\n{event}")
 
-        if self.sdr is None or not self.sdr.get_connected() == CommunicationStatus.ESTABLISHED:
+        if self.sdr is None or not self.sdr.get_comms_status() == CommunicationStatus.ESTABLISHED:
             status, message = tm_dig.STATUS_ERROR, "Digitiser not connected to SDR device"
             value, payload = None, None
             logger.warning("Digitiser not connected to SDR device.")
@@ -310,7 +310,7 @@ class Digitiser(App):
             return HealthState.DEGRADED
         elif self.dig_model.sdp_connected != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
-        elif self.sdr is None or self.sdr.get_connected() != CommunicationStatus.ESTABLISHED:
+        elif self.sdr is None or self.sdr.get_comms_status() != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
         else:
             return HealthState.OK
