@@ -36,7 +36,7 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # The SHEET ID for the ALSTON RADIO TELESCOPE google sheet
 ALSTON_RADIO_TELESCOPE = "1r73N0VZHSQC6RjRv94gzY50pTgRvaQWfctGGOMZVpzc"
-DIG_CONFIG = "DIG!D4:E15"       # Range for Digitiser configuration
+DIG_CONFIG = "DIG!D4:E11"       # Range for Digitiser configuration
 UI_TM_API = "UI_TM_API!"        # Range for UI-TM API data
 
 class TelescopeManager(App):
@@ -100,12 +100,14 @@ class TelescopeManager(App):
         # Compare each item in the new configuration with the old configuration
         for i, new_item in enumerate(event.new_config):
 
-            property = map.get_property_name(new_item[0])
-            method = None
-            value = new_item[1]
+            property = method = value = None
 
-            if property is None:
-                logger.warning(f"Telescope Manager received unknown configuration item at row {i}: {new_item}")
+            # Map from configuration item to method/property and value
+            method, value = map.get_method_name(new_item[0], new_item[1])
+            property, value = map.get_property_name(new_item[0], new_item[1]) if method is None else None, None
+                
+            if method is None and property is None:
+                logger.warning(f"Telescope Manager received unknown configuration item at row {i}: {new_item} with value {new_item[1]}")
                 continue
 
             update = False
@@ -122,28 +124,6 @@ class TelescopeManager(App):
             else:
                 update = True
                 logger.info(f"Telescope property '{property}' initialising at row {i}: {new_item}")
-
-            if property == tm_dig.PROPERTY_GAIN:
-                # Convert value to uppercase string for comparison
-                if str(value).upper() == "AUTO":
-                    method = tm_dig.METHOD_GET_AUTO_GAIN
-                    value = {"time_in_secs": 0.5}
-                else:
-                    method = None
-                    # Convert value to integer if not AUTO
-                    try:
-                        value = int(value)
-                    except ValueError:
-                        logger.error(f"Telescope Manager invalid GAIN value at row {i}: {new_item}")
-                        continue
-            elif property == tm_dig.PROPERTY_FEED:
-                # Map feed string to Feed enum
-                feed_id = map.get_feed_id(value)
-                if feed_id is not None:
-                    value = feed_id
-                else:
-                    logger.error(f"Telescope Manager invalid FEED value at row {i}: {new_item}")
-                    continue
 
             if update and self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
                 dig_req = self._construct_req_to_dig(property=property, method=method, value=value, message="")

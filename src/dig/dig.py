@@ -27,11 +27,13 @@ MSG_TIMEOUT = 10000 # Timeout in milliseconds for messages awaiting acknowledgem
 
 class Digitiser(App):
 
-    dig_model = DigitiserModel(id="dig001")
-
     def __init__(self, app_name: str = "dig"):
 
+        self.dig_model = DigitiserModel()
+
         super().__init__(app_name=app_name, app_model = self.dig_model.app)
+
+        self.dig_model.id = self.get_args().id
 
         # Telescope Manager interface
         self.tm_system = "tm"
@@ -68,6 +70,8 @@ class Digitiser(App):
         """
         super().add_args(arg_parser)
 
+        arg_parser.add_argument("--id", type=str, required=True, help="Digitiser ID dig<id> e.g. dig001", default="dig001")
+
         arg_parser.add_argument("--tm_host", type=str, required=False, help="TCP host to listen on for Telescope Manager commands", default="localhost")
         arg_parser.add_argument("--tm_port", type=int, required=False, help="TCP port to listen on for Telescope Manager commands", default=50000)
         
@@ -80,7 +84,6 @@ class Digitiser(App):
         logger.debug(f"Digitiser initialisation event")
 
         action = Action()
-
         # If SDR is not connected, set timer to retry connection
         if self.dig_model.sdr_connected == CommunicationStatus.NOT_ESTABLISHED:
             action.set_timer_action(Action.Timer(name=f"sdr_retry", timer_action=5000))
@@ -107,48 +110,50 @@ class Digitiser(App):
         """
         logger.debug(f"Digitiser received Telescope Manager message:\n{event}")
 
-        if self.sdr is None or not self.sdr.get_comms_status() == CommunicationStatus.ESTABLISHED:
-            status, message = tm_dig.STATUS_ERROR, "Digitiser not connected to SDR device"
-            value, payload = None, None
-            logger.warning("Digitiser not connected to SDR device.")
-        else:
-
-            dispatch = {
-                "set": self.handle_field_set,
-                "get": self.handle_field_get,
-                "method": self.handle_method_call
+        # Dispatch the API Call to a handler method
+        dispatch = {
+            "set": self.handle_field_set,
+            "get": self.handle_field_get,
+            "method": self.handle_method_call
             }
 
-            result = dispatch.get(api_call['action_code'], lambda x: None)(api_call)
-            status, message, value, payload = self._unpack_result(result)
+        # Invoke handler method to process the api call
+        result = dispatch.get(api_call['action_code'], lambda x: None)(api_call)
+        status, message, value, payload = self._unpack_result(result)
 
         action = Action()
 
-        if api_call['action_code'] == tm_dig.ACTION_CODE_METHOD and api_call['method'] in ("read_samples", "read_bytes"):
+        # If api call was a request that was successfully handled, prepare resultant actions 
+        if api_call['msg_type'] == 'req' and status == tm_dig.STATUS_SUCCESS:
 
-            self.dig_model.streaming = True
+            # Check if the API call is a "set" action for the sample "streaming" property
+            if api_call['action_code'] == tm_dig.ACTION_CODE_SET and api_call.get('property') == tm_dig.PROPERTY_STREAMING:
 
-            # Start reading samples immediately (timer_action=0) 
-            # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
-            for i in range(1, 3):
-                action.set_timer_action(Action.Timer(name=f"stream_samples_{i}", timer_action=0))
+                timer_action = 0 if self.dig_model.streaming else Action.Timer.TIMER_STOP
+                    
+                # Start reading samples immediately (timer_action=0) else stop timers (timer_action=TIMER_STOP)
+                # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
+                for i in range(1, 3):
+                    action.set_timer_action(Action.Timer(name=f"stream_samples_{i}", timer_action=timer_action))
 
-            if self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
-                # Prepare adv msg to send samples to sdp
-                sdp_adv = self._construct_adv_to_sdp(status, message, value, payload.tobytes())
-                action.set_msg_to_remote(sdp_adv)
-                action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=sdp_adv))
+            if api_call['action_code'] == tm_dig.ACTION_CODE_METHOD and api_call['method'] in ("read_samples", "read_bytes"):
 
-            elif not self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED:
-                logger.warning("Digitiser cannot send samples to Science Data Processor, not connected.")
+                if self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
+                    # Prepare adv msg to send samples to sdp
+                    sdp_adv = self._construct_adv_to_sdp(status, message, value, payload.tobytes())
+                    action.set_msg_to_remote(sdp_adv)
+                    action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=sdp_adv))
 
-                tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.dig_model.sdp_connected, message="Comms to SDP not established")
-                action.set_msg_to_remote(tm_adv)
-                action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
+                elif not self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED:
+                    logger.warning("Digitiser cannot send samples to Science Data Processor, not connected.")
 
-            elif payload is None:
-                # Wait for stream_samples timer to trigger again
-                logger.warning("Digitiser cannot send samples to Science Data Processor, no payload.")
+                    tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.dig_model.sdp_connected, message="Comms to SDP not established")
+                    action.set_msg_to_remote(tm_adv)
+                    action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
+
+                elif payload is None:
+                    # Wait for stream_samples timer to trigger again
+                    logger.warning("Digitiser cannot send samples to Science Data Processor, no payload.")
                 
         # Prepare rsp msg to tm containing result of initial api call
         tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
@@ -274,12 +279,9 @@ class Digitiser(App):
     def process_status_event(self, event) -> Action:
         """ Processes status update events.
         """
-        app_status = self.get_app_processor_state()
-        app_status_str = "\n".join([f"  {k}: {v}" for k, v in app_status.items()])
-
-        dig_model_str = json.dumps(self.dig_model.to_dict(), indent=2)
-        logger.debug(f"Digitiser model description: {event}\n{dig_model_str}\nApp Status:\n{app_status_str}")
-
+        # Refresh the app and processor state (in the digitiser model)
+        self.get_app_processor_state()
+  
         action = Action()
 
         # If connected to Telescope Manager, send status advice message
@@ -321,6 +323,16 @@ class Digitiser(App):
         self.feed = feed_id
         logger.info(f"Digitiser feed set to {self.feed}")
 
+    def set_streaming(self, streaming: bool):
+        
+        self.dig_model.streaming = True if streaming else False
+        logger.info(f"Digitiser streaming set to {streaming}")
+
+    def get_streaming(self) -> bool:
+        """ Gets the current streaming status.
+        """
+        return self.dig_model.streaming
+    
     def handle_field_set(self, api_call):
         """ Handles field set api calls.
                 : returns: (status, message, value, payload)
@@ -328,80 +340,101 @@ class Digitiser(App):
         prop_name = 'set_' + api_call['property']
         prop_value = api_call['value']
 
-        setter = getattr(self.sdr, prop_name) if hasattr(self.sdr, prop_name) else (getattr(self, prop_name) if hasattr(self, prop_name) else None)
+        # If the property setter exists on the SDR, but comms to the SDR is not established
+        if hasattr(self.sdr, prop_name) and not self.dig_model.sdr_connected == CommunicationStatus.ESTABLISHED:
+            logger.error(f"Digitiser SDR not connected, cannot set property {prop_name} to {prop_value}")
+            return tm_dig.STATUS_ERROR, f"Digitiser SDR not connected, cannot set property {prop_name}", None, None
 
-        if setter and callable(setter):
-
-            try:
-                setter(prop_value)
-            except Exception as e:
-                logger.error(f"Digitiser failed to set property {prop_name}: {e}")
-                return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name}: {e}", None, None
-
-            # Update the digitiser model accordingly
-            try:
-                setattr(self.dig_model, prop_name[4:], prop_value)
-                self.dig_model.last_update = datetime.now(timezone.utc)
-            except AttributeError as e:
-                logger.error(f"Digitiser could not update the Digitiser model: Unknown attribute {prop_name[4:]}: {e}")
-            except XAPIValidationFailed as e:
-                logger.error(f"Digitiser could not update the Digitiser model: Validation failed setting {prop_name[4:]}: {e}")
-
-            return tm_dig.STATUS_SUCCESS, f"Digitiser set property {prop_name} to {prop_value}", prop_value, None
+        # Determine the setter method
+        if hasattr(self.sdr, prop_name) and callable(getattr(self.sdr, prop_name)):
+            setter = getattr(self.sdr, prop_name)
+        elif hasattr(self, prop_name) and callable(getattr(self, prop_name)):
+            setter = getattr(self, prop_name)
         else:
+            logger.error(f"Digitiser property setter for {prop_name} with value {prop_value} is not callable")
             return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} is not callable", None, None
+    
+        try:  # Call the setter method
+            setter(prop_value)
+        except Exception as e:
+            logger.error(f"Digitiser failed to set property {prop_name}: {e}")
+            return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name}: {e}", None, None
 
-        return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} not found", None, None
+        # Update the property on the digitiser model
+        try:
+            setattr(self.dig_model, prop_name[4:], prop_value)
+            self.dig_model.last_update = datetime.now(timezone.utc)
+        except AttributeError as e:
+            logger.error(f"Digitiser could not update the Digitiser model: Unknown attribute {prop_name[4:]}: {e}")
+        except XAPIValidationFailed as e:
+            logger.error(f"Digitiser could not update the Digitiser model: Validation failed setting {prop_name[4:]}: {e}")
 
+        return tm_dig.STATUS_SUCCESS, f"Digitiser set property {prop_name} to {prop_value}", prop_value, None
+    
     def handle_field_get(self, api_call):
         """ Handles field get api calls.
                 : returns: (status, message, value, payload)
         """
         prop_name = 'get_' + api_call['property']
 
-        getter = getattr(self.sdr, prop_name) if hasattr(self.sdr, prop_name) else (getattr(self, prop_name) if hasattr(self, prop_name) else None)
-        
-        if getter:
+        # If the property getter exists on the SDR, but comms to the SDR is not established
+        if hasattr(self.sdr, prop_name) and not self.dig_model.sdr_connected == CommunicationStatus.ESTABLISHED:
+            logger.error(f"Digitiser SDR not connected, cannot get value for property {prop_name}")
+            return tm_dig.STATUS_ERROR, f"Digitiser SDR not connected, cannot get value for property {prop_name}", None, None
 
-            try:
-                value = getter()
-            except XSoftwareFailure as e:
-                logger.error(f"Digitiser failed to get property {prop_name}: {e}")
-                return tm_dig.STATUS_ERROR, f"Digitiser failed to get property {prop_name}: {e}", None, None
-
-            value = getter() if callable(getter) else getter
-            return tm_dig.STATUS_SUCCESS, f"Digitiser {prop_name} value {value}", value, None
+        # Determine the getter method
+        if hasattr(self.sdr, prop_name) and callable(getattr(self.sdr, prop_name)):
+            getter = getattr(self.sdr, prop_name)
+        elif hasattr(self, prop_name) and callable(getattr(self, prop_name)):
+            getter = getattr(self, prop_name)
         else:
-            return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} not found", None, None
+            logger.error(f"Digitiser property getter for {prop_name} is not callable")
+            return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} is not callable", None, None
 
+        try:  # Call the getter method
+            value = getter() if callable(getter) else getter
+        except XSoftwareFailure as e:
+            logger.error(f"Digitiser failed to get property {prop_name}: {e}")
+            return tm_dig.STATUS_ERROR, f"Digitiser failed to get property {prop_name}: {e}", None, None
+
+        return tm_dig.STATUS_SUCCESS, f"Digitiser {prop_name} value {value}", value, None
+  
     def handle_method_call(self, api_call):
         """ Handles method api calls.
                 : returns: (status, message, value, payload)
         """
         method = api_call.get('method', None)
 
+        # If the method call exists on the SDR, but comms to the SDR is not established
+        if hasattr(self.sdr, method) and not self.dig_model.sdr_connected == CommunicationStatus.ESTABLISHED:
+            logger.error(f"Digitiser SDR not connected, cannot call method {method}")
+            return tm_dig.STATUS_ERROR, f"Digitiser SDR not connected, cannot call method {method}", None, None
+
         allowed_keys = {"sample_rate", "time_in_secs"}
         args = {k: v for k, v in api_call.get('params', {}).items() if k in allowed_keys}
 
         logger.debug(f"Digitiser method call: {method} with params {args}")
 
-        call = getattr(self.sdr, method) if hasattr(self.sdr, method) else (getattr(self, method) if hasattr(self, method) else None)
-
-        if call:
-
-            try:
-                result = call(**args) if args is not None else call() if callable(call) else call
-            except XSoftwareFailure as e:
-                logger.error(f"Digitiser method {method} failed with exception: {e}")
-                return tm_dig.STATUS_ERROR, f"Digitiser method {method} failed with exception: {e}", None, None
-
-            # Check whether result is a tuple of (value, payload) or just a value
-            if isinstance(result, tuple):
-                return tm_dig.STATUS_SUCCESS, f"Digitiser method {call.__name__} invoked on SDR", result[0], result[1]
-            else:
-                return tm_dig.STATUS_SUCCESS, f"Digitiser method {call.__name__} invoked on SDR", result, None
+        # Determine the method to call
+        if hasattr(self.sdr, method):
+            call = getattr(self.sdr, method)
+        elif hasattr(self, method):
+            call = getattr(self, method)
         else:
+            logger.error(f"Digitiser method {method} not found")
             return tm_dig.STATUS_ERROR, f"Digitiser method {method} not found", None, None
+
+        try:  # Call the method
+            result = call(**args) if args is not None else call() if callable(call) else call
+        except XSoftwareFailure as e:
+            logger.error(f"Digitiser method {method} failed with exception: {e}")
+            return tm_dig.STATUS_ERROR, f"Digitiser method {method} failed with exception: {e}", None, None
+
+        # Check whether result is a tuple of (value, payload) or just a value
+        if isinstance(result, tuple):
+            return tm_dig.STATUS_SUCCESS, f"Digitiser method {call.__name__} invoked on SDR", result[0], result[1]
+        else:
+            return tm_dig.STATUS_SUCCESS, f"Digitiser method {call.__name__} invoked on SDR", result, None
 
     def _construct_adv_to_tm(self, property, value, message) -> APIMessage:
         """ Constructs an advice message to the Telescope Manager.
@@ -445,6 +478,7 @@ class Digitiser(App):
         )
         
         metadata = [   
+            {"property": "id", "value": self.dig_model.id},              # Digitiser Id
             {"property": "feed", "value": self.feed},                    # Feed Id
             {"property": "center_freq", "value": self.sdr.center_freq},  # Hz    
             {"property": "sample_rate", "value": self.sdr.sample_rate},  # Hz

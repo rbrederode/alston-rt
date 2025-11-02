@@ -36,6 +36,7 @@ class DigitiserModel(ComponentModel):
 
         # Default values
         defaults = {
+            "id": "<undefined>",
             "app": AppModel(
                 app_name="dig",
                 app_running=False,
