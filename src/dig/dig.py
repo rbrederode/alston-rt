@@ -57,6 +57,7 @@ class Digitiser(App):
         
         # Software Defined Radio (internal) interface
         self.sdr = SDR()
+        self.dig_model.sdr_connected = self.sdr.get_comms_status()
         self.dig_model.sdr_eeprom = self.sdr.get_eeprom_info()
 
         self.feed = Feed.NONE # Useful to indicate the feed that is connected to the digitiser
@@ -79,6 +80,11 @@ class Digitiser(App):
         logger.debug(f"Digitiser initialisation event")
 
         action = Action()
+
+        # If SDR is not connected, set timer to retry connection
+        if self.dig_model.sdr_connected == CommunicationStatus.NOT_ESTABLISHED:
+            action.set_timer_action(Action.Timer(name=f"sdr_retry", timer_action=5000))
+
         return action
 
     def process_tm_connected(self, event) -> Action:
@@ -251,6 +257,17 @@ class Digitiser(App):
                         action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
                 except Exception as e:
                     logger.error(f"Digitiser - Error processing user_ref in event: {e}")
+
+        elif event.name.startswith("sdr_retry"):
+            # Retry connecting to the SDR
+            self.sdr = SDR()
+            self.dig_model.sdr_connected = self.sdr.get_comms_status()
+
+            if self.dig_model.sdr_connected == CommunicationStatus.NOT_ESTABLISHED:
+                # If still not connected, set timer to retry connection
+                action.set_timer_action(Action.Timer(name=f"sdr_retry", timer_action=5000))
+            else:
+                logger.info("Digitiser successfully connected to SDR device.")
 
         return action
 

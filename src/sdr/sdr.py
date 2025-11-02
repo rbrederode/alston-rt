@@ -52,7 +52,7 @@ class SDR:
             if self.info:
                 logger.info(f"SDR connected, device information: {self.info}")
             else:
-                logger.warning("SDR connected but unable to retrieve device information.")
+                logger.warning("SDR unable to retrieve device information.")
 
             try:
                 self.rtlsdr = RtlSdr()
@@ -79,8 +79,8 @@ class SDR:
                 self.connected = CommunicationStatus.NOT_ESTABLISHED
                 logger.info("SDR connection closed.")
 
-    def get_connected(self) -> CommunicationStatus:
-        """ Get the current connection status of the SDR device.
+    def get_comms_status(self) -> CommunicationStatus:
+        """ Get the current comms status of the SDR device.
             :returns: CommunicationStatus indicating if the SDR is connected
         """
         return self.connected
