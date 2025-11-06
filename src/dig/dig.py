@@ -478,7 +478,7 @@ class Digitiser(App):
         )
         
         metadata = [   
-            {"property": "id", "value": self.dig_model.id},              # Digitiser Id
+            {"property": "dig_id", "value": self.dig_model.id},          # Digitiser Id
             {"property": "feed", "value": self.feed},                    # Feed Id
             {"property": "center_freq", "value": self.sdr.center_freq},  # Hz    
             {"property": "sample_rate", "value": self.sdr.sample_rate},  # Hz
