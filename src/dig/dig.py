@@ -166,15 +166,19 @@ class Digitiser(App):
         # Prepare rsp msg to tm containing result of initial api call
         tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
         tm_rsp.switch_from_to()
-        tm_rsp.set_api_call({
+        tm_rsp_api_call = {
             "msg_type": "rsp", 
             "action_code": api_call['action_code'], 
             "status": status, 
-            "message": message if message else "",
-            "property": api_call.get('property', ""),
-            "value": value if api_call.get('property', None) and isinstance(value, (str, float, int)) else "",
-        })
-       
+        }
+        if api_call.get('property') is not None:
+            tm_rsp_api_call["property"] = api_call['property']
+        if value is not None:
+            tm_rsp_api_call["value"] = value 
+        if message is not None:
+            tm_rsp_api_call["message"] = message
+
+        tm_rsp.set_api_call(tm_rsp_api_call)       
         action.set_msg_to_remote(tm_rsp)
         return action
 
