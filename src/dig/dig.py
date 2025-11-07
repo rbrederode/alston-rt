@@ -440,7 +440,7 @@ class Digitiser(App):
             api_call={
                 "msg_type": "adv", 
                 "action_code": "set", 
-                "property": tm_sdp.PROPERTY_STATUS, 
+                "property": tm_dig.PROPERTY_STATUS, 
                 "value": self.dig_model.to_dict(), 
                 "message": "DIG status update"
             })
