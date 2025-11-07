@@ -4,10 +4,10 @@ import enum
 from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
 
-from models.component import ComponentModel
+from models.base import BaseModel
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
 
-class ProcessorModel(ComponentModel):
+class ProcessorModel(BaseModel):
     """A class representing the processor model."""
 
     schema = Schema({

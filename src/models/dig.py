@@ -6,12 +6,12 @@ from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
 
 from models.app import AppModel
-from models.component import ComponentModel
+from models.base import BaseModel
 from models.health import HealthState
 from models.comms import CommunicationStatus
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
 
-class DigitiserModel(ComponentModel):
+class DigitiserModel(BaseModel):
     """A class representing the digitiser model."""
 
     schema = Schema({

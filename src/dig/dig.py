@@ -97,6 +97,14 @@ class Digitiser(App):
 
         self.dig_model.tm_connected = CommunicationStatus.ESTABLISHED
 
+        action = Action()
+        
+        # Send status advice message to Telescope Manager
+        tm_adv = self._construct_status_adv_to_tm()
+        action.set_msg_to_remote(tm_adv)
+        
+        return action
+
     def process_tm_disconnected(self, event) -> Action:
         """ Processes Telescope Manager disconnected events.
         """
@@ -147,9 +155,9 @@ class Digitiser(App):
                 elif not self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED:
                     logger.warning("Digitiser cannot send samples to Science Data Processor, not connected.")
 
-                    tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.dig_model.sdp_connected, message="Comms to SDP not established")
+                    # Send status advice message to Telescope Manager
+                    tm_adv = self._construct_status_adv_to_tm()
                     action.set_msg_to_remote(tm_adv)
-                    action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
 
                 elif payload is None:
                     # Wait for stream_samples timer to trigger again
@@ -180,10 +188,9 @@ class Digitiser(App):
         action = Action()
 
         if self.dig_model.tm_connected == CommunicationStatus.ESTABLISHED:
-            # Send SDP comms adv to TM
-            tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.dig_model.sdp_connected, message="Comms to SDP established")
+            # Send status advice message to Telescope Manager
+            tm_adv = self._construct_status_adv_to_tm()
             action.set_msg_to_remote(tm_adv)
-            action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
 
         return action
 
@@ -197,10 +204,9 @@ class Digitiser(App):
         action = Action()
 
         if self.dig_model.tm_connected == CommunicationStatus.ESTABLISHED:
-            # Send SDP disconnected adv to TM
-            tm_adv = self._construct_adv_to_tm(property=tm_dig.PROPERTY_SDP_COMMS, value=self.dig_model.sdp_connected, message="Comms to SDP not established")
+            # Send status advice message to Telescope Manager
+            tm_adv = self._construct_status_adv_to_tm()
             action.set_msg_to_remote(tm_adv)
-            action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=tm_adv))
 
         return action
 
@@ -286,21 +292,7 @@ class Digitiser(App):
 
         # If connected to Telescope Manager, send status advice message
         if self.dig_model.tm_connected == CommunicationStatus.ESTABLISHED:
-    
-            tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
-            tm_adv.set_json_api_header(
-                api_version=self.tm_api.get_api_version(), 
-                dt=datetime.now(timezone.utc), 
-                from_system=self.dig_model.app.app_name, 
-                to_system="tm", 
-                api_call={
-                    "msg_type": "adv", 
-                    "action_code": "set", 
-                    "property": tm_dig.PROPERTY_STATUS, 
-                    "value": self.dig_model.to_dict(), 
-                    "message": "Digitiser status update"
-                })
-
+            tm_adv = self._construct_status_adv_to_tm()
             action.set_msg_to_remote(tm_adv)
 
         return action
@@ -436,12 +428,10 @@ class Digitiser(App):
         else:
             return tm_dig.STATUS_SUCCESS, f"Digitiser method {call.__name__} invoked on SDR", result, None
 
-    def _construct_adv_to_tm(self, property, value, message) -> APIMessage:
-        """ Constructs an advice message to the Telescope Manager.
+    def _construct_status_adv_to_tm(self) -> APIMessage:
+        """ Constructs a status advice message for the Telescope Manager.
         """
-
         tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
-
         tm_adv.set_json_api_header(
             api_version=self.tm_api.get_api_version(), 
             dt=datetime.now(timezone.utc), 
@@ -450,11 +440,10 @@ class Digitiser(App):
             api_call={
                 "msg_type": "adv", 
                 "action_code": "set", 
-                "property": property, 
-                "value": value, 
-                "message": message if message else ""
-        })
-
+                "property": tm_sdp.PROPERTY_STATUS, 
+                "value": self.dig_model.to_dict(), 
+                "message": "DIG status update"
+            })
         return tm_adv
 
     def _construct_adv_to_sdp(self, status, message, value, payload: bytes) -> APIMessage:

@@ -2,6 +2,7 @@ import logging
 import json
 import map
 import os
+from pathlib import Path
 import time
 from datetime import datetime, timezone
 
@@ -36,8 +37,10 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # The SHEET ID for the ALSTON RADIO TELESCOPE google sheet
 ALSTON_RADIO_TELESCOPE = "1r73N0VZHSQC6RjRv94gzY50pTgRvaQWfctGGOMZVpzc"
-DIG_CONFIG = "DIG!D4:E11"       # Range for Digitiser configuration
-UI_TM_API = "UI_TM_API!"        # Range for UI-TM API data
+DIG001_CONFIG = "DIG001!D4:E11"     # Range for Digitiser 001 configuration
+DIG002_CONFIG = "DIG002!D4:E11"     # Range for Digitiser 002 configuration
+TM_UI_API = "TM_UI_API!"            # Range for UI-TM API data
+TM_UI_POLL_INTERVAL_S = 5            # Poll interval in seconds
 
 class TelescopeManager(App):
 
@@ -103,8 +106,8 @@ class TelescopeManager(App):
             property = method = value = None
 
             # Map from configuration item to method/property and value
-            method, value = map.get_method_name(new_item[0], new_item[1])
-            property, value = map.get_property_name(new_item[0], new_item[1]) if method is None else None, None
+            (method, value) = map.get_method_name(new_item[0], new_item[1])
+            (property, value) = map.get_property_name(new_item[0], new_item[1]) if method is None else (None, None)
                 
             if method is None and property is None:
                 logger.warning(f"Telescope Manager received unknown configuration item at row {i}: {new_item} with value {new_item[1]}")
@@ -275,12 +278,60 @@ class TelescopeManager(App):
 
     def process_status_event(self, event) -> Action:
         """ Processes status update events. 
-            The Telescope Manager does not need to take any action on status events.
-            Status is constantly monitored and updated in the Telescope Model.
+            Calls get_app_processor_state() to update the Telescope Model status.
+            Reads the scan store directory to update the scan store file lists.
         """
         status = self.get_app_processor_state()
-        self.telmodel.tm.last_update = datetime.now(timezone.utc)
 
+        scan_store_dir = self.telmodel.sdp.app.arguments.get('output_dir','~/')
+
+        if Path(scan_store_dir).exists():
+
+            # Read scan store directory listing
+            spr_files = list(Path(scan_store_dir).glob("*spr.csv"))
+            load_files = list(Path(scan_store_dir).glob("*load.csv"))
+            tsys_files = list(Path(scan_store_dir).glob("*tsys.csv"))
+            gain_files = list(Path(scan_store_dir).glob("*gain.csv"))
+            meta_files = list(Path(scan_store_dir).glob("*meta.json"))
+
+            # Sort by file name in reverse order (newest last)
+            spr_files.sort(key=lambda x: x.name, reverse=True)
+            load_files.sort(key=lambda x: x.name, reverse=True)
+            tsys_files.sort(key=lambda x: x.name, reverse=True)
+            gain_files.sort(key=lambda x: x.name, reverse=True)
+            meta_files.sort(key=lambda x: x.name, reverse=True)
+
+            # Limit to the latest 100 files of each type
+            spr_files = spr_files[:100]
+            load_files = load_files[:100]
+            tsys_files = tsys_files[:100]
+            gain_files = gain_files[:100]
+            meta_files = meta_files[:100]
+
+            # Combine into a single list of scan files
+            scan_files = spr_files + load_files + tsys_files + gain_files + meta_files
+
+            self.telmodel.tm.scan_store.spr_files = []
+            self.telmodel.tm.scan_store.load_files = []
+            self.telmodel.tm.scan_store.tsys_files = []
+            self.telmodel.tm.scan_store.gain_files = []
+            self.telmodel.tm.scan_store.meta_files = []
+
+            for scan_file in scan_files:
+                if scan_file.name.endswith("spr.csv"):
+                    self.telmodel.tm.scan_store.spr_files.append(scan_file.name)
+                elif scan_file.name.endswith("load.csv"):
+                    self.telmodel.tm.scan_store.load_files.append(scan_file.name)
+                elif scan_file.name.endswith("tsys.csv"):
+                    self.telmodel.tm.scan_store.tsys_files.append(scan_file.name)
+                elif scan_file.name.endswith("gain.csv"):
+                    self.telmodel.tm.scan_store.gain_files.append(scan_file.name)
+                elif scan_file.name.endswith("meta.json"):
+                    self.telmodel.tm.scan_store.meta_files.append(scan_file.name)
+
+            self.telmodel.tm.scan_store.last_update = datetime.now(timezone.utc)
+
+        self.telmodel.tm.last_update = datetime.now(timezone.utc)
 
     def _construct_req_to_dig(self, property=None, method=None, value=None, message=None) -> APIMessage:
         """ Constructs a request message to the Digitiser.
@@ -394,11 +445,11 @@ def main():
         while True:
 
             # Exchange Digitiser data with the UI if comms is established
-            if tm.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
+            if tm.telmodel.tm.dig_connected == CommunicationStatus.ESTABLISHED:
                 
                 result = execute_sheets_request(sheet.values().get(
                     spreadsheetId=ALSTON_RADIO_TELESCOPE, 
-                    range=DIG_CONFIG,
+                    range=DIG001_CONFIG,
                     valueRenderOption="UNFORMATTED_VALUE")) # Retrieve values in their original form e.g. int, float, string, date
 
                 if 'error' in result:
@@ -420,7 +471,7 @@ def main():
 
                 execute_sheets_request(sheet.values().update(
                     spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                    range=UI_TM_API + "B2",                      
+                    range=TM_UI_API + "B2",                      
                     valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
                     body={"values": [[dig_str]]}
                 ))
@@ -430,14 +481,14 @@ def main():
                 last_dig_snapshot = None
 
             # Exchange SDP data with the UI if comms is established
-            if tm.telmodel.sdp.tm_connected == CommunicationStatus.ESTABLISHED:
+            if tm.telmodel.tm.sdp_connected == CommunicationStatus.ESTABLISHED:
 
                 sdp_dict = tm.telmodel.sdp.to_dict()
                 sdp_str = json.dumps(sdp_dict, indent=4)
 
                 execute_sheets_request(sheet.values().update(
                     spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                    range=UI_TM_API + "C2",                      
+                    range=TM_UI_API + "C2",
                     valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
                     body={"values": [[sdp_str]]}
                 ))
@@ -448,13 +499,13 @@ def main():
 
             execute_sheets_request(sheet.values().update(
                 spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                range=UI_TM_API + "A2",
+                range=TM_UI_API + "A2",
                 valueInputOption="USER_ENTERED",  # allow Sheets to parse as datetime
                 body={"values": [[tm_str]]}
             ))
 
-            # Poll for config changes every 10 seconds
-            time.sleep(10) 
+            # TM to UI Poll interval
+            time.sleep(TM_UI_POLL_INTERVAL_S) 
     except KeyboardInterrupt:
         pass
     finally:

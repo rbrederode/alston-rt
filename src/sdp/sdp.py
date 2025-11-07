@@ -14,14 +14,15 @@ from ipc.message import AppMessage
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.comms import CommunicationStatus
+from models.dsh import Feed
 from models.health import HealthState
+from models.scan import ScanModel, ScanState
 from models.sdp import ScienceDataProcessorModel
 from obs.scan import Scan
 from signal_display import SignalDisplay
 from util import log
 from util.xbase import XBase, XStreamUnableToExtract
 
-SCAN_DURATION = 60 # Duration of each scan in seconds
 #OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
 OUTPUT_DIR = '/Users/r.brederode/samples'  # Directory to store samples
 
@@ -75,6 +76,8 @@ class SDP(App):
         arg_parser.add_argument("--dig_host", type=str, required=False, help="TCP host to listen on for Digitiser commands", default="localhost")
         arg_parser.add_argument("--dig_port", type=int, required=False, help="TCP server port for upstream Digitiser transport", default=60000)
 
+        arg_parser.add_argument("--output_dir", type=str, required=False, help="Directory to store captured samples", default=OUTPUT_DIR)
+
     def process_init(self) -> Action:
         """ Processes initialisation events.
         """
@@ -90,6 +93,15 @@ class SDP(App):
 
         self.sdp_model.dig_connected = CommunicationStatus.ESTABLISHED
 
+        action = Action()
+
+        if self.sdp_model.tm_connected == CommunicationStatus.ESTABLISHED:
+            # Send status advice message to Telescope Manager
+            tm_adv = self._construct_status_adv_to_tm()
+            action.set_msg_to_remote(tm_adv)
+
+        return action
+
     def process_dig_disconnected(self, event) -> Action:
         """ Processes Digitiser disconnected events.
         """
@@ -97,10 +109,14 @@ class SDP(App):
 
         self.sdp_model.dig_connected = CommunicationStatus.NOT_ESTABLISHED
 
-        # Flush any pending scans
-        while not self.scan_q.empty():
-            flushed_scan = self.scan_q.get()
-            logger.info(f"SDP flushed scan due to digitiser disconnect: {flushed_scan}")
+        action = Action()
+
+        if self.sdp_model.tm_connected == CommunicationStatus.ESTABLISHED:
+            # Send status advice message to Telescope Manager
+            tm_adv = self._construct_status_adv_to_tm()
+            action.set_msg_to_remote(tm_adv)
+
+        return action
         
     def process_dig_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Digitiser service access point (SAP)
@@ -119,7 +135,7 @@ class SDP(App):
             metadata = api_call.get('metadata', [])
 
             # Default values
-            center_freq = gain = sample_rate = read_counter = read_start = read_end = feed = None
+            center_freq = gain = sample_rate = read_counter = read_start = read_end = feed = dig_id = None
             
             # Extract sample metadata fields
             for item in metadata or []:
@@ -138,16 +154,18 @@ class SDP(App):
                 elif prop == sdp_dig.PROPERTY_READ_END:
                     read_end = datetime.fromisoformat(value)
                 elif prop == sdp_dig.PROPERTY_FEED:
-                    feed = value
+                    feed = Feed(value)
+                elif prop == sdp_dig.PROPERTY_DIG_ID:
+                    dig_id = value
 
-            logger.debug(f"SDP received digitiser samples message with metadata: feed={feed}, center_freq={center_freq}, gain={gain}, sample rate={sample_rate}, read counter={read_counter}")
+            logger.info(f"SDP received digitiser samples message with metadata: digitiser={dig_id}, feed={feed}, center_freq={center_freq}, gain={gain}, sample rate={sample_rate}, read counter={read_counter}")
 
             with self._rlock:                    
                 # Loop through scans in the queue until we find one that matches the read_counter
                 # This handles situations where samples are received out of order
                 match = None
 
-                pending_scans = [s for s in list(self.scan_q.queue) if s.get_status() == "Empty" or s.get_status() == "WIP"]
+                pending_scans = [s for s in list(self.scan_q.queue) if s.get_status() in [ScanState.EMPTY, ScanState.WIP] and s.get_dig_id() == dig_id]
                 abort_scans = []
 
                 for scan in pending_scans:
@@ -155,50 +173,49 @@ class SDP(App):
                     if read_counter >= start_idx and read_counter <= end_idx:
 
                         # Verify that the digitiser metadata still matches the scan parameters
-                        if scan.center_freq == center_freq and scan.feed == feed:
+                        if scan.scan_model.center_freq == center_freq and scan.scan_model.feed == feed:
                             match = scan
                             break
                         else:
-                            logger.warning(f"SDP scan parameters no longer match digitiser sample metadata for scan id {scan.id}: "
-                                           f"scan(center_freq={scan.center_freq}, sample_rate={scan.sample_rate}, gain={scan.gain}, feed={scan.feed}) vs "
-                                           f"metadata(center_freq={center_freq}, sample_rate={sample_rate}, gain={gain}, feed={feed})"
-                            )
+                            logger.warning(f"SDP aborting scan:scan parameters no longer match digitiser sample metadata for scan id {scan.scan_model.scan_id}: "
+                                           f"scan(center_freq={scan.scan_model.center_freq}, feed={scan.scan_model.feed}) vs "
+                                           f"metadata(center_freq={center_freq}, feed={feed})")
                             abort_scans.append(scan)
 
-                    # If the Digitiser read_counter has moved passed this scan by more than its duration
-                    elif read_counter > end_idx + scan.duration: 
+                    # If the Digitiser read_counter is greater than the scan range by the scan duration or the digitiser has reset itself, abort the scan
+                    elif read_counter > end_idx + scan.scan_model.duration or read_counter < start_idx:
                         abort_scans.append(scan)  # add it to the abort list
+                        logger.warning(f"SDP aborting scan id: {scan.scan_model.scan_id}, digitiser read_counter {read_counter} has moved beyond this scan index ({end_idx})")
 
                 # If we found scans to abort, do so
                 for scan in abort_scans:
-                    scan.abort()
-                    scan.save_to_disk(output_dir=OUTPUT_DIR, include_iq=False)
-                    # Remove this specific scan from the underlying queue 
-                    try:
-                        self.scan_q.queue.remove(scan)
-                        # Balance the unfinished task count for the removed item
-                        self.scan_q.task_done()
-                    except ValueError:
-                        logger.warning(f"Attempted to remove scan {scan} from queue but it was not found")
+                    self._abort_scan(scan)
 
                 # If no matching scan was found, create a new scan
                 if match is None:
 
-                    scan = Scan(
-                        start_idx=read_counter, 
-                        duration=SCAN_DURATION, 
-                        sample_rate=sample_rate, 
+                    scan_model = ScanModel(
+                        dig_id=dig_id if dig_id is not None else "<undefined>",
+                        start_idx=read_counter if read_counter is not None else 0,
+                        duration=self.sdp_model.scan_duration,
+                        sample_rate=sample_rate if sample_rate is not None else 0,
                         channels=self.sdp_model.channels,
-                        center_freq=center_freq,
-                        gain=gain,
-                        feed=feed
-                    )
+                        center_freq=center_freq if center_freq is not None else 0,
+                        gain=gain if gain is not None else 0,
+                        feed=feed if feed is not None else Feed.NONE)
+
+                    scan = Scan(scan_model=scan_model)
                     self.scan_q.put(scan)
+                    self.sdp_model.scans_created += 1
                     match = scan
+
                     logger.debug(f"SDP created new scan: {scan}")
 
             if match is not None:              
-                logger.debug(f"SDP loading samples into scan: {match}")                        
+                logger.debug(f"SDP loading samples into scan: {match}")
+
+                self.sdp_model.add_scan(match.scan_model)
+
                 # Convert payload to complex64 numpy array
                 iq_samples = np.frombuffer(payload, dtype=np.complex64)
               
@@ -207,35 +224,18 @@ class SDP(App):
                         read_start=read_start,
                         read_end=read_end):
                     status = sdp_dig.STATUS_SUCCESS
-                    message = f"SDP loaded samples into scan id: {match.id}"
+                    message = f"SDP loaded samples into scan id: {match.scan_model.scan_id}"
                 else:
                     status = sdp_dig.STATUS_ERROR
-                    message = f"SDP failed to load samples into scan id: {match.id}"
+                    message = f"SDP failed to load samples into scan id: {match.scan_model.scan_id}"
 
-                    if match.load_failures >= 3:
-                        logger.error(f"SDP scan id {match.id} has exceeded maximum load failures, aborting scan")
-                        match.abort()
-                        match.save_to_disk(output_dir=OUTPUT_DIR, include_iq=False)
-                        # Remove the specific aborted scan from the queue safely
-                        with self._rlock:
-                            try:
-                                self.scan_q.queue.remove(match)
-                                self.scan_q.task_done()
-                            except ValueError:
-                                logger.warning(f"Aborted scan {match} not found in queue when removing")
+                    if match.scan_model.load_failures >= 3:
+                        logger.error(f"SDP aborting scan id: {match.scan_model.scan_id} has exceeded maximum load failures: {match.scan_model.load_failures}")
+                        self._abort_scan(match)
 
-                if match.get_status() == "Complete":
+                if match.get_status() == ScanState.COMPLETE:
                     logger.info(f"SDP scan is complete: {match}")
-              
-                    match.save_to_disk(output_dir=OUTPUT_DIR, include_iq=False)
-                    match.del_iq()
-                    # Remove the specific completed scan from the queue safely
-                    with self._rlock:
-                        try:
-                            self.scan_q.queue.remove(match)
-                            self.scan_q.task_done()
-                        except ValueError:
-                            logger.warning(f"Completed scan {match} not found in queue when removing")
+                    self._complete_scan(match)
                     
         # Prepare rsp msg to dig acknowledging receipt of the incoming api message
         dig_rsp = APIMessage(api_msg=api_msg, api_version=self.dig_api.get_api_version())
@@ -257,6 +257,13 @@ class SDP(App):
         logger.info(f"Science Data Processor connected to Telescope Manager: {event.remote_addr}")
 
         self.sdp_model.tm_connected = CommunicationStatus.ESTABLISHED
+        
+        action = Action()
+        
+        # Send initial status advice message to Telescope Manager
+        tm_adv = self._construct_status_adv_to_tm()
+        action.set_msg_to_remote(tm_adv)
+        return action
 
     def process_tm_disconnected(self, event) -> Action:
         """ Processes Telescope Manager disconnected events.
@@ -291,21 +298,7 @@ class SDP(App):
 
         # If connected to Telescope Manager, send status advice message
         if self.sdp_model.tm_connected == CommunicationStatus.ESTABLISHED:
-    
-            tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
-            tm_adv.set_json_api_header(
-                api_version=self.tm_api.get_api_version(), 
-                dt=datetime.now(timezone.utc), 
-                from_system=self.sdp_model.app.app_name, 
-                to_system="tm", 
-                api_call={
-                    "msg_type": "adv", 
-                    "action_code": "set", 
-                    "property": tm_sdp.PROPERTY_STATUS, 
-                    "value": self.sdp_model.to_dict(), 
-                    "message": "SDP status update"
-                })
-
+            tm_adv = self._construct_status_adv_to_tm()
             action.set_msg_to_remote(tm_adv)
 
         return action
@@ -320,6 +313,57 @@ class SDP(App):
         else:
             return HealthState.OK
 
+    def _construct_status_adv_to_tm(self) -> APIMessage:
+        """ Constructs a status advice message for the Telescope Manager.
+        """
+        tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
+        tm_adv.set_json_api_header(
+            api_version=self.tm_api.get_api_version(), 
+            dt=datetime.now(timezone.utc), 
+            from_system=self.sdp_model.app.app_name, 
+            to_system="tm", 
+            api_call={
+                "msg_type": "adv", 
+                "action_code": "set", 
+                "property": tm_sdp.PROPERTY_STATUS, 
+                "value": self.sdp_model.to_dict(), 
+                "message": "SDP status update"
+            })
+        return tm_adv
+
+    def _abort_scan(self, scan: Scan):
+        """ Aborts a scan and performs necessary cleanup.
+        """
+        scan.set_status(ScanState.ABORTED)
+        scan.save_to_disk(output_dir=self.get_args().output_dir, include_iq=False)
+        scan.del_iq()
+
+        self.sdp_model.scans_aborted += 1
+
+        # Remove this specific scan from the underlying queue 
+        try:
+            self.scan_q.queue.remove(scan)
+            # Balance the unfinished task count for the removed item
+            self.scan_q.task_done()
+        except ValueError:
+            logger.warning(f"Attempted to remove scan {scan} from queue but it was not found")
+
+    def _complete_scan(self, scan: Scan):
+        """ Completes a scan and performs necessary cleanup.
+        """
+        scan.save_to_disk(output_dir=self.get_args().output_dir, include_iq=False)
+        scan.del_iq()
+
+        self.sdp_model.scans_completed += 1
+
+        # Remove this specific scan from the underlying queue 
+        try:
+            self.scan_q.queue.remove(scan)
+            # Balance the unfinished task count for the removed item
+            self.scan_q.task_done()
+        except ValueError:
+            logger.warning(f"Attempted to remove scan {scan} from queue but it was not found")
+
 def main():
     sdp = SDP()
     sdp.start()
@@ -329,7 +373,7 @@ def main():
             # If there is a scan in the queue, process it, else sleep & continue 
             try:
                 scan = sdp.scan_q.queue[0]
-                if scan.get_status() == "Empty":
+                if scan.get_status() == ScanState.EMPTY:
                     raise IndexError  # No samples loaded yet, skip processing
             except IndexError:
                 time.sleep(0.1)
@@ -340,13 +384,13 @@ def main():
             # Call display while the scan is being loaded 
             # Scan will transition to "Complete" or "Aborted" when done
             # This allows for interactive display of the scan as samples are loaded
-            while scan.get_status() == "WIP":
+            while scan.get_status() == ScanState.WIP:
                 sdp.signal_display.display()
                 time.sleep(1)  # Update display every second
             
             # Final display call to ensure complete rendering
             sdp.signal_display.display()
-            sdp.signal_display.save_scan_figure(output_dir=OUTPUT_DIR)
+            sdp.signal_display.save_scan_figure(output_dir=sdp.get_args().output_dir)
                 
     except KeyboardInterrupt:
         pass

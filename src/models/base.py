@@ -16,8 +16,8 @@ from models.health import HealthState
 
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
 
-# Base class to model any telescope component
-class ComponentModel:
+# Base class to model any telescope construct
+class BaseModel:
     """
     Base class that provides:
       - schema validation using `schema` library
@@ -71,7 +71,10 @@ class ComponentModel:
 
         from models.app import AppModel
         from models.comms import CommunicationStatus
+        from models.dsh import Feed
         from models.health import HealthState
+        from models.scan import ScanModel, ScanState
+        from models.tm import ScanStoreModel
 
         for key, value in data.items():
             if key in self.schema.schema:
@@ -86,7 +89,19 @@ class ComponentModel:
 
                 # If we determined an actual Python type, use isinstance checks
                 if isinstance(expected_type, type):
-                    if not isinstance(value, expected_type):
+                    # Special handling for processing_scans: convert list of dicts to list of ScanModel instances
+                    # This must happen before the isinstance check because value is already a list
+                    if key == "processing_scans" and expected_type == list and isinstance(value, list):
+                        converted_scans = []
+                        for scan_dict in value:
+                            if isinstance(scan_dict, dict):
+                                scan_instance = ScanModel()
+                                scan_instance.from_dict(scan_dict)
+                                converted_scans.append(scan_instance)
+                            elif isinstance(scan_dict, ScanModel):
+                                converted_scans.append(scan_dict)
+                        value = converted_scans
+                    elif not isinstance(value, expected_type):
                         if expected_type == int:
                             value = int(value)
                         elif expected_type == float:
@@ -97,6 +112,13 @@ class ComponentModel:
                             value = list(value)
                         elif expected_type == dict:
                             value = dict(value)
+                        elif expected_type == ScanStoreModel:
+                            # Build a default instance then update via from_dict to
+                            # allow nested conversion of enum/string fields without
+                            # tripping schema validation in the constructor.
+                            instance = ScanStoreModel()
+                            instance.from_dict(value)
+                            value = instance
                         elif expected_type == CommunicationStatus:
                             # Accept enum instance, numeric value, numeric string or name
                             if isinstance(value, CommunicationStatus):
@@ -120,11 +142,28 @@ class ComponentModel:
                                     value = HealthState(int(value))
                             else:
                                 value = HealthState(int(value))
+                        elif expected_type == ScanState:
+                            if isinstance(value, ScanState):
+                                pass
+                            elif isinstance(value, str):
+                                try:
+                                    value = ScanState[value]
+                                except KeyError:
+                                    value = ScanState(int(value))
+                            else:
+                                value = ScanState(int(value))
                         elif expected_type == AppModel:
                             # Build a default instance then update via from_dict to
                             # allow nested conversion of enum/string fields without
                             # tripping schema validation in the constructor.
                             instance = AppModel()
+                            instance.from_dict(value)
+                            value = instance
+                        elif expected_type == ScanModel:
+                            # Build a default instance then update via from_dict to
+                            # allow nested conversion of enum/string fields without
+                            # tripping schema validation in the constructor.
+                            instance = ScanModel()
                             instance.from_dict(value)
                             value = instance
                         elif expected_type == datetime:
@@ -133,7 +172,17 @@ class ComponentModel:
                                 try:
                                     value = datetime.fromisoformat(value)
                                 except Exception:
+                                    print(f"Warning: could not parse datetime string for key '{key}': {value}")
                                     pass
+                        elif expected_type is Feed:
+                            
+                            if isinstance(value, int):
+                                value = Feed(value)
+                            elif isinstance(value, str):
+                                try:
+                                    value = Feed[value]
+                                except KeyError:
+                                    value = Feed(int(value))
                         else:
                             raise XAPIValidationFailed(f"Invalid type for '{key}': {type(value).__name__}, expected {expected_type.__name__}")
 
@@ -142,7 +191,12 @@ class ComponentModel:
                     # heuristics to convert common nested values (enums, dates,
                     # nested app models, etc.). This keeps from_dict robust
                     # when Schema internals are not easy to introspect.
-                    if key in ("tm_connected", "sdp_connected", "sdr_connected"):
+
+
+                    # Check if the key contains the string "connected"
+
+
+                    if "connected" in key:
                         # CommunicationStatus conversion
                         if isinstance(value, CommunicationStatus):
                             pass
@@ -163,7 +217,17 @@ class ComponentModel:
                                 value = HealthState(int(value))
                         else:
                             value = HealthState(int(value))
-                    elif key == "last_update" and isinstance(value, str):
+                    elif key == "status":
+                        if isinstance(value, ScanState):
+                            pass
+                        elif isinstance(value, str):
+                            try:
+                                value = ScanState[value]
+                            except KeyError:
+                                value = ScanState(int(value))
+                        else:
+                            value = ScanState(int(value))
+                    elif key in ("last_update", "created", "read_start", "read_end", "prev_read_end") and isinstance(value, str):
                         # Parse ISO datetime strings
                         try:
                             value = datetime.fromisoformat(value)
@@ -174,6 +238,14 @@ class ComponentModel:
                         instance = AppModel()
                         instance.from_dict(value)
                         value = instance
+                    elif key == "feed" and isinstance(value, int):
+                        from models.dsh import Feed
+                        value = Feed(value)
+                    elif key == "scan_store" and isinstance(value, dict):
+                        instance = ScanStoreModel()
+                        instance.from_dict(value)
+                        value = instance
+
                     if expected_type == int:
                         value = int(value)
                     elif expected_type == float:
@@ -212,6 +284,28 @@ class ComponentModel:
                         # allow nested conversion of enum/string fields without
                         # tripping schema validation in the constructor.
                         instance = AppModel()
+                        instance.from_dict(value)
+                        value = instance
+                    elif expected_type == ScanModel:
+                        # Build a default instance then update via from_dict to
+                        # allow nested conversion of enum/string fields without
+                        # tripping schema validation in the constructor.
+                        instance = ScanModel()
+                        instance.from_dict(value)
+                        value = instance
+                    elif expected_type == datetime:
+                        # Parse ISO datetime strings to datetime instances
+                        if isinstance(value, str):
+                            try:
+                                value = datetime.fromisoformat(value)
+                            except Exception:
+                                print(f"Warning: could not parse datetime string for key '{key}': {value}")
+                                pass
+                    elif expected_type == ScanStoreModel:
+                        # Build a default instance then update via from_dict to
+                        # allow nested conversion of enum/string fields without
+                        # tripping schema validation in the constructor.
+                        instance = ScanStoreModel()
                         instance.from_dict(value)
                         value = instance
                     else:

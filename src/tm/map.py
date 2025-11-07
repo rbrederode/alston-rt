@@ -23,7 +23,7 @@ _config_to_feed = {
     "LOAD": dsh.Feed.LOAD,
 }
 
-def get_property_name(config_item: str, value) -> str:
+def get_property_name(config_item: str, value) -> (str, Any):
     """ Get the property name for a given configuration item.
     """
     property = _config_to_property.get(config_item, None)

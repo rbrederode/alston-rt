@@ -32,7 +32,7 @@ def gen_file_prefix(
         :returns: A string representing the file prefix
     """
 
-    return dt.strftime("%Y%m%dT%H%M%S") + \
+    return dt.strftime("%Y-%m-%dT%H%M%S") + \
         "-f" + str(feed) + \
         "-g" + str(gain) + \
         "-du" + str(duration) + \

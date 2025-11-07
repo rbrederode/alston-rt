@@ -2,10 +2,10 @@ import enum
 from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
 
-from models.component import ComponentModel
+from models.base import BaseModel
 from models.health import HealthState
 
-class AppModel(ComponentModel):
+class AppModel(BaseModel):
     """A class representing an App(lication) model."""
 
     schema = Schema({

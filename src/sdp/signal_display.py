@@ -42,9 +42,9 @@ class SignalDisplay:
         self.scan = scan
         self.sec = None
         
-        plt.close(scan.id)  # Close any existing figure with the same scan number
+        plt.close(scan.scan_model.scan_id)  # Close any existing figure with the same scan number
 
-        self.fig = plt.figure(num=scan.id, figsize=FIG_SIZE)
+        self.fig = plt.figure(num=scan.scan_model.scan_id, figsize=FIG_SIZE)
         self.sig = [None] * 5  # Initialize axes for the subplots
 
         self.sig[0] = self.fig.add_subplot(self.gs0[0]) # Power spectrum summed per second
@@ -55,9 +55,9 @@ class SignalDisplay:
         self.sig[4] = self.fig.add_subplot(self.gs1[1]) # Total power timeline
 
         self.fig.subplots_adjust(top=0.78)
-        self.fig.suptitle(f"Feed: {scan.feed} Scan: {scan.id} Center Freq: {scan.center_freq/1e6:.2f} MHz, Gain: {scan.gain} dB, Sample Rate: {scan.sample_rate/1e6:.2f} MHz, Channels: {scan.channels}", fontsize=12, y=0.96)
+        self.fig.suptitle(f"Feed: {scan.scan_model.feed.name} Scan: {scan.scan_model.scan_id} Center Freq: {scan.scan_model.center_freq/1e6:.2f} MHz, Gain: {scan.scan_model.gain} dB, Sample Rate: {scan.scan_model.sample_rate/1e6:.2f} MHz, Channels: {scan.scan_model.channels}", fontsize=12, y=0.96)
 
-        self.extent = [(scan.center_freq + scan.sample_rate / -2) / 1e6, (scan.center_freq + scan.sample_rate / 2) / 1e6, scan.duration, 0]
+        self.extent = [(scan.scan_model.center_freq + scan.scan_model.sample_rate / -2) / 1e6, (scan.scan_model.center_freq + scan.scan_model.sample_rate / 2) / 1e6, scan.scan_model.duration, 0]
 
     def display(self):
         """
@@ -74,7 +74,7 @@ class SignalDisplay:
         if l_sec <= 0:
             return
 
-        logger.info(f"Signal display updating for scan {self.scan.id}, from second {self.sec} to {l_sec} of {self.scan.duration}")
+        logger.info(f"Signal display updating for scan {self.scan.scan_model.scan_id}, from second {self.sec} to {l_sec} of {self.scan.scan_model.duration}")
 
         if self.sec is None:
 
@@ -108,14 +108,14 @@ class SignalDisplay:
 
         # Plot the summed power spectrum and sky signal for the current second
         self.sig[0].plot(
-            np.linspace(self.extent[0], self.extent[1], self.scan.channels), 
-            self.scan.spr.flatten()[(l_sec-1)*self.scan.channels:(l_sec)*self.scan.channels], 
+            np.linspace(self.extent[0], self.extent[1], self.scan.scan_model.channels), 
+            self.scan.spr.flatten()[(l_sec-1)*self.scan.scan_model.channels:(l_sec)*self.scan.scan_model.channels], 
             color='red', 
             label='Signal (SPR)'
         )
 
         self.sig[0].plot(
-            np.linspace(self.extent[0], self.extent[1], self.scan.channels), 
+            np.linspace(self.extent[0], self.extent[1], self.scan.scan_model.channels), 
             self.scan.bsl, 
             color='black', 
             label=label
@@ -123,8 +123,8 @@ class SignalDisplay:
         self.sig[0].legend(loc='lower right')
 
         self.sig[1].plot(
-            np.linspace(self.extent[0], self.extent[1], self.scan.channels), 
-            self.scan.spr.flatten()[(l_sec-1)*self.scan.channels:(l_sec)*self.scan.channels] / self.scan.bsl, 
+            np.linspace(self.extent[0], self.extent[1], self.scan.scan_model.channels), 
+            self.scan.spr.flatten()[(l_sec-1)*self.scan.scan_model.channels:(l_sec)*self.scan.scan_model.channels] / self.scan.bsl, 
             color='orange', 
             label='Signal (SPR/BSL)'
         )
@@ -136,10 +136,10 @@ class SignalDisplay:
         self.sig[3].axhline(y=33, color='green', linestyle='--', label='33%')
         self.sig[3].axhline(y=66, color='red', linestyle='--', label='66%')
         self.sig[3].legend(loc='lower right')
-        
-        if l_sec == self.scan.duration:
-            tpw = np.zeros(self.scan.duration, dtype=np.float64)  # Initialise (scans * duration * iterations) array for total power sky timeline
-             # Sum the power spectrum for each second in the current scan
+
+        if l_sec == self.scan.scan_model.duration:
+            tpw = np.zeros(self.scan.scan_model.duration, dtype=np.float64)  # Initialise (scans * duration * iterations) array for total power sky timeline
+            # Sum the power spectrum for each second in the current scan
             tpw[:] = np.sum(self.scan.spr, axis=1) # Total Power per second
             # Avg of the total power per second
             avg_tpwr = np.mean(tpw[:])
@@ -150,7 +150,7 @@ class SignalDisplay:
         self.init_pwr_spectrum_axes(self.sig[1], "Power/Sec (SPR/BSL)", self.extent)  # Initialize the sky signal axes
         self.init_waterfall_axes(self.sig[2])                        # Initialize the waterfall plot axes
         self.init_saturation_axes(self.sig[3])                       # Initialize the saturation axes
-        self.init_total_power_axes(self.sig[4], self.scan.duration)  # Initialize the total power timeline axes
+        self.init_total_power_axes(self.sig[4], self.scan.scan_model.duration)  # Initialize the total power timeline axes
 
         # Show the signal displays to the user
         plt.draw()
@@ -168,8 +168,9 @@ class SignalDisplay:
         if output_dir is None or output_dir == "":
             output_dir = "."
 
-        prefix = gen_file_prefix(dt=self.scan.read_start, feed=self.scan.feed, gain=self.scan.gain, duration=self.scan.duration, 
-            sample_rate=self.scan.sample_rate, center_freq=self.scan.center_freq, channels=self.scan.channels, entity_id=self.scan.id, filetype="sigfig")
+        prefix = gen_file_prefix(dt=self.scan.scan_model.read_start, feed=self.scan.scan_model.feed, gain=self.scan.scan_model.gain, 
+            duration=self.scan.scan_model.duration, sample_rate=self.scan.scan_model.sample_rate, center_freq=self.scan.scan_model.center_freq, 
+            channels=self.scan.scan_model.channels, entity_id=self.scan.scan_model.scan_id, filetype="sigfig")
 
         filename = f"{output_dir}/" + prefix + ".png"
 
@@ -178,7 +179,7 @@ class SignalDisplay:
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
         self.fig.savefig(str(filepath))
-        logger.info(f"Signal display scan {self.scan.id} figure saved to {filepath}")
+        logger.info(f"Signal display scan {self.scan.scan_model.scan_id} figure saved to {filepath}")
         return True
 
     def init_pwr_spectrum_axes(self, axes, title, extent, units='[a.u.]'):

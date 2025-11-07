@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
 
 from models.app import AppModel
-from models.component import ComponentModel
+from models.base import BaseModel
+from models.comms import CommunicationStatus
 from models.health import HealthState
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
 
@@ -42,7 +43,7 @@ class Feed(enum.IntEnum):
     LF_400 = 3      # Loop Feed 400 MHz
     LOAD = 4        # Load for calibration
 
-class DishModel(ComponentModel):
+class DishModel(BaseModel):
     """A class representing the dish model."""
 
     schema = Schema({
@@ -52,6 +53,7 @@ class DishModel(ComponentModel):
         "mode": And(DishMode, lambda v: isinstance(v, DishMode)),
         "pointing_state": And(PointingState, lambda v: isinstance(v, PointingState)),
         "capability_state": And(CapabilityStates, lambda v: isinstance(v, CapabilityStates)),
+        "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -89,6 +91,7 @@ class DishModel(ComponentModel):
             "mode": DishMode.UNKNOWN,
             "pointing_state": PointingState.UNKNOWN,
             "capability_state": CapabilityStates.UNKNOWN,
+            "tm_connected": CommunicationStatus.NOT_ESTABLISHED,
             "last_update": datetime.now(timezone.utc),
         }
 
@@ -117,6 +120,7 @@ if __name__ == "__main__":
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
         capability_state=CapabilityStates.UNKNOWN,
+        tm_connected=CommunicationStatus.NOT_ESTABLISHED,
         last_update=datetime.now(timezone.utc)
     )
 
