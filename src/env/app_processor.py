@@ -47,13 +47,10 @@ class AppProcessor(Processor):
         
         try:
             event.notify_dequeued()
-            # Process status update of App here
 
             handler_method = "get_health_state"
             if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
                 self.driver.app_model.health = getattr(self.driver, handler_method)()
-            else:
-                self.driver.app_model.health = HealthState.UNKNOWN
 
             logger.info(f"AppProcessor {self.name} health state is {self.driver.app_model.health.name}")
 
@@ -77,7 +74,7 @@ class AppProcessor(Processor):
                 try:
                     self.initialise_app()
                 except Exception as e:
-                    logger.error(f"AppProcessor: Error initialising app: {e}")
+                    logger.exception(f"AppProcessor: Exception initialising app: {e}")
                     return False
 
             elif isinstance(event, StatusUpdateEvent):
@@ -85,7 +82,7 @@ class AppProcessor(Processor):
                 try:
                     self.process_status_update(event)
                 except Exception as e:
-                    logger.error(f"AppProcessor: Error processing status update event {event}: {e}")
+                    logger.exception(f"AppProcessor: Exception processing status update event {event}: {e}")
                     return False
 
             elif isinstance(event, events.TimerEvent):
@@ -99,13 +96,17 @@ class AppProcessor(Processor):
                     try:
                         event.user_callback(event.user_ref)
                     except Exception as e:
-                        logger.error(f"AppProcessor {self.name} error in user callback for timer event {event}: {e}")
+                        logger.exception(f"AppProcessor {self.name} exception in user callback for timer event {event}: {e}")
                         return False
 
                 handler_method = "process_timer_event"
 
                 if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
-                    self.performActions(getattr(self.driver, handler_method)(event))
+                    try:
+                        self.performActions(getattr(self.driver, handler_method)(event))
+                    except Exception as e:
+                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing timer event {event}: {e}")
+                        return False
                 return True
 
             elif isinstance(event, events.DataEvent):
@@ -113,24 +114,24 @@ class AppProcessor(Processor):
                 api_msg = APIMessage()
 
                 try:
+                    # Unpack the event's data into an API message
                     api_msg.from_data(event.data)
                     api_msg.add_echo_api_header()
 
                     api, endpoint = self.driver.get_interface(api_msg.get_from_system())
 
+                    # Validate and translate the API message to the driver's API version
                     api_transl_msg = api.translate(api_msg.get_json_api_header())
                     api.validate(api_transl_msg)
 
-                    # Resolve the driver's application name safely. Some tests or
-                    # non-App drivers may provide `app_name` directly or not have
-                    # an `app_model` at all. Fall back to the driver's attribute
-                    # or the driver class name to avoid AttributeError.
+                    # Resolve the driver's application name safely. 
                     if getattr(self.driver, "app_model", None) is not None and hasattr(self.driver.app_model, "app_name"):
                         driver_app_name = self.driver.app_model.app_name
                     else:
                         logger.error(f"AppProcessor {self.name} driver has no app_model or app_name attribute")
                         driver_app_name = getattr(self.driver, "app_name", None) or type(self.driver).__name__
 
+                    # Check if the message is not intended for this App
                     if api_msg.get_to_system() != driver_app_name:
                         rsp_msg = APIMessage(api_msg.get_json_api_header())
                         rsp_msg.switch_from_to()
@@ -145,21 +146,27 @@ class AppProcessor(Processor):
                         return True
 
                 except XBase as e:
-                    logger.error(f"AppProcessor {self.name} failed to process data event from Service Access Point {event.local_sap.description}: {e}")
+                    logger.exception(f"AppProcessor {self.name} failed to process data event from Service Access Point {event.local_sap.description}: {e}")
                     return False
 
+                # Handle debug get/set requests
                 api_call = api_msg.get_api_call()
                 if api_call['msg_type'] == 'req' and api_call['action_code'] in ('set', 'get') and api_call['property'] in ("debug"):
                     rsp_msg = self._handle_debug_req(api_msg, api_call)
                     self.performActions(Action().set_msg_to_remote(rsp_msg), event.local_sap, event.remote_conn, event.remote_addr)
                     return True
 
+                # Dispatch to appropriate handler in the driver: process_<from_system>_msg
                 handler_method = "process_" + api_msg.get_from_system() + "_msg"
                 if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
-                    self.performActions(getattr(self.driver, handler_method)(event, api_msg.get_json_api_header(), api_msg.get_api_call(), api_msg.get_payload_data()), 
-                        event.local_sap, event.remote_conn, event.remote_addr)
+                    try:
+                        self.performActions(getattr(self.driver, handler_method)(event, api_msg.get_json_api_header(), api_msg.get_api_call(), api_msg.get_payload_data()), 
+                            event.local_sap, event.remote_conn, event.remote_addr)
+                    except Exception as e:
+                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing message from {api_msg.get_from_system()}: {e}")
+                        return False
                 else:
-                    logger.warning(f"AppProcessor {self.name} has no handler for messages from {api_msg.get_from_system()}: {api_msg}")
+                    logger.warning(f"AppProcessor {self.name} driver has no handler for messages from {api_msg.get_from_system()}: {api_msg}")
                 return True
 
             if isinstance(event, events.ConnectEvent):
@@ -167,23 +174,31 @@ class AppProcessor(Processor):
                 handler_method = "process_" + event.local_sap.description + "_connected"
 
                 if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
-                    self.performActions(getattr(self.driver, handler_method)(event),
-                        event.local_sap, event.remote_conn, event.remote_addr)
+                    try:
+                        self.performActions(getattr(self.driver, handler_method)(event),
+                            event.local_sap, event.remote_conn, event.remote_addr)
+                    except Exception as e:
+                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing connect event {event}: {e}")
+                        return False
                 return True
                 
             if isinstance(event, events.DisconnectEvent):
                 handler_method = "process_" + event.local_sap.description + "_disconnected"
 
                 if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
-                    self.performActions(getattr(self.driver, handler_method)(event),
-                        event.local_sap, event.remote_conn, event.remote_addr)
+                    try:
+                        self.performActions(getattr(self.driver, handler_method)(event),
+                            event.local_sap, event.remote_conn, event.remote_addr)
+                    except Exception as e:
+                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing disconnect event {event}: {e}")
+                        return False
                 return True
 
             if isinstance(event, events.ConfigEvent):
                 try:
                     self.process_config_event(event)
                 except Exception as e:
-                    logger.error(f"AppProcessor: Error processing config event {event}: {e}")
+                    logger.exception(f"AppProcessor: Exception processing config event {event}: {e}")
                     return False
                 return True
 

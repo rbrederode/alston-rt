@@ -3,6 +3,7 @@ import json
 import map
 import os
 from pathlib import Path
+import socket
 import time
 from datetime import datetime, timezone
 
@@ -385,7 +386,7 @@ def retry_on_timeout(max_retries=3, delay=5):
                     else:
                         logger.error(f"Failed after {max_retries} attempts due to timeout")
                         raise
-                except SocketTimeout as e:
+                except socket.timeout as e:
                     if attempt < max_retries - 1:
                         logger.warning(f"Socket timeout on attempt {attempt + 1}/{max_retries}. Retrying in {delay} seconds...")
                         time.sleep(delay)
@@ -445,8 +446,8 @@ def main():
         while True:
 
             # Exchange Digitiser data with the UI if comms is established
-            if tm.telmodel.tm.dig_connected == CommunicationStatus.ESTABLISHED:
-                
+            if tm.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
+        
                 result = execute_sheets_request(sheet.values().get(
                     spreadsheetId=ALSTON_RADIO_TELESCOPE, 
                     range=DIG001_CONFIG,
@@ -481,7 +482,7 @@ def main():
                 last_dig_snapshot = None
 
             # Exchange SDP data with the UI if comms is established
-            if tm.telmodel.tm.sdp_connected == CommunicationStatus.ESTABLISHED:
+            if tm.telmodel.sdp.tm_connected == CommunicationStatus.ESTABLISHED:
 
                 sdp_dict = tm.telmodel.sdp.to_dict()
                 sdp_str = json.dumps(sdp_dict, indent=4)
