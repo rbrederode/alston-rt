@@ -9,6 +9,7 @@ class AppModel(BaseModel):
     """A class representing an App(lication) model."""
 
     schema = Schema({
+        "_type": And(str, lambda v: v == "AppModel"),
         "app_name": And(str, lambda v: isinstance(v, str)),
         "app_running": And(bool, lambda v: isinstance(v, bool)),
         "health": And(HealthState, lambda v: isinstance(v, HealthState)),
@@ -27,6 +28,7 @@ class AppModel(BaseModel):
 
       # Default values
         defaults = {
+            "_type": "AppModel",
             "app_name": "app",
             "app_running": False,
             "health": HealthState.UNKNOWN,

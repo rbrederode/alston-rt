@@ -4,6 +4,9 @@ import enum
 from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
 
+from astropy.coordinates import EarthLocation, AltAz
+from astropy.time import Time
+
 from models.app import AppModel
 from models.base import BaseModel
 from models.comms import CommunicationStatus
@@ -46,12 +49,16 @@ class Feed(enum.IntEnum):
 class DishModel(BaseModel):
     """A class representing the dish model."""
 
-    schema = Schema({
-        "id": And(str, lambda v: isinstance(v, str)),
+    schema = Schema({      
+        "_type": And(str, lambda v: v == "DishModel"),                                                                     
+        "id": And(str, lambda v: isinstance(v, str)),                                           # Dish identifer e.g. "dish001" 
+        "short_desc": Or(None, And(str, lambda v: isinstance(v, str))),                         # Short description of the dish
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
-        "feed": And(Feed, lambda v: isinstance(v, Feed)),
+        "location": Or(None, And(EarthLocation, lambda v: isinstance(v, EarthLocation))),                           # Physical location (lat, long, alt(m)) 
+        "feed": And(Feed, lambda v: isinstance(v, Feed)),                                       # Current feed installed on the dish
         "mode": And(DishMode, lambda v: isinstance(v, DishMode)),
         "pointing_state": And(PointingState, lambda v: isinstance(v, PointingState)),
+        "altaz": Or(None, And(AltAz, lambda v: isinstance(v, AltAzM))),                 # Current alt-az pointing direction
         "capability_state": And(CapabilityStates, lambda v: isinstance(v, CapabilityStates)),
         "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
@@ -76,7 +83,10 @@ class DishModel(BaseModel):
 
         # Default values
         defaults = {
+            "_type": "DishModel",
             "id": "dish001",
+            "short_desc": None,
+            "location": None,
             "app": AppModel(
                 app_name="dish",
                 app_running=False,
@@ -90,6 +100,7 @@ class DishModel(BaseModel):
             "feed": Feed.NONE,
             "mode": DishMode.UNKNOWN,
             "pointing_state": PointingState.UNKNOWN,
+            "altaz": None,
             "capability_state": CapabilityStates.UNKNOWN,
             "tm_connected": CommunicationStatus.NOT_ESTABLISHED,
             "last_update": datetime.now(timezone.utc),
@@ -106,8 +117,10 @@ if __name__ == "__main__":
 
     dish001 = DishModel(
         id="dish001",
+        short_desc="70cm Discovery dish",
+        location="53.187052,-2.256079, 110",  #
         app=AppModel(
-            app_name="dish",
+            app_name="dsh",
             app_running=True,
             num_processors=2,
             queue_size=0,

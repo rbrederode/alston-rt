@@ -15,6 +15,7 @@ class ScienceDataProcessorModel(BaseModel):
     """A class representing the science data processor model."""
 
     schema = Schema({
+        "_type": And(str, lambda v: v == "ScienceDataProcessorModel"),
         "id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
         "channels": And(int, lambda v: v >= 0),
@@ -34,6 +35,7 @@ class ScienceDataProcessorModel(BaseModel):
 
         # Default values
         defaults = {
+            "_type": "ScienceDataProcessorModel",
             "app": AppModel(
                 app_name="sdp",
                 app_running=False,

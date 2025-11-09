@@ -15,6 +15,7 @@ class DigitiserModel(BaseModel):
     """A class representing the digitiser model."""
 
     schema = Schema({
+        "_type": And(str, lambda v: v == "DigitiserModel"),
         "id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
         "gain": And(int, lambda v: 0 <= v <= 100),
@@ -36,6 +37,7 @@ class DigitiserModel(BaseModel):
 
         # Default values
         defaults = {
+            "_type": "DigitiserModel",
             "id": "<undefined>",
             "app": AppModel(
                 app_name="dig",
@@ -114,8 +116,10 @@ if __name__ == "__main__":
 
     dig_json = """
         {
+        "_type": "DigitiserModel",
         "id": "dig003",
         "app": {
+            "_type": "AppModel",
             "app_name": "dig",
             "app_running": true,
             "health": "DEGRADED",

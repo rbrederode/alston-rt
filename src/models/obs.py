@@ -1,4 +1,13 @@
 import enum
+from datetime import datetime, timezone
+from schema import Schema, And, Or, Use, SchemaError
+
+from models.base import BaseModel
+from models.target import TargetModel
+
+#=======================================
+# Models comprising an Observation (OBS)
+#=======================================
 
 class ObsState(enum.IntEnum):
     """Python enumerated type for observing state."""
@@ -73,3 +82,56 @@ class ObsState(enum.IntEnum):
     After restarting, the subarray will return to EMPTY state, with no
     allocated resources and no configuration defined.
     """
+
+class ObsModel(BaseModel):
+    """A class representing a model of an observation"""
+
+    schema = Schema({
+        "_type": And(str, lambda v: v == "ObsModel"),
+        "obs_id": And(str, lambda v: isinstance(v, str)),                   # Unique identifier
+        "short_desc": And(str, lambda v: isinstance(v, str)),               # Short description (255 chars) 
+        "long_desc": And(str, lambda v: isinstance(v, str)),                # Long description (no strict upper limit)
+        "state": And(ObsState, lambda v: isinstance(v, ObsState)),
+
+        "target": And(TargetModel, lambda v: isinstance(v, TargetModel)),   # Target model
+
+        "center_freq": And(int, lambda v: v >= 0),                          # Center frequency (Hz) 
+        "bandwidth": And(int, lambda v: v >= 0),                            # Bandwidth (Hz) 
+        "sample_rate": And(int, lambda v: v >= 0),                          # Sample rate (Hz) 
+        "channels": And(int, lambda v: v >= 0),                             # Number of channels (fourier transform fft_size) 
+        "duration": And(int, lambda v: v >= 0),                             # Duration (s) of the observation
+        "start_dt": And(datetime, lambda v: isinstance(v, datetime)),       # Start datetime (UTC) of the observation 
+        "end_dt": And(datetime, lambda v: isinstance(v, datetime)),         # End datetime (UTC) of the observation
+
+        # Calibration files to be used by this observation
+        "tsys_calibrators": And(list, lambda v: isinstance(v, list)),       # List of *tsys.csv (system temperature calibration) filenames
+        "gain_calibrators": And(list, lambda v: isinstance(v, list)),       # List of *gain.csv (gain calibration) filenames
+        "load_calibrators": And(list, lambda v: isinstance(v, list)),       # List of *load.csv (terminated signal chain) filenames
+
+        # Summed power scan files generated during this observation
+        "spr_scans": And(list, lambda v: isinstance(v, list)),              # List of *spr.csv (summed power) filenames
+
+        "last_update": And(datetime, lambda v: isinstance(v, datetime)),    # Last update datetime (UTC) of the observation
+    })
+
+    allowed_transitions = {}
+
+    def __init__(self, **kwargs):
+
+        # Default values
+        defaults = {
+            "_type": "ObsModel",
+            "spr_files": [],
+            "load_files": [],
+            "tsys_files": [],
+            "gain_files": [],
+            "meta_files": [],
+            "last_update": datetime.now(timezone.utc),
+        }
+
+        # Apply defaults if not provided in kwargs
+        for key, value in defaults.items():
+            if key not in kwargs:
+                kwargs.setdefault(key, value)
+
+        super().__init__(**kwargs)

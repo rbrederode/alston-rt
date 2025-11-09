@@ -20,6 +20,7 @@ class ScanModel(BaseModel):
     """A class representing the scan model."""
 
     schema = Schema({
+        "_type": And(str, lambda v: v == "ScanModel"),
         "scan_id": And(str, lambda v: isinstance(v, str)),
         "dig_id": And(str, lambda v: isinstance(v, str)),
         "created": And(datetime, lambda v: isinstance(v, datetime)),
@@ -44,6 +45,7 @@ class ScanModel(BaseModel):
 
         # Default values
         defaults = {
+            "_type": "ScanModel",
             "scan_id": "<undefined>",
             "dig_id": "<undefined>",
             "created": datetime.now(timezone.utc),

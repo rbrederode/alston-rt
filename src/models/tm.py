@@ -16,6 +16,7 @@ class ScanStoreModel(BaseModel):
     """A class representing the scan store model."""
 
     schema = Schema({
+        "_type": And(str, lambda v: v == "ScanStoreModel"),
         "spr_files": And(list, lambda v: isinstance(v, list)),
         "load_files": And(list, lambda v: isinstance(v, list)),
         "tsys_files": And(list, lambda v: isinstance(v, list)),
@@ -30,6 +31,7 @@ class ScanStoreModel(BaseModel):
 
         # Default values
         defaults = {
+            "_type": "ScanStoreModel",
             "spr_files": [],
             "load_files": [],
             "tsys_files": [],
@@ -49,6 +51,7 @@ class TelescopeManagerModel(BaseModel):
     """A class representing the telescope manager model."""
 
     schema = Schema({
+        "_type": And(str, lambda v: v == "TelescopeManagerModel"),
         "id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
         "scan_store": And(ScanStoreModel, lambda v: isinstance(v, ScanStoreModel)),
@@ -63,6 +66,7 @@ class TelescopeManagerModel(BaseModel):
 
         # Default values
         defaults = {
+            "_type": "TelescopeManagerModel",
             "app": AppModel(
                 app_name="tm",
                 app_running=False,

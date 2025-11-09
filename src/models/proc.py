@@ -11,6 +11,7 @@ class ProcessorModel(BaseModel):
     """A class representing the processor model."""
 
     schema = Schema({
+        "_type": And(str, lambda v: v == "ProcessorModel"),
         "name": And(str, lambda v: isinstance(v, str)),
         "current_event": Or(None, And(str, lambda v: isinstance(v, str))),
         "processing_time_ms": Or(None, And(float, lambda v: v >= 0.0)),
@@ -23,6 +24,7 @@ class ProcessorModel(BaseModel):
 
         # Default values
         defaults = {
+            "_type": "ProcessorModel",
             "name": "",
             "current_event": "",
             "processing_time_ms": 0.0,
