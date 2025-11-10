@@ -228,4 +228,26 @@ class StatusUpdateEvent:
             f"Current Status={status_str}, " + \
             f"Total Processing Count={self.total_processing_count}, " + \
             f"Total Processing Time (ms)={self.total_processing_time_ms}, " + \
-            f"Average Processing Time (ms)={self.get_average_processing_time():.2f})"
+            f"Average Processing Time (ms)={self.get_average_processing_time()})"
+
+class ConfigEvent:
+
+    def __init__(self, old_config, new_config, timestamp=None):
+        """Initialize the config event with the given parameters.
+
+        Parameters
+            old_config: The old configuration data associated with the event
+            new_config: The new configuration data associated with the event
+            timestamp: Timestamp of the event
+        """
+        self.old_config = old_config
+        self.new_config = new_config
+        self.timestamp = timestamp
+
+    def __str__(self):
+        """
+        Returns a human-readable string representation of this event.
+        """
+        return f"ConfigEvent@{self.timestamp}\n" + \
+            f" - Old Config: {self.old_config}\n" + \
+            f" - New Config: {self.new_config}\n"

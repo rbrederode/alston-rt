@@ -55,15 +55,19 @@ STATUS = (
 )
 
 # Meta data properties 
-PROPERTY_CENTER_FREQ    = 'center_freq'      # Center frequency in Hz
-PROPERTY_SAMPLE_RATE    = 'sample_rate'      # Sample rate in samples per second
-PROPERTY_BANDWIDTH      = 'bandwidth'        # Bandwidth in Hz
-PROPERTY_SDR_GAIN       = 'gain'             # Gain in dB
-PROPERTY_READ_COUNTER   = 'read_counter'     # Read counter
-PROPERTY_READ_START     = 'read_start'       # Epoch seconds corresponding to start timestamp of sample read
-PROPERTY_READ_END       = 'read_end'         # Epoch seconds corresponding to end timestamp of sample read
+PROPERTY_DIG_ID          = 'dig_id'           # Digitiser Id
+PROPERTY_FEED            = 'feed'             # Feed type
+PROPERTY_CENTER_FREQ     = 'center_freq'      # Center frequency in Hz
+PROPERTY_SAMPLE_RATE     = 'sample_rate'      # Sample rate in samples per second
+PROPERTY_BANDWIDTH       = 'bandwidth'        # Bandwidth in Hz
+PROPERTY_SDR_GAIN        = 'gain'             # Gain in dB
+PROPERTY_READ_COUNTER    = 'read_counter'     # Read counter
+PROPERTY_READ_START      = 'read_start'       # Epoch seconds corresponding to start timestamp of sample read
+PROPERTY_READ_END        = 'read_end'         # Epoch seconds corresponding to end timestamp of sample read
 
 PROPERTIES = (
+    PROPERTY_DIG_ID,
+    PROPERTY_FEED,
     PROPERTY_CENTER_FREQ,
     PROPERTY_SAMPLE_RATE,
     PROPERTY_BANDWIDTH,

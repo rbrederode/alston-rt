@@ -10,6 +10,7 @@ import time
 import struct
 import traceback
 import json
+import argparse
 from queue import Queue
 from datetime import datetime, timezone
 
@@ -97,7 +98,7 @@ class TCPClient:
     def _process_connection(self):
         """Accept incoming connection events from a client and register the connection with the selector."""
 
-        event = events.ConnectEvent(self, self.client_socket, (self.host, self.port), datetime.now())
+        event = events.ConnectEvent(local_sap=self, remote_conn=self, remote_addr=(self.host, self.port), timestamp=datetime.now())
         self.event_q.put(event)
 
         logging.info(f"TCP Client {self.description} connected to host {self.host} port {self.port}")
@@ -106,10 +107,10 @@ class TCPClient:
         """Process a disconnect from a client and deregister the connection from the selector."""
 
         if self.client_socket is None or self.client_socket.fileno() == -1:
-            event = events.DisconnectEvent(self, self.client_socket, (f'{self.host}', f'{self.port}'), datetime.now())
+            event = events.DisconnectEvent(local_sap=self, remote_conn=None, remote_addr=(self.host, self.port), timestamp=datetime.now())
             self.event_q.put(event) # Create a disconnect event and add it to the queue
         else:
-            event = events.DisconnectEvent(self, self.client_socket, (f'{self.host}', f'{self.port}'), datetime.now())
+            event = events.DisconnectEvent(local_sap=self, remote_conn=None, remote_addr=(self.host, self.port), timestamp=datetime.now())
             self.event_q.put(event) # Create a disconnect event and add it to the queue
 
             # Unregister the connection from the selector
@@ -138,7 +139,7 @@ class TCPClient:
         except BlockingIOError:
             return  # no data ready
         except (ConnectionResetError, OSError) as e:
-            logging.exception(f"TCP Client {self.description} socket connection reset / OSError. Cannot receive message.\n{msg}")
+            logging.error(f"TCP Client {self.description} socket connection reset / OSError. Cannot receive message.\n{msg}")
             self._process_disconnect()
             return
 
@@ -178,9 +179,7 @@ class TCPClient:
                 msg.from_data(self.recv_msg.msg_data)
 
                 event = events.DataEvent(
-                    self, self.client_socket, (f'{self.host}', f'{self.port}'),
-                    msg.msg_data, datetime.now()
-                )
+                    local_sap=self, remote_conn=self, remote_addr=(self.host, self.port), data=msg.msg_data, timestamp=datetime.now())
                 self.event_q.put(event)
                 self.recv_msg = message.Message()  # Reset for next message
 
@@ -316,8 +315,12 @@ class TCPClient:
                         logger.error(f"TCP Client {self.description} general exception sending message to host {self.host} port {self.port}\n{e}")
                         self._process_disconnect()
                     finally:
+                        # If the message exceeds the maximum block size i.e. we entered blocking mode, return the socket to non-blocking mode
                         if total_len > self.max_block_size:
-                            key.fileobj.setblocking(False)  # Ensure the socket is set back to non-blocking mode
+                            try:
+                                key.fileobj.setblocking(False)  # Ensure the socket is set back to non-blocking mode
+                            except Exception as e:
+                                logger.error(f"TCP Client {self.description} socket not valid anymore while setting non-blocking mode while sending message to host {self.host} port {self.port}\n{e}")
 
             time_exit = time.time()
             logger.info(f"TCP Client {self.description} SEND {len(data)} bytes duration: {(time_exit - time_enter)*1000:.2f} ms")
@@ -379,11 +382,15 @@ if __name__ == "__main__":
             ]
     )
 
+    arg_parser = argparse.ArgumentParser(description="set_debug")
+    arg_parser.add_argument("--host", type=str, required=False, help="TCP server host",default="localhost")
+    arg_parser.add_argument("--port", type=int, required=False, help="TCP server port", default=50000)
+ 
     set_sample_rate_apicall = {}
     set_sample_rate_apicall["msg_type"] = "req"
     set_sample_rate_apicall["action_code"] = "set"
     set_sample_rate_apicall["property"] = "sample_rate"
-    set_sample_rate_apicall["value"] = 2.048e6
+    set_sample_rate_apicall["value"] = 2.4e6
 
     get_sample_rate_apicall = {}
     get_sample_rate_apicall["msg_type"] = "req"
@@ -396,6 +403,12 @@ if __name__ == "__main__":
     set_center_freq_apicall["property"] = "center_freq"
     set_center_freq_apicall["value"] = 1420.40e6
 
+    get_auto_gain_apicall = {}
+    get_auto_gain_apicall["msg_type"] = "req"
+    get_auto_gain_apicall["action_code"] = "method"
+    get_auto_gain_apicall["method"] = "get_auto_gain"
+    get_auto_gain_apicall["params"] = {"sample_rate": 2.4e6, "time_in_secs": 1}
+
     set_gain_apicall = {}
     set_gain_apicall["msg_type"] = "req"
     set_gain_apicall["action_code"] = "set"
@@ -406,7 +419,7 @@ if __name__ == "__main__":
     read_samples_apicall["msg_type"] = "req"
     read_samples_apicall["action_code"] = "method"
     read_samples_apicall["method"] = "read_samples"
-    read_samples_apicall["params"] = {"num_samples": 2.048e6, "duration": 30.0} # Sample rate/s and duration in seconds
+    read_samples_apicall["params"] = {} # No parameters required for this method
 
     api_msg = message.APIMessage()
 
@@ -434,7 +447,7 @@ if __name__ == "__main__":
 
     # Start the TCP client and connect to the server
 
-    client = TCPClient(queue=queue)
+    client = TCPClient(queue=queue, host=arg_parser.parse_args().host, port=arg_parser.parse_args().port)
     client.connect()
     
     time.sleep(1)
@@ -470,6 +483,20 @@ if __name__ == "__main__":
     )
 
     client.send(api_msg)
+
+    time.sleep(1)
+
+    api_msg.set_json_api_header(
+        api_version="1.0",
+        dt=datetime.now(timezone.utc),
+        from_system="tm",
+        to_system="dig",
+        api_call=get_auto_gain_apicall
+    )
+
+    client.send(api_msg)
+
+    time.sleep(60)
 
     api_msg.set_json_api_header(
         api_version="1.0",

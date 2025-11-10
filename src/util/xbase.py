@@ -6,9 +6,8 @@ EXC_ID_STREAM_UNABLE_TO_ENCODE              = 0x0001
 EXC_ID_API_VALIDATION_FAILED                = 0x0002
 EXC_ID_API_UNSUPPORTED_VERSION              = 0x0003
 EXC_ID_SOFTWARE_FAILURE                     = 0x0004
-EXC_ID_INVALID_PARAM                        = 0x0005
-EXC_ID_INVALID_LENGTH                       = 0x0006
-EXC_ID_INVALID_VALUE                        = 0x0007
+EXC_ID_SCHEDULER_FAILURE                    = 0x0005
+EXC_ID_INVALID_TRANSITION                   = 0x0006
 
 class XBase(Exception):
     
@@ -26,7 +25,11 @@ class XBase(Exception):
             self.data.append(data)
             
     def __str__(self):
-        return f"XBase(id={self.id}, messages={self.messages}, data={[len(d) for d in self.data]})\n {traceback.format_exc()}"
+        # Provide a concise string representation. Avoid including the
+        # traceback here because Python already prints tracebacks when
+        # exceptions are unhandled; embedding the traceback in __str__ can
+        # lead to duplicated / confusing output.
+        return f"XBase(id={self.id}, messages={self.messages}, data={[len(d) for d in self.data]})"
 
 class XStreamUnableToExtract(XBase):
 
@@ -52,3 +55,13 @@ class XSoftwareFailure(XBase):
 
     def __init__(self, message: str=None, data: bytes=None):
         super().__init__(EXC_ID_SOFTWARE_FAILURE, message, data)
+
+class XSchedulerFailure(XBase):
+
+    def __init__(self, message: str=None, data: bytes=None):
+        super().__init__(EXC_ID_SCHEDULER_FAILURE, message, data)
+
+class XInvalidTransition(XBase):
+
+    def __init__(self, message: str=None, data: bytes=None):
+        super().__init__(EXC_ID_INVALID_TRANSITION, message, data)

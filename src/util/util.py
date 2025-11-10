@@ -1,7 +1,46 @@
-import pytest
+from __future__ import annotations
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models.dsh import Feed
 
 import logging
 logger = logging.getLogger(__name__)
+
+def gen_file_prefix(
+    dt:datetime,
+    feed:Feed,
+    gain:float,
+    duration:int,
+    sample_rate:float,
+    center_freq:float,
+    channels:int,
+    entity_id:int = None,
+    filetype: str = None) -> str:
+
+    """ Generate a filename prefix based on metadata parameters.
+        :param dt: The datetime object representing the entity start time
+        :param feed: The feed type e.g. Feed.F1420_H3T
+        :param gain: The gain setting e.g. 39.6 dB
+        :param duration: The duration in seconds
+        :param sample_rate: The sample rate e.g. 2.4e6 Hz
+        :param center_freq: The center frequency e.g. 1.42e9 Hz
+        :param channels: The number of channels e.g. 1024
+        :param entity_id: The entity ID 
+        :param filetype: The type of file being generated (e.g., "raw", "spr", "meta")
+        :returns: A string representing the file prefix
+    """
+
+    return dt.strftime("%Y-%m-%dT%H%M%S") + \
+        "-f" + str(feed) + \
+        "-g" + str(gain) + \
+        "-du" + str(duration) + \
+        "-bw" + str(round(sample_rate/1e6,2)) + \
+        "-cf" + str(round(center_freq/1e6,2)) + \
+        "-ch" + str(channels) + \
+        ("-id" + str(entity_id) if entity_id is not None else "") + \
+        ("-" + filetype if filetype is not None else '')
 
 def find_json_object_end(data:bytes) -> int:
     """ Finds the end index of the first complete JSON object in the byte stream.

@@ -49,38 +49,48 @@ TO = (
     TM
 )
 
-# Allowable properties to get or set 
+# Allowable properties to get or set
+PROPERTY_FEED           = 'feed'             # Feed identifier
 PROPERTY_CENTER_FREQ    = 'center_freq'      # Center frequency in Hz
 PROPERTY_SAMPLE_RATE    = 'sample_rate'      # Sample rate in samples per second
 PROPERTY_BANDWIDTH      = 'bandwidth'        # Bandwidth in Hz
 PROPERTY_GAIN           = 'gain'             # Gain in dB
 PROPERTY_FREQ_CORRECTION= 'freq_correction'  # Frequency correction in ppm
-PROPERTY_SDP_CONNECTED  = 'sdp_connected'    # SDP connection status (True/False)
+PROPERTY_STREAMING      = 'streaming'        # Streaming status (True/False)
+PROPERTY_STATUS         = 'status'           # Status update interval in seconds
+PROPERTY_SDP_COMMS      = 'sdp_comms'        # SDP communication status (established/not established)
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 
 PROPERTIES = (
+    PROPERTY_FEED,
     PROPERTY_CENTER_FREQ,
     PROPERTY_SAMPLE_RATE,
     PROPERTY_BANDWIDTH,
     PROPERTY_GAIN,
     PROPERTY_FREQ_CORRECTION,
-    PROPERTY_SDP_CONNECTED,
+    PROPERTY_STREAMING,
+    PROPERTY_STATUS,
+    PROPERTY_SDP_COMMS,
     PROPERTY_DEBUG,
 )
 
 # Allowable methods to call on the subsystem 
-METHOD_GET_GAINS        = 'get_gains'           # Get a list of available gain settings
-METHOD_GET_TUNER_TYPE   = 'get_tuner_type' # Get the type of tuner in the device
-METHOD_SET_DIRECT_SAMPLING = 'set_direct_sampling' # Set direct sampling mode (0=off, 1=I-ADC, 2=Q-ADC)
-METHOD_READ_BYTES       = 'read_bytes'       # Read raw bytes from the device
-METHOD_READ_SAMPLES     = 'read_samples'     # Read samples from the device
+METHOD_GET_GAINS            = 'get_gains'           # Get a list of available gain settings
+METHOD_GET_TUNER_TYPE       = 'get_tuner_type'      # Get the type of tuner in the device
+METHOD_SET_DIRECT_SAMPLING  = 'set_direct_sampling' # Set direct sampling mode (0=off, 1=I-ADC, 2=Q-ADC)
+METHOD_READ_BYTES           = 'read_bytes'          # Read raw bytes from the device
+METHOD_READ_SAMPLES         = 'read_samples'        # Read samples from the device
+METHOD_GET_AUTO_GAIN        = 'get_auto_gain'       # Determine optimal gain setting e.g. 20 dB
+METHOD_GET_GAIN_GAUSSIANITY = 'get_gain_gaussianity' # Run gaussianity test (Shapiro–Wilk) on current gain setting
 
 METHODS = (
     METHOD_GET_GAINS,
     METHOD_GET_TUNER_TYPE,
     METHOD_SET_DIRECT_SAMPLING,
     METHOD_READ_BYTES,
-    METHOD_READ_SAMPLES
+    METHOD_READ_SAMPLES,
+    METHOD_GET_AUTO_GAIN,
+    METHOD_GET_GAIN_GAUSSIANITY,
 )
 
 # Allowable status codes for responses
@@ -106,7 +116,7 @@ MSG_FIELDS = {
     "msg_type":     {"enum": MSG_TYPES},                            # Message type (one of MSG_TYPES)
     "action_code":  {"enum": ACTION_CODES},                         # Action to be taken (one of ACTION_CODES)
     "property":     {"enum": PROPERTIES},                           # Property name (one of PROPERTIES)
-    "value":        {"type": "(int, float, str)"},                  # Value to set or value returned
+    "value":        {"type": "(int, float, str, dict)"},            # Value to set or value returned
     "method":       {"enum": METHODS},                              # Method name (one of METHODS)
     "params":       {"type": "dict"},                               # Key Value pairs in a dictionary e.g. {"num_samples": 1024}
     "status":       {"enum": STATUS},                               # Status of response (e.g. success, error)
@@ -137,9 +147,9 @@ MSG_FIELDS_DEFINITIONS = {
         "required": {"msg_type", "action_code", "status"},
         "optional": {"message"},
         "optional": {"property"},   # Copied from req/adv
-        "optional": {"value"},      # Copied from req/adv
+        "optional": {"value"},      
         "optional": {"method"},     # Copied from req/adv
-        "optional": {"params"}      # Copied from req/adv
+        "optional": {"params"}      
     },
 }
 

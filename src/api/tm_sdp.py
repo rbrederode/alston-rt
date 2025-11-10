@@ -1,17 +1,17 @@
 import json
 import re
 import datetime
-import logging
 from datetime import timezone
 from typing import Any, Dict
 from api.api import API
 from ipc.message import Message, AppMessage, APIMessage
 from util.xbase import XBase, XStreamUnableToExtract, XStreamUnableToEncode, XAPIValidationFailed, XAPIUnsupportedVersion
 
-logging.basicConfig(level=logging.DEBUG)
+import logging
+logger = logging.getLogger(__name__)
 
-API_VERSION = "2.0" # Version of the API implemented in this module.
-LEGACY_SUPPORTED_VERSIONS = ["1.0","1.1"] # Requires translator methods to/from API_VERSION
+API_VERSION = "1.0" # Version of the API implemented in this module.
+LEGACY_SUPPORTED_VERSIONS = [] # Requires translator methods to/from API_VERSION
 
 # Allowable api msg types 
 MSG_TYPE_REQ = "req"  # Request an action to be taken e.g. get or set a property that either succeeds or fails
@@ -27,56 +27,33 @@ MSG_TYPES =  (
 # Allowable api msg actions 
 ACTION_CODE_GET = "get"
 ACTION_CODE_SET = "set"
-ACTION_CODE_METHOD = "method"
 
 ACTION_CODES = (
     ACTION_CODE_GET,      # Get the value of a property
     ACTION_CODE_SET,      # Set the value of a property
-    ACTION_CODE_METHOD    # Call a method on the subsystem
 )
 
 # Allowable origins (from) and destinations (to) of api msg calls
-CAM = "cam"  # Control & Monitoring
-DIG = "dig"  # Digitiser 
+TM  = "tm"   # Telescope Manager
+SDP = "sdp"  # SDP
 
 FROM = (
-    CAM,
-    DIG
+    TM,
+    SDP
 )
 
 TO = (
-    DIG,
-    CAM
+    SDP,
+    TM
 )
 
-# Allowable properties to get or set 
-PROPERTY_CENTER_FREQ    = 'center_freq'      # Center frequency in Hz
-PROPERTY_SAMPLE_RATE    = 'sample_rate'      # Sample rate in samples per second
-PROPERTY_BANDWIDTH      = 'bandwidth'        # Bandwidth in Hz
-PROPERTY_GAIN           = 'gain'             # Gain in dB
-PROPERTY_FREQ_CORRECTION= 'freq_correction'  # Frequency correction in ppm
+# Allowable properties to get or set on the system
+PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
+PROPERTY_STATUS         = 'status'           # Get system status
 
 PROPERTIES = (
-    PROPERTY_CENTER_FREQ,
-    PROPERTY_SAMPLE_RATE,
-    PROPERTY_BANDWIDTH,
-    PROPERTY_GAIN,
-    PROPERTY_FREQ_CORRECTION,
-)
-
-# Allowable methods to call on the subsystem 
-METHOD_GET_GAINS        = 'get_gains'           # Get a list of available gain settings
-METHOD_GET_TUNER_TYPE   = 'get_tuner_type' # Get the type of tuner in the device
-METHOD_SET_DIRECT_SAMPLING = 'set_direct_sampling' # Set direct sampling mode (0=off, 1=I-ADC, 2=Q-ADC)
-METHOD_READ_BYTES       = 'read_bytes'       # Read raw bytes from the device
-METHOD_READ_SAMPLES     = 'read_samples'     # Read samples from the device
-
-METHODS = (
-    METHOD_GET_GAINS,
-    METHOD_GET_TUNER_TYPE,
-    METHOD_SET_DIRECT_SAMPLING,
-    METHOD_READ_BYTES,
-    METHOD_READ_SAMPLES
+    PROPERTY_DEBUG,
+    PROPERTY_STATUS
 )
 
 # Allowable status codes for responses
@@ -102,9 +79,7 @@ MSG_FIELDS = {
     "msg_type":     {"enum": MSG_TYPES},                            # Message type (one of MSG_TYPES)
     "action_code":  {"enum": ACTION_CODES},                         # Action to be taken (one of ACTION_CODES)
     "property":     {"enum": PROPERTIES},                           # Property name (one of PROPERTIES)
-    "value":        {"type": "(int, float, str)"},                  # Value to set or value returned
-    "method":       {"enum": METHODS},                              # Method name (one of METHODS)
-    "params":       {"type": "dict"},                               # Key Value pairs in a dictionary e.g. {"num_samples": 1024}
+    "value":        {"type": "(int, float, str, dict)"},            # Value to set or value returned
     "status":       {"enum": STATUS},                               # Status of response (e.g. success, error)
     "message":      {"type": "str"},                                # Additional information about the status
 }
@@ -116,17 +91,13 @@ MSG_FIELDS_DEFINITIONS = {
         "conditional": {
             "property",     # Required if action_code is "get" or "set"
             "value",        # Required if action_code is "set" 
-            "method",       # Required if action_code is "method"
-            "params"        # Required if action_code is "method"
-        }
+         }
     },
     "adv": {
         "required": {"msg_type", "action_code"},
         "conditional": {
             "property",     # Required if action_code is "get" or "set"
             "value",        # Required if action_code is "set"
-            "method",       # Required if action_code is "method"
-            "params"        # Required if action_code is "method"
         }
     },
     "rsp": {
@@ -134,14 +105,12 @@ MSG_FIELDS_DEFINITIONS = {
         "optional": {"message"},
         "optional": {"property"},   # Copied from req/adv
         "optional": {"value"},      # Copied from req/adv
-        "optional": {"method"},     # Copied from req/adv
-        "optional": {"params"}      # Copied from req/adv
     },
 }
 
-class CAM_DIG(API):
+class TM_SDP(API):
     """
-    Class responsible for enforcing the Control & Monitoring-Digitiser API.
+    Class responsible for enforcing the Telescope Manager-Science Data Processor API.
 
     The API defines the structure and rules for API messages between these systems.
 
@@ -173,7 +142,7 @@ class CAM_DIG(API):
             :raises XAPIValidationFailed: If the message fails validation
         """
 
-        logging.debug(f"Validating API message: {json.dumps(api_msg, indent=4)}")
+        logger.debug(f"Validating API message: {json.dumps(api_msg, indent=4)}")
 
         if 'api_version' not in api_msg:
             raise XAPIValidationFailed("Message missing required field 'api_version'")
@@ -208,13 +177,7 @@ class CAM_DIG(API):
             elif field == "value":
                 if api_call.get('action_code') == ACTION_CODE_SET and 'value' not in api_call:
                     raise XAPIValidationFailed(f"Message of type '{msg_type}' with action_code '{ACTION_CODE_SET}' missing required field 'value'")
-            elif field == "method":
-                if api_call.get('action_code') == ACTION_CODE_METHOD and 'method' not in api_call:
-                    raise XAPIValidationFailed(f"Message of type '{msg_type}' with action_code '{ACTION_CODE_METHOD}' missing required field 'method'")
-            elif field == "params":
-                if api_call.get('action_code') == ACTION_CODE_METHOD and 'params' not in api_call:
-                    raise XAPIValidationFailed(f"Message of type '{msg_type}' with action_code '{ACTION_CODE_METHOD}' missing required field 'params'")
-
+  
         # Validate each field's value against its expected type and format
         for field, value in api_call.items():
             if field in MSG_FIELDS:
@@ -260,23 +223,19 @@ class CAM_DIG(API):
         translated_msg = api_msg.copy()
 
         if source_version == "1.0" and target_version == "2.0":
-            print(30*"-")
-            print("Translating from 1.0 to 2.0")
-            print(30*"-")
+            logger.debug("Translating from 1.0 to 2.0")
             # Example: rename 'fc' to 'center_freq'
             if translated_msg['api_call'].get("property") == "fc":
-                print("Renaming property 'fc' to 'center_freq'")
+                logger.debug("Renaming property 'fc' to 'center_freq'")
                 translated_msg['api_call']["property"] = PROPERTY_CENTER_FREQ
 
             translated_msg['api_version'] = "2.0"
 
         elif source_version == "2.0" and target_version == "1.0":
-            print(30*"-")
-            print("Translating from 2.0 to 1.0")
-            print(30*"-")
+            logger.debug("Translating from 2.0 to 1.0")
             # Example: rename 'center_freq' to 'fc'
             if translated_msg['api_call'].get("property") == PROPERTY_CENTER_FREQ:
-                print("Renaming property 'center_freq' to 'fc'")
+                logger.debug("Renaming property 'center_freq' to 'fc'")
                 translated_msg['api_call']["property"] = "fc"
 
             translated_msg['api_version'] = "1.0"
@@ -296,19 +255,19 @@ def main():
     api_call = {
         "msg_type":     "req",
         "action_code":  "set",
-        "property":     "fc",
-        "value":        1420.40e6
+        "property":     "debug",
+        "value":        "on",
     }
 
     send_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.datetime.now(timezone.utc),
-        from_system="cam",
-        to_system="dig",
+        from_system="tm",
+        to_system="sdp",
         api_call=api_call
     )
 
-    api = CAM_DIG()
+    api = TM_SDP()
     api.validate(send_msg.get_json_api_header())
 
     sent_data = send_msg.to_data()
