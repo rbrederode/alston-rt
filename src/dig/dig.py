@@ -487,13 +487,14 @@ class Digitiser(App):
             api_call={}
         )
         
+        # Construct metadata using the digitiser model and sample read info
         metadata = [   
-            {"property": "dig_id", "value": self.dig_model.id},          # Digitiser Id
-            {"property": "feed", "value": self.dig_model.feed.name},     # Feed name
-            {"property": "center_freq", "value": self.sdr.center_freq},  # Hz    
-            {"property": "sample_rate", "value": self.sdr.sample_rate},  # Hz
-            {"property": "bandwidth", "value": self.sdr.bandwidth},      # MHz
-            {"property": "gain", "value": self.sdr.gain},                # dB
+            {"property": "dig_id", "value": self.dig_model.id},                 # Digitiser Id
+            {"property": "feed", "value": self.dig_model.feed.name},            # Feed name
+            {"property": "center_freq", "value": self.dig_model.center_freq},   # Hz    
+            {"property": "sample_rate", "value": self.dig_model.sample_rate},   # Hz
+            {"property": "bandwidth", "value": self.dig_model.bandwidth},       # MHz
+            {"property": "gain", "value": self.dig_model.gain},                 # dB
             {"property": "read_counter", "value": read_counter},
             {"property": "read_start", "value": datetime.fromtimestamp(read_start, timezone.utc).isoformat()},
             {"property": "read_end", "value": datetime.fromtimestamp(read_end, timezone.utc).isoformat()},

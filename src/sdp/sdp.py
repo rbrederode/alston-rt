@@ -154,7 +154,12 @@ class SDP(App):
                 elif prop == sdp_dig.PROPERTY_READ_END:
                     read_end = datetime.fromisoformat(value)
                 elif prop == sdp_dig.PROPERTY_FEED:
-                    feed = Feed(value)
+                    # Match Feed enum by name (value is a string like 'LOAD')
+                    try:
+                        feed = Feed[value]
+                    except KeyError:
+                        logger.warning(f"Unknown feed value: {value}, defaulting to NONE")
+                        feed = Feed.NONE
                 elif prop == sdp_dig.PROPERTY_DIG_ID:
                     dig_id = value
 
