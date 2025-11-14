@@ -73,3 +73,10 @@ if __name__ == "__main__":
     print("App002")
     print("="*40)
     pprint.pprint(app002.to_dict()) 
+    print("="*40)
+    print('Tests from_dict method')
+    print('='*40)
+
+    app003 = AppModel().from_dict(app001.to_dict())
+
+    pprint.pprint(app003.to_dict())

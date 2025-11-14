@@ -24,9 +24,11 @@ from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.app import AppModel
+from models.dig import DigitiserModel
 from models.dsh import Feed
 from models.health import HealthState
 from models.comms import CommunicationStatus
+from models.sdp import ScienceDataProcessorModel
 from models.telescope import TelescopeModel
 from util import log
 from util.xbase import XBase, XStreamUnableToExtract
@@ -107,8 +109,8 @@ class TelescopeManager(App):
             property = method = value = None
 
             # Map from configuration item to method/property and value
-            (method, value) = map.get_method_name(new_item[0], new_item[1])
-            (property, value) = map.get_property_name(new_item[0], new_item[1]) if method is None else (None, None)
+            (method, value) = map.get_method_name_value(new_item[0], new_item[1])
+            (property, value) = map.get_property_name_value(new_item[0], new_item[1]) if method is None else (None, None)
                 
             if method is None and property is None:
                 logger.warning(f"Telescope Manager received unknown configuration item at row {i}: {new_item} with value {new_item[1]}")
@@ -149,8 +151,6 @@ class TelescopeManager(App):
         self.telmodel.tm.dig_connected = CommunicationStatus.ESTABLISHED
 
         action = Action()
-        # TBD, remove this once we have a UI to control reading samples
-        action.set_timer_action(Action.Timer(name="read_samples", timer_action=10000))
         return action
 
     def process_dig_disconnected(self, event) -> Action:
@@ -173,6 +173,7 @@ class TelescopeManager(App):
 
             if api_call.get('property','') == tm_dig.PROPERTY_FEED:
                 self.telmodel.dsh.feed = Feed(api_call['value'])
+                self.telmodel.dig.feed = Feed(api_call['value'])
             elif api_call.get('property','') == tm_dig.PROPERTY_STREAMING:
                 self.telmodel.dig.streaming = api_call['value']
             elif api_call.get('property','') == tm_dig.PROPERTY_GAIN:
@@ -190,7 +191,7 @@ class TelescopeManager(App):
             elif api_call.get('property','') == tm_dig.PROPERTY_STATUS:
                 logger.debug(f"Telescope Manager received Digitiser STATUS update: {api_call['value']}")
 
-                self.telmodel.dig.from_dict(api_call['value'])
+                self.telmodel.dig = DigitiserModel.from_dict(api_call['value'])
 
         # Update Telescope Model based on received Digitiser api_call
         dt = api_msg.get("timestamp")
@@ -230,9 +231,7 @@ class TelescopeManager(App):
 
             # If a status update is received, update the Telescope Model 
             if api_call.get('property','') == tm_sdp.PROPERTY_STATUS:
-                logger.debug(f"Telescope Manager received Science Data Processor STATUS update: {api_call['value']}")
-
-                self.telmodel.sdp.from_dict(api_call['value'])
+                self.telmodel.sdp = ScienceDataProcessorModel.from_dict(api_call['value'])
 
         dt = api_msg.get("timestamp")
         self.telmodel.sdp.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
@@ -250,19 +249,7 @@ class TelescopeManager(App):
 
         action = Action()
 
-        if event.name.startswith("read_samples"):
-            if self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
-                dig_req = self._construct_req_to_dig(method="read_samples")
-                action.set_msg_to_remote(dig_req)
-
-                action.set_timer_action(Action.Timer(
-                    name=f"dig_req_timer:{dig_req.get_timestamp()}", 
-                    timer_action=self.telmodel.tm.app.msg_timeout_ms, 
-                    echo_data=dig_req))
-            else:
-                action.set_timer_action(Action.Timer(name="read_samples", timer_action=self.telmodel.tm.app.msg_timeout_ms))
-
-        elif event.name.startswith("dig_req_timer"):
+        if event.name.startswith("dig_req_timer"):
             logger.warning(f"Telescope Manager timed out waiting for acknowledgement from Digitiser for request {event}")
 
         return action
@@ -284,7 +271,7 @@ class TelescopeManager(App):
         """
         status = self.get_app_processor_state()
 
-        scan_store_dir = self.telmodel.sdp.app.arguments.get('output_dir','~/')
+        scan_store_dir = self.telmodel.sdp.app.arguments.get('output_dir','~/') if self.telmodel.sdp.app.arguments is not None else '~/'
 
         if Path(scan_store_dir).exists():
 
@@ -295,12 +282,12 @@ class TelescopeManager(App):
             gain_files = list(Path(scan_store_dir).glob("*gain.csv"))
             meta_files = list(Path(scan_store_dir).glob("*meta.json"))
 
-            # Sort by file name in reverse order (newest last)
-            spr_files.sort(key=lambda x: x.name, reverse=True)
-            load_files.sort(key=lambda x: x.name, reverse=True)
-            tsys_files.sort(key=lambda x: x.name, reverse=True)
-            gain_files.sort(key=lambda x: x.name, reverse=True)
-            meta_files.sort(key=lambda x: x.name, reverse=True)
+            # Sort by creation date in reverse order (newest first)
+            spr_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
+            load_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
+            tsys_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
+            gain_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
+            meta_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
 
             # Limit to the latest 100 files of each type
             spr_files = spr_files[:100]

@@ -19,11 +19,9 @@ from models.dsh import Feed
 from models.health import HealthState
 from sdr.sdr import SDR
 from util import log
-from util.xbase import XBase, XStreamUnableToExtract, XSoftwareFailure
+from util.xbase import XBase, XStreamUnableToExtract, XSoftwareFailure, XAPIValidationFailed
 
 logger = logging.getLogger(__name__)
-
-MSG_TIMEOUT = 10000 # Timeout in milliseconds for messages awaiting acknowledgement
 
 class Digitiser(App):
 
@@ -62,7 +60,6 @@ class Digitiser(App):
         self.dig_model.sdr_connected = self.sdr.get_comms_status()
         self.dig_model.sdr_eeprom = self.sdr.get_eeprom_info()
 
-        self.feed = Feed.NONE # Useful to indicate the feed that is connected to the digitiser
         self.dig_model.streaming = False # Flag indicating if we are currently streaming samples (from the SDR)
  
     def add_args(self, arg_parser): 
@@ -150,7 +147,7 @@ class Digitiser(App):
                     # Prepare adv msg to send samples to sdp
                     sdp_adv = self._construct_adv_to_sdp(status, message, value, payload.tobytes())
                     action.set_msg_to_remote(sdp_adv)
-                    action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=sdp_adv))
+                    action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=sdp_adv))
 
                 elif not self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED:
                     logger.warning("Digitiser cannot send samples to Science Data Processor, not connected.")
@@ -158,6 +155,7 @@ class Digitiser(App):
                     # Send status advice message to Telescope Manager
                     tm_adv = self._construct_status_adv_to_tm()
                     action.set_msg_to_remote(tm_adv)
+                    action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=tm_adv))
 
                 elif payload is None:
                     # Wait for stream_samples timer to trigger again
@@ -195,6 +193,7 @@ class Digitiser(App):
             # Send status advice message to Telescope Manager
             tm_adv = self._construct_status_adv_to_tm()
             action.set_msg_to_remote(tm_adv)
+            action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=tm_adv))
 
         return action
 
@@ -211,6 +210,7 @@ class Digitiser(App):
             # Send status advice message to Telescope Manager
             tm_adv = self._construct_status_adv_to_tm()
             action.set_msg_to_remote(tm_adv)
+            action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=tm_adv))
 
         return action
 
@@ -254,7 +254,7 @@ class Digitiser(App):
                 # Prepare adv msg to send samples to sdp
                 sdp_adv = self._construct_adv_to_sdp(status, message, value, payload.tobytes())
                 action.set_msg_to_remote(sdp_adv)
-                action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=MSG_TIMEOUT, echo_data=sdp_adv))
+                action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=sdp_adv))
 
             elif payload is None:
                 # Wait for stream_samples timer to trigger again
@@ -316,8 +316,8 @@ class Digitiser(App):
     def set_feed(self, feed_id: int):
         """ Sets the current feed ID.
         """
-        self.feed = feed_id
-        logger.info(f"Digitiser feed set to {self.feed}")
+        self.dig_model.feed = Feed(feed_id)
+        logger.info(f"Digitiser feed set to {self.dig_model.feed.name}")
 
     def set_streaming(self, streaming: bool):
         
@@ -341,29 +341,33 @@ class Digitiser(App):
             logger.error(f"Digitiser SDR not connected, cannot set property {prop_name} to {prop_value}")
             return tm_dig.STATUS_ERROR, f"Digitiser SDR not connected, cannot set property {prop_name}", None, None
 
-        # Determine the setter method
-        if hasattr(self.sdr, prop_name) and callable(getattr(self.sdr, prop_name)):
-            setter = getattr(self.sdr, prop_name)
-        elif hasattr(self, prop_name) and callable(getattr(self, prop_name)):
-            setter = getattr(self, prop_name)
-        else:
-            logger.error(f"Digitiser property setter for {prop_name} with value {prop_value} is not callable")
-            return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} is not callable", None, None
-    
-        try:  # Call the setter method
-            setter(prop_value)
-        except Exception as e:
-            logger.error(f"Digitiser failed to set property {prop_name}: {e}")
-            return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name}: {e}", None, None
-
-        # Update the property on the digitiser model
         try:
-            setattr(self.dig_model, prop_name[4:], prop_value)
-            self.dig_model.last_update = datetime.now(timezone.utc)
-        except AttributeError as e:
-            logger.error(f"Digitiser could not update the Digitiser model: Unknown attribute {prop_name[4:]}: {e}")
-        except XAPIValidationFailed as e:
-            logger.error(f"Digitiser could not update the Digitiser model: Validation failed setting {prop_name[4:]}: {e}")
+            # If the property setter exists on the SDR
+            if hasattr(self.sdr, prop_name) and callable(getattr(self.sdr, prop_name)):
+                setter = getattr(self.sdr, prop_name)
+                setter(prop_value)
+                # Update the property in the digitiser model for sdr properties
+                setattr(self.dig_model, prop_name[4:], prop_value)
+                logger.info(f"Digitiser {prop_name[4:]} set to {prop_value}")
+
+            # Else if the property setter exists on the Digitiser
+            elif hasattr(self, prop_name) and callable(getattr(self, prop_name)):
+                setter = getattr(self, prop_name)
+                setter(prop_value)
+
+            # Else if the property does not exist on either the SDR or Digitiser
+            elif not hasattr(self.sdr, prop_name) and not hasattr(self, prop_name):
+                logger.error(f"Digitiser unknown property {prop_name} with value {prop_value}")
+                return tm_dig.STATUS_ERROR, f"Digitiser unknown property {prop_name}", None, None
+
+            # Else the property exists but is not callable
+            else:
+                logger.error(f"Digitiser property setter for {prop_name} with value {prop_value} is not callable")
+                return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} is not callable", None, None
+        
+        except XSoftwareFailure as e:
+            logger.exception(f"Digitiser failed to set property {prop_name} to {prop_value}: {e}")
+            return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name} to {prop_value}: {e}", None, None
 
         return tm_dig.STATUS_SUCCESS, f"Digitiser set property {prop_name} to {prop_value}", prop_value, None
     
@@ -378,11 +382,20 @@ class Digitiser(App):
             logger.error(f"Digitiser SDR not connected, cannot get value for property {prop_name}")
             return tm_dig.STATUS_ERROR, f"Digitiser SDR not connected, cannot get value for property {prop_name}", None, None
 
-        # Determine the getter method
-        if hasattr(self.sdr, prop_name) and callable(getattr(self.sdr, prop_name)):
+        # Else if the property getter exists on the SDR and is callable
+        elif hasattr(self.sdr, prop_name) and callable(getattr(self.sdr, prop_name)):
             getter = getattr(self.sdr, prop_name)
+
+        # Else if the property getter exists on the Digitiser and is callable
         elif hasattr(self, prop_name) and callable(getattr(self, prop_name)):
             getter = getattr(self, prop_name)
+
+        # Else if the property does not exist on either the SDR or Digitiser
+        elif not hasattr(self.sdr, prop_name) and not hasattr(self, prop_name):
+            logger.error(f"Digitiser unknown property {prop_name}")
+            return tm_dig.STATUS_ERROR, f"Digitiser unknown property {prop_name}", None, None
+
+        # Else the property exists but is not callable
         else:
             logger.error(f"Digitiser property getter for {prop_name} is not callable")
             return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} is not callable", None, None
@@ -411,11 +424,15 @@ class Digitiser(App):
 
         logger.debug(f"Digitiser method call: {method} with params {args}")
 
-        # Determine the method to call
+        # If the method exists on the SDR
         if hasattr(self.sdr, method):
             call = getattr(self.sdr, method)
+
+        # Else if the method exists on the Digitiser
         elif hasattr(self, method):
             call = getattr(self, method)
+
+        # Else if the method does not exist on either the SDR or Digitiser
         else:
             logger.error(f"Digitiser method {method} not found")
             return tm_dig.STATUS_ERROR, f"Digitiser method {method} not found", None, None
@@ -472,7 +489,7 @@ class Digitiser(App):
         
         metadata = [   
             {"property": "dig_id", "value": self.dig_model.id},          # Digitiser Id
-            {"property": "feed", "value": self.feed},                    # Feed Id
+            {"property": "feed", "value": self.dig_model.feed.name},     # Feed name
             {"property": "center_freq", "value": self.sdr.center_freq},  # Hz    
             {"property": "sample_rate", "value": self.sdr.sample_rate},  # Hz
             {"property": "bandwidth", "value": self.sdr.bandwidth},      # MHz

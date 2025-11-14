@@ -53,8 +53,14 @@ class BaseModel:
                 )
 
     def __getattr__(self, name):
-        if name in self._data:
-            return self._data[name]
+        # Use object.__getattribute__ to avoid infinite recursion
+        try:
+            data = object.__getattribute__(self, '_data')
+        except AttributeError:
+            raise XSoftwareFailure(f"Base model _data not initialized")
+        
+        if name in data:
+            return data[name]
         raise XSoftwareFailure(f"Base model attribute name: {name} not found")
 
     def __setattr__(self, name, value):
@@ -155,10 +161,11 @@ class BaseModel:
         from models.app import AppModel
         from models.comms import CommunicationStatus
         from models.dig import DigitiserModel
-        from models.dsh import DishModel
+        from models.dsh import DishModel, DishMgrModel
         from models.dsh import Feed
         from models.health import HealthState
         from models.obs import ObsState, ObsModel
+        from models.proc import ProcessorModel
         from models.scan import ScanModel, ScanState
         from models.tm import ScanStoreModel
         from models.sdp import ScienceDataProcessorModel
@@ -172,7 +179,6 @@ class BaseModel:
                 obstime = BaseModel._deserialise(v["obstime"])
                 return AltAz(alt=v["alt"]*u.deg, az=v["az"]*u.deg, obstime=obstime, location=location)
             elif model_type == "AppModel":
-                # Recursively deserialize nested fields, then construct
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return AppModel(**deserialized_fields)
             elif model_type == "datetime":
@@ -181,6 +187,9 @@ class BaseModel:
             elif model_type == "DigitiserModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return DigitiserModel(**deserialized_fields)
+            elif model_type == "DishMgrModel":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return DishMgrModel(**deserialized_fields)
             elif model_type == "DishModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return DishModel(**deserialized_fields)
@@ -197,6 +206,7 @@ class BaseModel:
                     "ScanState": ScanState,
                     "ObsState": ObsState,
                     "TargetType": TargetType,
+                    "Feed": Feed,
                 }.get(enum_class_name)
                 if enum_class is not None:
                     return enum_class[enum_value_name]
@@ -213,6 +223,9 @@ class BaseModel:
             elif model_type == "ObsModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ObsModel(**deserialized_fields)
+            elif model_type == "ProcessorModel":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return ProcessorModel(**deserialized_fields)
             elif model_type == "ScanModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ScanModel(**deserialized_fields)
@@ -249,18 +262,4 @@ class BaseModel:
             return {k: BaseModel._deserialise(val) for k, val in v.items()}
         elif isinstance(v, enum.IntEnum):
             return type(v)(v.value)
-        elif isinstance(v, str):
-            # Try to convert string enum names back to enums
-            if v in ["NOT_ESTABLISHED", "ESTABLISHING", "ESTABLISHED"]:
-                return CommunicationStatus[v]
-            elif v in ["UNKNOWN", "OK", "DEGRADED", "FAILED"]:
-                return HealthState[v]
-            elif v in ["EMPTY", "WIP", "ABORTED", "COMPLETE"]:
-                return ScanState[v]
-            elif v in ["NONE", "IDLE", "ACQUIRING", "PROCESSING"]:
-                return ObsState[v]
-            elif v in ["SIDEREAL", "SOLAR", "LUNAR", "TERRESTRIAL", "SATELLITE"]:
-                return TargetType[v]
-            elif v in ["NONE", "LF_400", "H3T_1420", "LOAD"]:
-                return Feed[v]
         return v

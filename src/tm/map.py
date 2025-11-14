@@ -15,27 +15,23 @@ _config_to_property = {
     "Streaming": tm_dig.PROPERTY_STREAMING,
 }
 
-_config_to_feed = {
-    "NONE": dsh.Feed.NONE,
-    "H3T_1420": dsh.Feed.H3T_1420,
-    "H7T_1420": dsh.Feed.H7T_1420,
-    "LF_400": dsh.Feed.LF_400,
-    "LOAD": dsh.Feed.LOAD,
-}
-
-def get_property_name(config_item: str, value) -> (str, Any):
+def get_property_name_value(config_item: str, value) -> (str, Any):
     """ Get the property name for a given configuration item.
     """
     property = _config_to_property.get(config_item, None)
+
+    # If property is found, map the value accordingly
     if property:
         if property == tm_dig.PROPERTY_FEED:
 
-            feed_id = _config_to_feed.get(value, None)
-            if feed_id is not None:
-                return property, feed_id
-            else:
-                logger.error(f"Telescope Manager map: invalid FEED value {value} for property {property}")
-                return property, None
+            # Try to match by Feed enum name
+            for feed in dsh.Feed:
+                if feed.name == value:
+                    return property, feed
+            
+            # If no match found, log error
+            logger.error(f"Telescope Manager map: invalid FEED value {value} for property {property}")
+            return property, None
 
         elif property == tm_dig.PROPERTY_GAIN:
             if str(value).upper() == "AUTO":
@@ -57,10 +53,26 @@ def get_property_name(config_item: str, value) -> (str, Any):
             else:
                 logger.error(f"Telescope Manager map: invalid STREAMING value {value} for property {property}")
                 return property, None
+
+        elif property in [
+            tm_dig.PROPERTY_SAMPLE_RATE,
+            tm_dig.PROPERTY_CENTER_FREQ,
+            tm_dig.PROPERTY_BANDWIDTH,
+            tm_dig.PROPERTY_FREQ_CORRECTION
+        ]:
+            try:
+                # These properties expect numeric values
+                if property == tm_dig.PROPERTY_FREQ_CORRECTION:
+                    return property, int(value)
+                else:
+                    return property, float(value)
+            except ValueError:
+                logger.error(f"Telescope Manager map: invalid numeric value {value} for property {property}")
+                return property, None
   
     return property, value
 
-def get_method_name(config_item: str, value) -> (str, Any):
+def get_method_name_value(config_item: str, value) -> (str, Any):
     """ Get the method name for a given configuration item.
     """
     if config_item is None or value is None:
@@ -70,11 +82,6 @@ def get_method_name(config_item: str, value) -> (str, Any):
         return tm_dig.METHOD_GET_AUTO_GAIN, {"time_in_secs": 0.5}
     
     return None, None
-
-def get_feed_id(config_item: str) -> str:
-    """ Get the feed ID for a given configuration item.
-    """
-    return _config_to_feed.get(config_item, None)
 
 if __name__ == "__main__":
     # Test the mapping

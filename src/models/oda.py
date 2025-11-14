@@ -42,8 +42,6 @@ class ScanStoreModel(BaseModel):
 
         super().__init__(**kwargs)
 
-
-
 if __name__ == "__main__":
     
     import pprint
