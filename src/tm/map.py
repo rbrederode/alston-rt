@@ -58,7 +58,8 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
             tm_dig.PROPERTY_SAMPLE_RATE,
             tm_dig.PROPERTY_CENTER_FREQ,
             tm_dig.PROPERTY_BANDWIDTH,
-            tm_dig.PROPERTY_FREQ_CORRECTION
+            tm_dig.PROPERTY_FREQ_CORRECTION,
+            tm_dig.PROPERTY_GAIN,
         ]:
             try:
                 # These properties expect numeric values

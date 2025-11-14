@@ -41,7 +41,7 @@ class BaseModel:
         try:
             self.schema.validate(self._data)
         except SchemaError as e:
-            raise XAPIValidationFailed(f"Base model schema error: validate failed: {e}")
+            raise XAPIValidationFailed(f"Base model schema error: validate failed for type {type(self).__name__}: {e}")
 
     def _validate_transition(self, name: str, new_value: Any):
         if name in self.allowed_transitions:
@@ -49,7 +49,7 @@ class BaseModel:
             allowed = self.allowed_transitions[name].get(old_value, set())
             if old_value is not None and new_value not in allowed:
                 raise XInvalidTransition(
-                    f"Base model attempting invalid transition for name: {name}: {old_value.name} → {new_value.name}"
+                    f"Base model attempting invalid transition in type {type(self).__name__} for name: {name}: {old_value.name} → {new_value.name}"
                 )
 
     def __getattr__(self, name):
@@ -57,18 +57,17 @@ class BaseModel:
         try:
             data = object.__getattribute__(self, '_data')
         except AttributeError:
-            raise XSoftwareFailure(f"Base model _data not initialized")
+            raise XSoftwareFailure(f"Base model _data not initialized for type {type(self).__name__}")
         
         if name in data:
             return data[name]
-        raise XSoftwareFailure(f"Base model attribute name: {name} not found")
-
+        raise XSoftwareFailure(f"Base model attribute name: {name} not found for type {type(self).__name__}")
     def __setattr__(self, name, value):
         if name.startswith("_"):
             super().__setattr__(name, value)
             return
         if name not in self.schema.schema:
-            raise AttributeError(f"Invalid attribute name: {name} for {type(self).__name__}")
+            raise AttributeError(f"Invalid attribute name: {name} for type {type(self).__name__}")
         self._validate_transition(name, value)
         self._data[name] = value
         self._validate_schema()  # enforce schema after update
@@ -79,7 +78,7 @@ class BaseModel:
         # Check if parsed is a BaseModel and has the same class name
         # (to handle cases where __main__ vs module imports create different class objects)
         if not isinstance(parsed, BaseModel) or parsed.__class__.__name__ != cls.__name__:
-            raise XAPIValidationFailed(f"Base model from_dict failed: expected {cls.__name__}, got {type(parsed).__name__}")
+            raise XAPIValidationFailed(f"Base model from_dict failed for type {cls.__name__}: expected {cls.__name__}, got {type(parsed).__name__}")
         return parsed
 
     def to_dict(self):
