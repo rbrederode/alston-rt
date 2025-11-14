@@ -164,9 +164,10 @@ class BaseModel:
         from models.dsh import Feed
         from models.health import HealthState
         from models.obs import ObsState, ObsModel
+        from models.oda import ObsStore, ScanStore, ODAModel
+        from models.oet import OETModel
         from models.proc import ProcessorModel
         from models.scan import ScanModel, ScanState
-        from models.tm import ScanStoreModel
         from models.sdp import ScienceDataProcessorModel
         from models.target import TargetModel, TargetType
         from models.tm import TelescopeManagerModel
@@ -222,15 +223,24 @@ class BaseModel:
             elif model_type == "ObsModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ObsModel(**deserialized_fields)
+            elif model_type == "ObsStore":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return ObsStore(**deserialized_fields)
+            elif model_type == "OETModel":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return OETModel(**deserialized_fields)
+            elif model_type == "ODAModel":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return ODAModel(**deserialized_fields)
             elif model_type == "ProcessorModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ProcessorModel(**deserialized_fields)
             elif model_type == "ScanModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ScanModel(**deserialized_fields)
-            elif model_type == "ScanStoreModel":
+            elif model_type == "ScanStore":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
-                return ScanStoreModel(**deserialized_fields)
+                return ScanStore(**deserialized_fields)
             elif model_type == "ScienceDataProcessorModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ScienceDataProcessorModel(**deserialized_fields)

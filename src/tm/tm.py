@@ -16,7 +16,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import HttpRequest
 
 # Import application modules
-from api import tm_dig, tm_sdp
+from api import tm_dig, tm_sdp, tm_oet
 from env.app import App
 from env.events import ConnectEvent, DisconnectEvent, DataEvent, ConfigEvent
 from ipc.message import AppMessage, APIMessage
@@ -24,10 +24,11 @@ from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.app import AppModel
+from models.comms import CommunicationStatus
 from models.dig import DigitiserModel
 from models.dsh import Feed
+from models.oet import OETModel
 from models.health import HealthState
-from models.comms import CommunicationStatus
 from models.sdp import ScienceDataProcessorModel
 from models.telescope import TelescopeModel
 from util import log
@@ -52,6 +53,18 @@ class TelescopeManager(App):
     def __init__(self, app_name: str = "tm"):
 
         super().__init__(app_name=app_name, app_model=self.telmodel.tm.app)
+
+        # Observation Execution Tool interface
+        self.oet_system = "oet"
+        self.oet_api = tm_oet.TM_OET()
+        # Observation Execution Tool TCP Client
+        self.oet_endpoint = TCPClient(description=self.oet_system, queue=self.get_queue(), host=self.get_args().oet_host, port=self.get_args().oet_port)
+        self.oet_endpoint.connect()
+        # Register Observation Execution Tool interface with the App
+        self.register_interface(self.oet_system, self.oet_api, self.oet_endpoint)
+        # Initialise Observation Execution Tool comms status
+        self.telmodel.oet.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.tm.oet_connected = CommunicationStatus.NOT_ESTABLISHED
 
         # Digitiser interface
         self.dig_system = "dig"
@@ -87,6 +100,9 @@ class TelescopeManager(App):
 
         arg_parser.add_argument("--sdp_host", type=str, required=False, help="TCP server host to connect to the Science Data Processor",default="localhost")
         arg_parser.add_argument("--sdp_port", type=int, required=False, help="TCP server port to connect to the Science Data Processor", default=50001)
+
+        arg_parser.add_argument("--oet_host", type=str, required=False, help="TCP server host to connect to the Observation Execution Tool", default="localhost")
+        arg_parser.add_argument("--oet_port", type=int, required=False, help="TCP server port to connect to the Observation Execution Tool", default=50002) 
 
     def process_init(self) -> Action:
         """ Processes initialisation events.
@@ -139,6 +155,46 @@ class TelescopeManager(App):
                     name=f"dig_req_timer:{dig_req.get_timestamp()}", 
                     timer_action=self.telmodel.tm.app.msg_timeout_ms, 
                     echo_data=dig_req))
+
+        return action
+
+    def process_oet_connected(self, event) -> Action:
+        """ Processes Observation Execution Tool connected events.
+        """
+        logger.info(f"Telescope Manager connected to Observation Execution Tool: {event.remote_addr}")
+
+        self.telmodel.oet.tm_connected = CommunicationStatus.ESTABLISHED
+        self.telmodel.tm.oet_connected = CommunicationStatus.ESTABLISHED
+
+        action = Action()
+        return action
+
+    def process_oet_disconnected(self, event) -> Action:
+        """ Processes Observation Execution Tool disconnected events.
+        """
+        logger.info(f"Telescope Manager disconnected from Observation Execution Tool: {event.remote_addr}")
+
+        self.telmodel.oet.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.tm.oet_connected = CommunicationStatus.NOT_ESTABLISHED
+
+    def process_oet_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
+        """ Processes api messages received on the Observation Execution Tool service access point (SAP)
+            API messages are already translated and validated before being passed to this method.
+        """
+        logger.info(f"Telescope Manager received observation execution tool {api_call['msg_type']} message with action code: {api_call['action_code']}")
+        
+        action = Action()
+
+        if api_call.get('status','') != tm_dig.STATUS_ERROR:
+
+            if api_call.get('property','') == tm_oet.PROPERTY_STATUS:
+                logger.debug(f"Telescope Manager received Observation Execution Tool STATUS update: {api_call['value']}")
+
+                self.telmodel.oet = OETModel.from_dict(api_call['value'])
+
+        # Update Telescope Model based on received Observation Execution Tool api_call
+        dt = api_msg.get("timestamp")
+        self.telmodel.oet.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
 
         return action
 
@@ -299,25 +355,24 @@ class TelescopeManager(App):
             # Combine into a single list of scan files
             scan_files = spr_files + load_files + tsys_files + gain_files + meta_files
 
-            self.telmodel.tm.scan_store.spr_files = []
-            self.telmodel.tm.scan_store.load_files = []
-            self.telmodel.tm.scan_store.tsys_files = []
-            self.telmodel.tm.scan_store.gain_files = []
-            self.telmodel.tm.scan_store.meta_files = []
-
+            self.telmodel.oda.scan_store.spr_files = []
+            self.telmodel.oda.scan_store.load_files = []
+            self.telmodel.oda.scan_store.tsys_files = []
+            self.telmodel.oda.scan_store.gain_files = []
+            self.telmodel.oda.scan_store.meta_files = []
             for scan_file in scan_files:
                 if scan_file.name.endswith("spr.csv"):
-                    self.telmodel.tm.scan_store.spr_files.append(scan_file.name)
+                    self.telmodel.oda.scan_store.spr_files.append(scan_file.name)
                 elif scan_file.name.endswith("load.csv"):
-                    self.telmodel.tm.scan_store.load_files.append(scan_file.name)
+                    self.telmodel.oda.scan_store.load_files.append(scan_file.name)
                 elif scan_file.name.endswith("tsys.csv"):
-                    self.telmodel.tm.scan_store.tsys_files.append(scan_file.name)
+                    self.telmodel.oda.scan_store.tsys_files.append(scan_file.name)
                 elif scan_file.name.endswith("gain.csv"):
-                    self.telmodel.tm.scan_store.gain_files.append(scan_file.name)
+                    self.telmodel.oda.scan_store.gain_files.append(scan_file.name)
                 elif scan_file.name.endswith("meta.json"):
-                    self.telmodel.tm.scan_store.meta_files.append(scan_file.name)
+                    self.telmodel.oda.scan_store.meta_files.append(scan_file.name)
 
-            self.telmodel.tm.scan_store.last_update = datetime.now(timezone.utc)
+            self.telmodel.oda.scan_store.last_update = datetime.now(timezone.utc)
 
         self.telmodel.tm.last_update = datetime.now(timezone.utc)
 
@@ -479,6 +534,22 @@ def main():
                     range=TM_UI_API + "C2",
                     valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
                     body={"values": [[sdp_str]]}
+                ))
+
+            # Exchange OET and ODA data with the UI if comms is established
+            if tm.telmodel.oet.tm_connected == CommunicationStatus.ESTABLISHED:
+
+                oet_dict = tm.telmodel.oet.to_dict()
+                oet_str = json.dumps(oet_dict, indent=4)
+
+                oda_dict = tm.telmodel.oda.to_dict()
+                oda_str = json.dumps(oda_dict, indent=4)
+
+                execute_sheets_request(sheet.values().update(
+                    spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                    range=TM_UI_API + "D2:E2",
+                    valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                    body={"values": [[oet_str, oda_str]]}
                 ))
                 
             # Update TM model in Google Sheets

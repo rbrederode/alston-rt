@@ -35,11 +35,11 @@ class Observation:
             obs_id: str | None = None, 
             desc:str=None, 
             target: TargetModel=None, 
-            center_freq:int=None, 
-            bandwidth:int=None, 
-            sample_rate:int=None, 
+            center_freq:float=None, 
+            bandwidth:float=None, 
+            sample_rate:float=None, 
             channels:int=None, 
-            duration:int=None
+            duration:float=None
         ):
         """ 
         Create an Observation.
@@ -66,7 +66,8 @@ class Observation:
             self.obs_model.short_desc = desc     # Short description of the observation
             self.obs_model.long_desc = desc      # Long description of the observation
 
-            self.obs_model.target = target       # Target object
+            self.obs_model.targets.append(target)             # Target object
+            self.obs_model.target_durations.append(duration)  # Duration on target (seconds)
 
             self.obs_model.center_freq = center_freq  # Center frequency (Hz)
             self.obs_model.bandwidth = bandwidth      # Bandwidth (Hz)

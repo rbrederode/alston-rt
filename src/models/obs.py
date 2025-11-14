@@ -93,14 +93,17 @@ class ObsModel(BaseModel):
         "long_desc": And(str, lambda v: isinstance(v, str)),                    # Long description (no strict upper limit)
         "state": And(ObsState, lambda v: isinstance(v, ObsState)),
 
-        "target": And(TargetModel, lambda v: isinstance(v, TargetModel)),       # Target model
+        # Array of target models and durations corresponding to each target
+        "targets": And(list, lambda v: all(isinstance(item, TargetModel) for item in v)),    # List of target models
+        "target_durations": And(list, lambda v: all(isinstance(item, float) for item in v)), # List of target durations (seconds)
+
         "dsh_id": And(str, lambda v: isinstance(v, str)),                       # Dish identifier e.g. "dish001"
 
         "center_freq": And(float, lambda v: v >= 0.0),                          # Center frequency (Hz) 
         "bandwidth": And(float, lambda v: v >= 0.0),                            # Bandwidth (Hz) 
         "sample_rate": And(float, lambda v: v >= 0.0),                          # Sample rate (Hz) 
         "channels": And(int, lambda v: v >= 0),                                 # Number of channels (fourier transform fft_size) 
-        "duration": And(float, lambda v: v >= 0.0),                             # Duration (s) of the observation
+        
         "freq_min": And(Or(None, float), lambda v: v is None or v >= 0.0),      # Start of frequency scanning (Hz)
         "freq_max": And(Or(None, float), lambda v: v is None or v >= 0.0),      # End of frequency scanning (Hz)
         "freq_scans": And(Or(None, int), lambda v: v is None or v >= 0),        # Number of frequency scans
@@ -136,13 +139,13 @@ class ObsModel(BaseModel):
             "short_desc": "",
             "long_desc": "",
             "state": ObsState.EMPTY,
-            "target": TargetModel(),
+            "targets": [],
+            "target_durations": [],
             "dsh_id": "<undefined>",
             "center_freq": 0.0,
             "bandwidth": 0.0,
             "sample_rate": 0.0,
             "channels": 0,
-            "duration": 0.0,
             "freq_min": None,
             "freq_max": None,
             "freq_scans": None,
@@ -177,17 +180,19 @@ if __name__ == "__main__":
         short_desc="Test Observation",
         long_desc="This is a test observation of a celestial target.",
         state=ObsState.EMPTY,
-        target=TargetModel(
-            name="Test Target",
-            type=TargetType.SIDEREAL,
-            sky_coord=SkyCoord(ra=180.0*u.deg, dec=-45.0*u.deg, frame='icrs'),
-        ),
+        targets=[
+            TargetModel(
+                name="Test Target",
+                type=TargetType.SIDEREAL,
+                sky_coord=SkyCoord(ra=180.0*u.deg, dec=-45.0*u.deg, frame='icrs'),
+            )
+        ],
+        target_durations=[120.0],
         dsh_id="dish001",
         center_freq=1420000000.0,
         bandwidth=20000000.0,
         sample_rate=4000000.0,
         channels=1024,
-        duration=3600.0,
         start_dt=datetime.now(timezone.utc),
         end_dt=datetime.now(timezone.utc),
         last_update=datetime.now(timezone.utc)

@@ -6,6 +6,8 @@ from models.comms import CommunicationStatus
 from models.dsh import DishModel, DishMode, PointingState, Feed, CapabilityStates
 from models.dig import DigitiserModel
 from models.health import HealthState
+from models.oet import OETModel
+from models.oda import ODAModel
 from models.sdp import ScienceDataProcessorModel
 from models.proc import ProcessorModel
 from models.tm import TelescopeManagerModel
@@ -13,16 +15,22 @@ from models.tm import TelescopeManagerModel
 # The Telescope Model
 class TelescopeModel:
     """A class representing the telescope model, which includes:
+
+        - Observation Data Archive,
+        - Observation Execution Tool,
         - Telescope Manager, 
         - Dish, 
         - Digitiser, and the
         - Science Data Processor
+        
     """
     def __init__(self):
 
+        self.oda = ODAModel(id="oda001")
+        self.oet = OETModel(id="oet001")
         self.tm = TelescopeManagerModel(id="tm001")
-        self.dishes = [DishModel(id="dsh001")]  # List of dish models
-        self.digitisers = [DigitiserModel(id="dig001")]  # List of digitiser models
+        self.dishes = [DishModel(id="dsh001")]              # List of dish models
+        self.digitisers = [DigitiserModel(id="dig001")]     # List of digitiser models
         self.sdp = ScienceDataProcessorModel(id="sdp001")
     
     # Backward-compatible properties for single dish/digitiser access

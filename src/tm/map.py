@@ -38,7 +38,7 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
                 return property, {"time_in_secs": 0.5}
             else:
                 try:
-                    return property, int(value)
+                    return property, float(value)
                 except ValueError:
                     logger.error(f"Telescope Manager map: invalid GAIN value {value} for property {property}")
                 return property, None
@@ -59,7 +59,6 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
             tm_dig.PROPERTY_CENTER_FREQ,
             tm_dig.PROPERTY_BANDWIDTH,
             tm_dig.PROPERTY_FREQ_CORRECTION,
-            tm_dig.PROPERTY_GAIN,
         ]:
             try:
                 # These properties expect numeric values
