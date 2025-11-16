@@ -4,6 +4,7 @@ import numpy as np
 import time
 from datetime import datetime, timezone
 from rtlsdr import RtlSdr
+from gpiozero import LED
 
 from api import tm_dig, sdp_dig
 from env.app import App
@@ -530,9 +531,15 @@ def main():
     digitiser = Digitiser()
     digitiser.start() 
 
+    led = LED(17)   # define LED pin according to BCM Numbering
+
     try:
         while True:
-            time.sleep(1)
+            led.on()    # turn on LED
+            time.sleep(0.5)
+            led.off()   # turn off LED
+            time.sleep(0.5)
+
     except KeyboardInterrupt:
         pass
     finally:
