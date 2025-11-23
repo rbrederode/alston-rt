@@ -43,11 +43,11 @@ class ScanStore(BaseModel):
 
         super().__init__(**kwargs)
 
-class ObsStore(BaseModel):
-    """A class representing the observation store."""
+class ObsList(BaseModel):
+    """A class representing a list of observations."""
 
     schema = Schema({
-        "_type": And(str, lambda v: v == "ObsStore"),
+        "_type": And(str, lambda v: v == "ObsList"),
         "obs_list": And(list, lambda v: isinstance(v, list)),          # List of observations
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
@@ -58,7 +58,7 @@ class ObsStore(BaseModel):
 
         # Default values
         defaults = {
-            "_type": "ObsStore",
+            "_type": "ObsList",
             "obs_list": [],
             "last_update": datetime.now(timezone.utc),
         }
@@ -76,7 +76,7 @@ class ODAModel(BaseModel):
     schema = Schema({
         "_type": And(str, lambda v: v == "ODAModel"),
         "scan_store": And(ScanStore, lambda v: isinstance(v, ScanStore)),
-        "obs_store": And(ObsStore, lambda v: isinstance(v, ObsStore)),
+        "obs_list": And(ObsList, lambda v: isinstance(v, ObsList)),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -88,7 +88,7 @@ class ODAModel(BaseModel):
         defaults = {
             "_type": "ODAModel",
             "scan_store": ScanStore(),
-            "obs_store": ObsStore(),
+            "obs_list": ObsList(),
             "last_update": datetime.now(timezone.utc),
         }
 
@@ -151,10 +151,10 @@ if __name__ == "__main__":
         last_update=datetime.now(timezone.utc)
     )
 
-    obsstore = ObsStore()
-    obsstore.obs_list.append(obs001)
+    obslist = ObsList()
+    obslist.obs_list.append(obs001)
     print("="*40)
-    print("Observation Store with One Observation")
+    print("Observation List with One Observation")
     print("="*40)
-    pprint.pprint(obsstore.to_dict())
+    pprint.pprint(obslist.to_dict())
 

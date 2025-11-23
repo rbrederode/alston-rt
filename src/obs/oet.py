@@ -14,7 +14,7 @@ from ipc.tcp_server import TCPServer
 from models.comms import CommunicationStatus
 from models.health import HealthState
 from models.obs import ObsModel
-from models.oda import ObsStore, ScanStore
+from models.oda import ObsList, ScanStore
 from models.oet import OETModel
 from util import log
 from util.xbase import XBase, XStreamUnableToExtract

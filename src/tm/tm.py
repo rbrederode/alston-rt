@@ -31,7 +31,7 @@ from models.oet import OETModel
 from models.health import HealthState
 from models.sdp import ScienceDataProcessorModel
 from models.telescope import TelescopeModel
-from util import log
+from util import log, util
 from util.xbase import XBase, XStreamUnableToExtract
 
 logger = logging.getLogger(__name__)
@@ -41,11 +41,12 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # The SHEET ID for the ALSTON RADIO TELESCOPE google sheet
 ALSTON_RADIO_TELESCOPE = "1r73N0VZHSQC6RjRv94gzY50pTgRvaQWfctGGOMZVpzc"
-DIG001_CONFIG = "DIG001!D4:E11"     # Range for Digitiser 001 configuration
-DIG002_CONFIG = "DIG002!D4:E11"     # Range for Digitiser 002 configuration
-ODT_CONFIG = "OBS DESIGN!A3:Z3"     # Range for Observation Design Tool
+
 TM_UI_API = "TM_UI_API!"            # Range for UI-TM API data
-TM_UI_POLL_INTERVAL_S = 5            # Poll interval in seconds
+TM_UI_POLL_INTERVAL_S = 5           # Poll interval in seconds
+
+OET_OBS_LIST = TM_UI_API + "D3"      # Range for Observation Execution Tool
+DIG001_CONFIG = TM_UI_API + "B3"     # Range for Digitiser 001 configuration
 
 class TelescopeManager(App):
 
@@ -120,35 +121,28 @@ class TelescopeManager(App):
 
         action = Action()
 
-        # Compare each item in the new configuration with the old configuration
-        for i, new_item in enumerate(event.new_config):
+        if event.category == "DIG" and self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
 
-            property = method = value = None
+            for config_key in event.new_config.keys():
+                config_value = event.new_config[config_key]
 
-            # Map from configuration item to method/property and value
-            (method, value) = map.get_method_name_value(event.category, new_item[0], new_item[1])
-            (property, value) = map.get_property_name_value(event.category, new_item[0], new_item[1]) if method is None else (None, None)
-                
-            if method is None and property is None:
-                logger.warning(f"Telescope Manager received unknown configuration item at row {i}: {new_item} with value {new_item[1]}")
-                continue
+                # If key value is unchanged, skip it
+                if event.old_config and config_key in event.old_config and event.old_config[config_key] == config_value:
+                    continue
 
-            update = False
+                logger.info(f"Digitiser configuration update for key: {config_key}, value: {config_value}")
 
-            if event.old_config is not None:
-                if i < len(event.old_config):
-                    old_item = event.old_config[i]
-                    if new_item != old_item:
-                        update = True
-                        logger.info(f"Telescope property '{property}' changed at row {i}: from {old_item} to {new_item}")
-                else:
-                    update = True
-                    logger.info(f"Telescope property '{property}' added at row {i}: {new_item}")
-            else:
-                update = True
-                logger.info(f"Telescope property '{property}' initialising at row {i}: {new_item}")
+                property = method = value = None
 
-            if event.category == "DIG" and update and self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
+                (method, value) = map.get_method_name_value(config_key, config_value)
+                (property, value) = map.get_property_name_value(config_key, config_value) if method is None else (None, config_value)
+
+                if method is None and property is None:
+                    logger.warning(f"Telescope Manager received unknown configuration item: {key}")
+                    continue
+
+                logger.info(f"Sending digitiser configuration update for method: {method}, property: {property}, value: {value}")
+            
                 dig_req = self._construct_req_to_dig(property=property, method=method, value=value, message="")
                 action.set_msg_to_remote(dig_req)
 
@@ -156,6 +150,9 @@ class TelescopeManager(App):
                     name=f"dig_req_timer:{dig_req.get_timestamp()}", 
                     timer_action=self.telmodel.tm.app.msg_timeout_ms, 
                     echo_data=dig_req))
+
+        else:
+            logger.info(f"Telescope Manager updated configuration received for {event.category}.")
 
         return action
 
@@ -483,38 +480,53 @@ def main():
     sheet = service.spreadsheets()
 
     # Initialize last config pull snapshots and last model push datetimes
-    last_dig_config_snapshot = last_odt_config_snapshot = None
-    last_tm_model_push = last_dig_model_push = last_sdp_model_push = last_obs_model_push = datetime.min.replace(tzinfo=timezone.utc)
+    last_dig_config_snapshot = last_oet_config_snapshot = None
+    last_tm_model_push = last_dig_model_push = last_sdp_model_push = last_oet_model_push = datetime.min.replace(tzinfo=timezone.utc)
 
     try:
         while True:
 
-            # Exchange Observation Design data with the UI if comms to the OET is established
+            # If comms to the OET is established then exchange Observation Execution Tool data with the UI 
             if tm.telmodel.tm.oet_connected == CommunicationStatus.ESTABLISHED:
         
                 result = execute_sheets_request(sheet.values().get(
                     spreadsheetId=ALSTON_RADIO_TELESCOPE, 
-                    range=ODT_CONFIG,
+                    range=OET_OBS_LIST,
                     valueRenderOption="UNFORMATTED_VALUE")) # Retrieve values in their original form e.g. int, float, string, date
 
                 if 'error' in result:
                     error = result['error']['details'][0]
                     error_msg = error.get('errorMessage', 'Unknown error')
-                    logger.error(f'TM - error getting ODT configuration: {error_msg}')
+                    logger.error(f'TM - error getting OET configuration: {error_msg}')
                 else:
                     values = result.get("values", [])
 
-                    if values != last_odt_config_snapshot:
-                        config = ConfigEvent(category="ODT", old_config=last_odt_config_snapshot, new_config=values, timestamp=datetime.now(timezone.utc))
+                    try:
+                        json_config = json.loads(values[0][0])
+                    except IndexError:
+                        logger.error(f"TM - no data in sheet range {DIG001_CONFIG}")
+                        json_config = None
+                    except json.JSONDecodeError as e:
+                        logger.error(f"TM - invalid JSON in sheet row {values[0]}: {e}")
+                        json_config = None
+       
+                    if json_config != last_oet_config_snapshot:
+
+                        config = ConfigEvent(
+                            category="OET",
+                            old_config=last_oet_config_snapshot,
+                            new_config=json_config,
+                            timestamp=datetime.now(timezone.utc)
+                        )
                         tm.get_queue().put(config)
 
-                        last_odt_config_snapshot = values
+                        last_oet_config_snapshot = json_config
 
             else:
                 # Reset the snapshot such that config is re-read upon reconnection
-                last_odt_config_snapshot = None
+                last_oet_config_snapshot = None
 
-            # Exchange Digitiser data with the UI if comms is established
+            # If comms to the Digitiser is established then exchange Digitiser data with the UI 
             if tm.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
         
                 result = execute_sheets_request(sheet.values().get(
@@ -529,12 +541,21 @@ def main():
                 else:
                     values = result.get("values", [])
 
-                    if values != last_dig_config_snapshot:
+                    try:
+                        json_config = json.loads(values[0][0])
+                    except IndexError:
+                        logger.error(f"TM - no data in sheet range {DIG001_CONFIG}")
+                        json_config = None
+                    except json.JSONDecodeError as e:
+                        logger.error(f"TM - invalid JSON in sheet row {values[0]}: {e}")
+                        json_config = None
+       
+                    if json_config != last_dig_config_snapshot:
 
-                        config = ConfigEvent(category="DIG", old_config=last_dig_config_snapshot, new_config=values, timestamp=datetime.now(timezone.utc))
+                        config = ConfigEvent(category="DIG", old_config=last_dig_config_snapshot, new_config=json_config, timestamp=datetime.now(timezone.utc))
                         tm.get_queue().put(config)
 
-                        last_dig_config_snapshot = values
+                        last_dig_config_snapshot = json_config
 
                 dig_latest_update = tm.telmodel.dig.last_update if tm.telmodel.dig.last_update else datetime.now(timezone.utc)
 
@@ -557,7 +578,7 @@ def main():
                 # Reset the snapshot such that config is re-read upon reconnection
                 last_dig_config_snapshot = None
 
-            # Exchange SDP data with the UI if comms is established
+            # If comms to the SDP is established then exchange SDP data with the UI 
             if tm.telmodel.sdp.tm_connected == CommunicationStatus.ESTABLISHED:
 
                 sdp_latest_update = tm.telmodel.sdp.last_update if tm.telmodel.sdp.last_update else datetime.now(timezone.utc)
@@ -577,13 +598,13 @@ def main():
 
                     last_sdp_model_push = sdp_latest_update
 
-            # Exchange OET and ODA data with the UI if comms is established
+            # If comms to the OET is established then exchange Observation Design Tool data with the UI 
             if tm.telmodel.oet.tm_connected == CommunicationStatus.ESTABLISHED:
 
                 oet_latest_update = tm.telmodel.oet.last_update if tm.telmodel.oet.last_update else datetime.now(timezone.utc)
                 oda_latest_update = tm.telmodel.oda.last_update if tm.telmodel.oda.last_update else datetime.now(timezone.utc)
 
-                if oet_latest_update > last_obs_model_push or oda_latest_update > last_obs_model_push:
+                if oet_latest_update > last_oet_model_push or oda_latest_update > last_oda_model_push:
 
                     oet_dict = tm.telmodel.oet.to_dict()
                     oet_str = json.dumps(oet_dict, indent=4)

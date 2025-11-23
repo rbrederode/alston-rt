@@ -52,8 +52,9 @@ f_e = 1420.405751768 * u.MHz  # Rest frequency of HI hyperfine transition
 speed_of_light = const.speed_of_light * (u.meter / u.second)
 
 #OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Alston Observatory'  # Directory to store samples
-OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
+#OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
 #OUTPUT_DIR = '~/Samples'  # Directory to store samples
+OUTPUT_DIR = '~/Github/alston-rt/src/poc/dmd'
 USABLE_BANDWIDTH = 0.65  # Percentage of usable bandwidth for a scan
 FIG_SIZE = (14, 7)  # Default figure size for plots
 MAX_RECONNECT_ATTEMPTS = 5  # Maximum number of attempts to reconnect to the SDR device

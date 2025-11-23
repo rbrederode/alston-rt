@@ -211,7 +211,7 @@ class BaseModel:
         from models.dsh import Feed
         from models.health import HealthState
         from models.obs import ObsState, ObsModel
-        from models.oda import ObsStore, ScanStore, ODAModel
+        from models.oda import ObsList, ScanStore, ODAModel
         from models.oet import OETModel
         from models.proc import ProcessorModel
         from models.scan import ScanModel, ScanState
@@ -270,9 +270,9 @@ class BaseModel:
             elif model_type == "ObsModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ObsModel(**deserialized_fields)
-            elif model_type == "ObsStore":
+            elif model_type == "ObsList":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
-                return ObsStore(**deserialized_fields)
+                return ObsList(**deserialized_fields)
             elif model_type == "OETModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return OETModel(**deserialized_fields)

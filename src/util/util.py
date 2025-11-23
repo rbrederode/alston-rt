@@ -8,6 +8,44 @@ if TYPE_CHECKING:
 import logging
 logger = logging.getLogger(__name__)
 
+def dict_diff(old_dict, new_dict):
+    """
+    Compare two dictionaries and determine which keys are:
+      - added
+      - removed
+      - updated (same key exists, but value changed)
+
+    Handles old_dict = None gracefully.
+    """
+
+    # If old_dict is None, treat it as empty
+    if old_dict is None:
+        old_dict = {}
+
+    if new_dict is None:
+        new_dict = {}
+
+    # Compute key sets
+    old_keys = set(old_dict.keys())
+    new_keys = set(new_dict.keys())
+
+    added = new_keys - old_keys
+    removed = old_keys - new_keys
+
+    updated = {
+        key for key in (old_keys & new_keys)
+        if old_dict[key] != new_dict[key]
+    }
+
+    return {
+        "added": {key: new_dict[key] for key in added},
+        "removed": {key: old_dict[key] for key in removed},
+        "updated": {
+            key: {"old": old_dict[key], "new": new_dict[key]}
+            for key in updated
+        }
+    }
+
 def gen_file_prefix(
     dt:datetime,
     feed:Feed,

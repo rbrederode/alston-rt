@@ -423,7 +423,7 @@ function onEdit(e) {
   if (sheetName === "DIG001" && col === 5 && row >= 4 && row <= 10) {
     const jsonStr = generateJSON(sheet, ["D4:E10"]);
 
-    apiSheet.getRange("B3").setValue(jsonStr);
+    //apiSheet.getRange("B3").setValue(jsonStr);
     Logger.log("Digitiser JSON updated in TM_UI_API B3");
     return;
   }
@@ -464,7 +464,7 @@ function onEdit(e) {
     return;
   }
 
-  // --- Observation submission (D3) ---
+  // --- Observation Submission (D3) ---
   if (col === 4 && row === 3 && e.value === "TRUE") {
     
     const lastTargetRow = targetSheet.getLastRow();
@@ -563,6 +563,9 @@ function onEdit(e) {
     sheet.getRange("B2:B3").clearContent();
     sheet.getRange("E32").clearContent();
     targetSheet.getRange("A2:A").clearContent();
+    
+    // Update TM_UI_API
+    generateObsList
     return;
   }
 
