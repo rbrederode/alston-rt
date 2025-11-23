@@ -39,7 +39,9 @@ logging.getLogger("env.processor").setLevel(logging.INFO)  # Only INFO and above
 logging.getLogger("env.app_processor").setLevel(logging.INFO)  # Only INFO and above for app processor
 logging.getLogger("api.tm_dig").setLevel(logging.INFO)  # Only INFO and above for tm_dig api
 logging.getLogger("api.sdp_dig").setLevel(logging.INFO)  # Only INFO and above for sdp_dig api
+logging.getLogger("obs.oet").setLevel(logging.INFO)  # Only INFO and above for oet.obs
 logging.getLogger("sdp.scan").setLevel(logging.INFO)  # Only INFO and above for sdp.scan
 logging.getLogger("sdp.signal_display").setLevel(logging.INFO)  # Only INFO and above for sdp.signal_display
+logging.getLogger("sdp.sdp").setLevel(logging.INFO)  # Only INFO and above for sdp.sdp
 logging.getLogger("tm.tm").setLevel(logging.INFO)  # Only INFO and above for tm.tm
 logging.getLogger("__main__").setLevel(logging.INFO)  # Only INFO and above for local application

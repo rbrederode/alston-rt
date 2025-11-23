@@ -232,14 +232,16 @@ class StatusUpdateEvent:
 
 class ConfigEvent:
 
-    def __init__(self, old_config, new_config, timestamp=None):
+    def __init__(self, category=None, old_config=None, new_config=None, timestamp=None):
         """Initialize the config event with the given parameters.
 
         Parameters
+            category: Category of the configuration item being updated
             old_config: The old configuration data associated with the event
             new_config: The new configuration data associated with the event
             timestamp: Timestamp of the event
         """
+        self.category = category
         self.old_config = old_config
         self.new_config = new_config
         self.timestamp = timestamp
@@ -249,5 +251,6 @@ class ConfigEvent:
         Returns a human-readable string representation of this event.
         """
         return f"ConfigEvent@{self.timestamp}\n" + \
+            f" - Category: {self.category}\n" + \
             f" - Old Config: {self.old_config}\n" + \
             f" - New Config: {self.new_config}\n"

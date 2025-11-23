@@ -41,7 +41,7 @@ class BaseModel:
         try:
             self.schema.validate(self._data)
         except SchemaError as e:
-            raise XAPIValidationFailed(f"Base model schema error: validate failed: {e}")
+            raise XAPIValidationFailed(f"Base model schema error: validate failed for type {type(self).__name__}: {e}")
 
     def _validate_transition(self, name: str, new_value: Any):
         if name in self.allowed_transitions:
@@ -49,32 +49,84 @@ class BaseModel:
             allowed = self.allowed_transitions[name].get(old_value, set())
             if old_value is not None and new_value not in allowed:
                 raise XInvalidTransition(
-                    f"Base model attempting invalid transition for name: {name}: {old_value.name} → {new_value.name}"
+                    f"Base model attempting invalid transition in type {type(self).__name__} for name: {name}: {old_value.name} → {new_value.name}"
                 )
 
     def __getattr__(self, name):
-        if name in self._data:
-            return self._data[name]
-        raise XSoftwareFailure(f"Base model attribute name: {name} not found")
+        # Use object.__getattribute__ to avoid infinite recursion
+        try:
+            data = object.__getattribute__(self, '_data')
+        except AttributeError:
+            raise XSoftwareFailure(f"Base model _data not initialized for type {type(self).__name__}")
+        
+        if name in data:
+            return data[name]
+        raise XSoftwareFailure(f"Base model attribute name: {name} not found for type {type(self).__name__}")
 
     def __setattr__(self, name, value):
         if name.startswith("_"):
             super().__setattr__(name, value)
             return
         if name not in self.schema.schema:
-            raise AttributeError(f"Invalid attribute name: {name} for {type(self).__name__}")
+            raise AttributeError(f"Invalid attribute name: {name} for type {type(self).__name__}")
         self._validate_transition(name, value)
         self._data[name] = value
         self._validate_schema()  # enforce schema after update
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]):
+        """ A classmethod is a method that receives the class itself (not an instance) as its first argument 
+            (typically named cls). It's called on the class rather than an instance, and can create and return new 
+            instances of that class
+        """
         parsed = cls._deserialise(data)
+        
         # Check if parsed is a BaseModel and has the same class name
         # (to handle cases where __main__ vs module imports create different class objects)
         if not isinstance(parsed, BaseModel) or parsed.__class__.__name__ != cls.__name__:
-            raise XAPIValidationFailed(f"Base model from_dict failed: expected {cls.__name__}, got {type(parsed).__name__}")
+            raise XAPIValidationFailed(f"Base model from_dict failed for type {cls.__name__}: expected {cls.__name__}, got {type(parsed).__name__}")
+        
+        # If this model has a last_update field, find the latest datetime in all nested models
+        if 'last_update' in parsed.schema.schema:
+            latest = parsed.find_latest_update()
+            if latest is not None:
+                # Add UTC timezone if the datetime is naive
+                if latest.tzinfo is None:
+                    from datetime import timezone
+                    latest = latest.replace(tzinfo=timezone.utc)
+                parsed._data['last_update'] = latest
+        
         return parsed
+    
+    def find_latest_update(self):
+        """Recursively find the latest last_update datetime in this model and all nested models."""
+        latest = None
+        
+        for key, value in self._data.items():
+            # Only check datetime fields that are named 'last_update'
+            if key == 'last_update' and isinstance(value, datetime):
+                # Normalize to naive datetime for comparison
+                value_naive = value.replace(tzinfo=None) if value.tzinfo else value
+                if latest is None or value_naive > latest:
+                    latest = value_naive
+            elif isinstance(value, BaseModel):
+                nested_latest = value.find_latest_update()
+                if nested_latest and (latest is None or nested_latest > latest):
+                    latest = nested_latest
+            elif isinstance(value, dict):
+                for v in value.values():
+                    if isinstance(v, BaseModel):
+                        nested_latest = v.find_latest_update()
+                        if nested_latest and (latest is None or nested_latest > latest):
+                            latest = nested_latest
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, BaseModel):
+                        nested_latest = item.find_latest_update()
+                        if nested_latest and (latest is None or nested_latest > latest):
+                            latest = nested_latest
+        
+        return latest
 
     def to_dict(self):
         # Sort keys for consistent output and convert non-serializable
@@ -155,12 +207,14 @@ class BaseModel:
         from models.app import AppModel
         from models.comms import CommunicationStatus
         from models.dig import DigitiserModel
-        from models.dsh import DishModel
+        from models.dsh import DishModel, DishMgrModel
         from models.dsh import Feed
         from models.health import HealthState
         from models.obs import ObsState, ObsModel
+        from models.oda import ObsList, ScanStore, ODAModel
+        from models.oet import OETModel
+        from models.proc import ProcessorModel
         from models.scan import ScanModel, ScanState
-        from models.tm import ScanStoreModel
         from models.sdp import ScienceDataProcessorModel
         from models.target import TargetModel, TargetType
         from models.tm import TelescopeManagerModel
@@ -172,15 +226,17 @@ class BaseModel:
                 obstime = BaseModel._deserialise(v["obstime"])
                 return AltAz(alt=v["alt"]*u.deg, az=v["az"]*u.deg, obstime=obstime, location=location)
             elif model_type == "AppModel":
-                # Recursively deserialize nested fields, then construct
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return AppModel(**deserialized_fields)
             elif model_type == "datetime":
                 if isinstance(v["value"], str):
-                    return datetime.fromisoformat(v["value"])
+                    return datetime.fromisoformat(v["value"])  
             elif model_type == "DigitiserModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return DigitiserModel(**deserialized_fields)
+            elif model_type == "DishMgrModel":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return DishMgrModel(**deserialized_fields)
             elif model_type == "DishModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return DishModel(**deserialized_fields)
@@ -197,6 +253,7 @@ class BaseModel:
                     "ScanState": ScanState,
                     "ObsState": ObsState,
                     "TargetType": TargetType,
+                    "Feed": Feed,
                 }.get(enum_class_name)
                 if enum_class is not None:
                     return enum_class[enum_value_name]
@@ -213,12 +270,24 @@ class BaseModel:
             elif model_type == "ObsModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ObsModel(**deserialized_fields)
+            elif model_type == "ObsList":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return ObsList(**deserialized_fields)
+            elif model_type == "OETModel":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return OETModel(**deserialized_fields)
+            elif model_type == "ODAModel":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return ODAModel(**deserialized_fields)
+            elif model_type == "ProcessorModel":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return ProcessorModel(**deserialized_fields)
             elif model_type == "ScanModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ScanModel(**deserialized_fields)
-            elif model_type == "ScanStoreModel":
+            elif model_type == "ScanStore":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
-                return ScanStoreModel(**deserialized_fields)
+                return ScanStore(**deserialized_fields)
             elif model_type == "ScienceDataProcessorModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ScienceDataProcessorModel(**deserialized_fields)
@@ -249,18 +318,5 @@ class BaseModel:
             return {k: BaseModel._deserialise(val) for k, val in v.items()}
         elif isinstance(v, enum.IntEnum):
             return type(v)(v.value)
-        elif isinstance(v, str):
-            # Try to convert string enum names back to enums
-            if v in ["NOT_ESTABLISHED", "ESTABLISHING", "ESTABLISHED"]:
-                return CommunicationStatus[v]
-            elif v in ["UNKNOWN", "OK", "DEGRADED", "FAILED"]:
-                return HealthState[v]
-            elif v in ["EMPTY", "WIP", "ABORTED", "COMPLETE"]:
-                return ScanState[v]
-            elif v in ["NONE", "IDLE", "ACQUIRING", "PROCESSING"]:
-                return ObsState[v]
-            elif v in ["SIDEREAL", "SOLAR", "LUNAR", "TERRESTRIAL", "SATELLITE"]:
-                return TargetType[v]
-            elif v in ["NONE", "LF_400", "H3T_1420", "LOAD"]:
-                return Feed[v]
+
         return v

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
 
 from astropy.coordinates import EarthLocation, AltAz
+import astropy.units as u
 from astropy.time import Time
 
 from models.app import AppModel
@@ -51,16 +52,14 @@ class DishModel(BaseModel):
 
     schema = Schema({      
         "_type": And(str, lambda v: v == "DishModel"),                                                                     
-        "id": And(str, lambda v: isinstance(v, str)),                                           # Dish identifer e.g. "dish001" 
+        "dsh_id": And(str, lambda v: isinstance(v, str)),                                           # Dish identifer e.g. "dish001" 
         "short_desc": Or(None, And(str, lambda v: isinstance(v, str))),                         # Short description of the dish
-        "app": And(AppModel, lambda v: isinstance(v, AppModel)),
         "location": Or(None, And(EarthLocation, lambda v: isinstance(v, EarthLocation))),                           # Physical location (lat, long, alt(m)) 
         "feed": And(Feed, lambda v: isinstance(v, Feed)),                                       # Current feed installed on the dish
         "mode": And(DishMode, lambda v: isinstance(v, DishMode)),
         "pointing_state": And(PointingState, lambda v: isinstance(v, PointingState)),
         "altaz": Or(None, And(AltAz, lambda v: isinstance(v, AltAzM))),                 # Current alt-az pointing direction
         "capability_state": And(CapabilityStates, lambda v: isinstance(v, CapabilityStates)),
-        "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -84,11 +83,45 @@ class DishModel(BaseModel):
         # Default values
         defaults = {
             "_type": "DishModel",
-            "id": "dish001",
+            "dsh_id": "<undefined>",
             "short_desc": None,
             "location": None,
+            "feed": Feed.NONE,
+            "mode": DishMode.UNKNOWN,
+            "pointing_state": PointingState.UNKNOWN,
+            "altaz": None,
+            "capability_state": CapabilityStates.UNKNOWN,
+            "last_update": datetime.now(timezone.utc),
+        }
+
+        # Apply defaults if not provided in kwargs
+        for key, value in defaults.items():
+            if key not in kwargs:
+                kwargs.setdefault(key, value)
+
+        super().__init__(**kwargs)
+
+class DishMgrModel(BaseModel):
+    """A class representing the dish Local Monitoring and Control (application) model."""
+
+    schema = Schema({    
+        "_type": And(str, lambda v: v == "DishMgrModel"),                                                                 
+        "dsh_id": And(str, lambda v: isinstance(v, str)),                  # Dish identifer e.g. "dish001"                          
+        "app": And(AppModel, lambda v: isinstance(v, AppModel)),
+        "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
+        "last_update": And(datetime, lambda v: isinstance(v, datetime)),
+    })
+
+    allowed_transitions = {}
+
+    def __init__(self, **kwargs):
+
+        # Default values
+        defaults = {
+            "_type": "DishMgrModel",
+            "dsh_id": "<undefined>",
             "app": AppModel(
-                app_name="dish",
+                app_name="dsh",
                 app_running=False,
                 num_processors=0,
                 queue_size=0,
@@ -97,11 +130,6 @@ class DishModel(BaseModel):
                 health=HealthState.UNKNOWN,
                 last_update=datetime.now(timezone.utc),
             ),
-            "feed": Feed.NONE,
-            "mode": DishMode.UNKNOWN,
-            "pointing_state": PointingState.UNKNOWN,
-            "altaz": None,
-            "capability_state": CapabilityStates.UNKNOWN,
             "tm_connected": CommunicationStatus.NOT_ESTABLISHED,
             "last_update": datetime.now(timezone.utc),
         }
@@ -116,24 +144,13 @@ class DishModel(BaseModel):
 if __name__ == "__main__":
 
     dish001 = DishModel(
-        id="dish001",
+        dsh_id="dish001",
         short_desc="70cm Discovery dish",
-        location="53.187052,-2.256079, 110",  #
-        app=AppModel(
-            app_name="dsh",
-            app_running=True,
-            num_processors=2,
-            queue_size=0,
-            interfaces=["tm"],
-            processors=[],
-            health=HealthState.UNKNOWN,
-            last_update=datetime.now(timezone.utc)
-        ),
+        location=EarthLocation(lat=45.67*u.deg, lon=-111.05*u.deg, height=1500*u.m),
         mode=DishMode.STARTUP,
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
         capability_state=CapabilityStates.UNKNOWN,
-        tm_connected=CommunicationStatus.NOT_ESTABLISHED,
         last_update=datetime.now(timezone.utc)
     )
 
@@ -168,5 +185,26 @@ if __name__ == "__main__":
     pprint.pprint(dish002.to_dict())
     print("="*40)
 
+    print("Dish Mgr Model Test")
+    dm001 = DishMgrModel(
+        dsh_id="dish001",
+        app=AppModel(
+            app_name="dsh",
+            app_running=True,
+            num_processors=2,
+            queue_size=0,
+            interfaces=["tm", "dsh"],
+            processors=[],
+            health=HealthState.UNKNOWN,
+            last_update=datetime.now(timezone.utc)
+        ),
+        tm_connected=CommunicationStatus.ESTABLISHED,
+        last_update=datetime.now(timezone.utc)
+    )
+    pprint.pprint(dm001.to_dict())
+    print("="*40)
+    print("Dish Manager Model Default Test")
+    dm002 = DishMgrModel(dsh_id="dish002")
+    pprint.pprint(dm002.to_dict())
 
 

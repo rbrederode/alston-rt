@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import ast
 import enum
 import json
 from datetime import datetime, timezone
@@ -7,6 +8,7 @@ from schema import Schema, And, Or, Use, SchemaError
 
 from models.app import AppModel
 from models.base import BaseModel
+from models.dsh import Feed
 from models.health import HealthState
 from models.comms import CommunicationStatus
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
@@ -18,10 +20,11 @@ class DigitiserModel(BaseModel):
         "_type": And(str, lambda v: v == "DigitiserModel"),
         "id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
-        "gain": And(int, lambda v: 0 <= v <= 100),
-        "sample_rate": And(int, lambda v: v >= 0),
-        "bandwidth": And(int, lambda v: v >= 0),
-        "center_freq": And(int, lambda v: v >= 0),
+        "feed": And(Feed, lambda v: isinstance(v, Feed)),
+        "gain": And(float, lambda v: 0 <= v <= 100.0),
+        "sample_rate": And(float, lambda v: v >= 0.0),
+        "bandwidth": And(float, lambda v: v >= 0.0),
+        "center_freq": And(float, lambda v: v >= 0.0),
         "freq_correction": And(int, lambda v: -1000 <= v <= 1000),
         "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "sdp_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
@@ -49,17 +52,18 @@ class DigitiserModel(BaseModel):
                 health=HealthState.UNKNOWN,
                 last_update=datetime.now(timezone.utc),
             ),
-            "gain": 0,
-            "sample_rate": 0,
-            "bandwidth": 0,
-            "center_freq": 0,
+            "feed": Feed.NONE,
+            "gain": 0.0,
+            "sample_rate": 0.0,
+            "bandwidth": 0.0,
+            "center_freq": 0.0,
             "freq_correction": 0,
             "streaming": False,
             "tm_connected": CommunicationStatus.NOT_ESTABLISHED,
             "sdp_connected": CommunicationStatus.NOT_ESTABLISHED,
             "sdr_connected": CommunicationStatus.NOT_ESTABLISHED,
             "sdr_eeprom": {},
-            "last_update": datetime.now(timezone.utc)
+            "last_update": datetime.now(timezone.utc),
         }
 
         # Apply defaults if not provided in kwargs
@@ -83,17 +87,18 @@ if __name__ == "__main__":
             health=HealthState.UNKNOWN,
             last_update=datetime.now()
         ),
-        gain=0,
-        sample_rate=2400000,
-        bandwidth=200000,
-        center_freq=1420000000,
+        feed=Feed.LOAD,
+        gain=0.0,
+        sample_rate=2400000.0,
+        bandwidth=200000.0,
+        center_freq=1420000000.0,
         freq_correction=0,
         streaming=False,
         tm_connected=CommunicationStatus.NOT_ESTABLISHED,
         sdp_connected=CommunicationStatus.NOT_ESTABLISHED,
         sdr_connected=CommunicationStatus.NOT_ESTABLISHED,
         sdr_eeprom={},
-        last_update=datetime.now(timezone.utc)
+        last_update=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     )
 
     dig002 = DigitiserModel(id="dig002")
@@ -115,70 +120,41 @@ if __name__ == "__main__":
     pprint.pprint(dig001.to_dict())
 
     dig_json = """
-        {
-        "_type": "DigitiserModel",
-        "id": "dig003",
-        "app": {
-            "_type": "AppModel",
-            "app_name": "dig",
-            "app_running": true,
-            "health": "DEGRADED",
-            "num_processors": 4,
-            "queue_size": 0,
-            "interfaces": [
-            "tm",
-            "sdp"
-            ],
-            "processors": [
-            {
-                "name": "Thread-4",
-                "current_event": "StatusUpdateEvent (Enqueued Timestamp=2025-11-01 16:24:51.505919 , Dequeued Timestamp=2025-11-01 16:24:51.505969 , Updated Timestamp=[None], Current Status=BEING PROCESSED, Total Processing Count=5, Total Processing Time (ms)=0.0007827281951904297, Average Processing Time (ms)=0.00015654563903808594)",
-                "processing_time_ms": 1761947613.5395994,
-                "last_update": "2025-11-01T16:24:51.506275+00:00"
-            },
-            {
-                "name": "Thread-5",
-                "current_event": "TimerEvent@2025-11-01 16:24:50.539711+00:00 - name TCPClient-sdp, user ref None user callback <function TCPClient.connect.<locals>.<lambda> at 0x10ab58a40>, cancelled=False",
-                "processing_time_ms": 1761947614.505888,
-                "last_update": "2025-11-01T16:24:51.506355+00:00"
-            },
-            {
-                "name": "Thread-6",
-                "current_event": null,
-                "processing_time_ms": null,
-                "last_update": "2025-11-01T16:24:51.506426+00:00"
-            },
-            {
-                "name": "Thread-7",
-                "current_event": null,
-                "processing_time_ms": null,
-                "last_update": "2025-11-01T16:24:51.506469+00:00"
-            }
-            ],
-            "msg_timeout_ms": 10000,
-            "arguments": {
-            "verbose": false,
-            "num_processors": 4,
-            "tm_host": "192.168.0.17",
-            "tm_port": 50000,
-            "sdp_host": "192.168.0.17",
-            "sdp_port": 60000
-            },
-            "last_update": "2025-11-01T16:24:51.506897+00:00"
-        },
-        "gain": 0,
-        "sample_rate": 0,
-        "bandwidth": 0,
-        "center_freq": 0,
-        "freq_correction": 0,
-        "tm_connected": "NOT_ESTABLISHED",
-        "sdp_connected": "NOT_ESTABLISHED",
-        "sdr_connected": "NOT_ESTABLISHED",
-        "streaming": false,
-        "sdr_eeprom": {},
-        "last_update": "2025-11-01T16:22:50.507993+00:00"
-        }
-        """
+        {'_type': 'DigitiserModel',
+            'app': {'_type': 'AppModel',
+                    'app_name': 'dig',
+                    'app_running': True,
+                    'arguments': None,
+                    'health': {'_type': 'enum.IntEnum',
+                                'instance': 'HealthState',
+                                'value': 'UNKNOWN'},
+                    'interfaces': ['tm', 'sdp'],
+                    'last_update': {'_type': 'datetime',
+                                    'value': '2025-12-16T15:10:34.004551'},
+                    'msg_timeout_ms': 10000,
+                    'num_processors': 2,
+                    'processors': [],
+                    'queue_size': 0},
+            'bandwidth': 200000.0,
+            'center_freq': 1420000000.0,
+            'feed': {'_type': 'enum.IntEnum', 'instance': 'Feed', 'value': 'LOAD'},
+            'freq_correction': 0,
+            'gain': 0.0,
+            'id': 'dig001',
+            'last_update': {'_type': 'datetime', 'value': '2025-11-01T12:00:00+00:00'},
+            'sample_rate': 2400000.0,
+            'sdp_connected': {'_type': 'enum.IntEnum',
+                            'instance': 'CommunicationStatus',
+                            'value': 'NOT_ESTABLISHED'},
+            'sdr_connected': {'_type': 'enum.IntEnum',
+                            'instance': 'CommunicationStatus',
+                            'value': 'NOT_ESTABLISHED'},
+            'sdr_eeprom': {},
+            'streaming': False,
+            'tm_connected': {'_type': 'enum.IntEnum',
+                            'instance': 'CommunicationStatus',
+                            'value': 'NOT_ESTABLISHED'}}
+"""
     
     print("="*40)
     print("Digitiser 003 from JSON string")
@@ -188,10 +164,10 @@ if __name__ == "__main__":
 
     dig003 = DigitiserModel(id="dig003")
 
-    # Convert JSON string to dictionary
-    dig_json_dict = json.loads(dig_json)
+    # Convert Python dict literal string to dictionary (strip indentation first)
+    dig_json_dict = ast.literal_eval(dig_json.strip())
 
-    dig003.from_dict(dig_json_dict)
+    dig003 = DigitiserModel.from_dict(dig_json_dict)
     
     print("="*40)
     print("Digitiser 003 after from_dict")

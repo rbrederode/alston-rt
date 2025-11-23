@@ -16,7 +16,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import HttpRequest
 
 # Import application modules
-from api import tm_dig, tm_sdp
+from api import tm_dig, tm_sdp, tm_oet
 from env.app import App
 from env.events import ConnectEvent, DisconnectEvent, DataEvent, ConfigEvent
 from ipc.message import AppMessage, APIMessage
@@ -24,11 +24,14 @@ from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.app import AppModel
-from models.dsh import Feed
-from models.health import HealthState
 from models.comms import CommunicationStatus
+from models.dig import DigitiserModel
+from models.dsh import Feed
+from models.oet import OETModel
+from models.health import HealthState
+from models.sdp import ScienceDataProcessorModel
 from models.telescope import TelescopeModel
-from util import log
+from util import log, util
 from util.xbase import XBase, XStreamUnableToExtract
 
 logger = logging.getLogger(__name__)
@@ -38,10 +41,12 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # The SHEET ID for the ALSTON RADIO TELESCOPE google sheet
 ALSTON_RADIO_TELESCOPE = "1r73N0VZHSQC6RjRv94gzY50pTgRvaQWfctGGOMZVpzc"
-DIG001_CONFIG = "DIG001!D4:E11"     # Range for Digitiser 001 configuration
-DIG002_CONFIG = "DIG002!D4:E11"     # Range for Digitiser 002 configuration
+
 TM_UI_API = "TM_UI_API!"            # Range for UI-TM API data
-TM_UI_POLL_INTERVAL_S = 5            # Poll interval in seconds
+TM_UI_POLL_INTERVAL_S = 5           # Poll interval in seconds
+
+OET_OBS_LIST = TM_UI_API + "D3"      # Range for Observation Execution Tool
+DIG001_CONFIG = TM_UI_API + "B3"     # Range for Digitiser 001 configuration
 
 class TelescopeManager(App):
 
@@ -50,6 +55,18 @@ class TelescopeManager(App):
     def __init__(self, app_name: str = "tm"):
 
         super().__init__(app_name=app_name, app_model=self.telmodel.tm.app)
+
+        # Observation Execution Tool interface
+        self.oet_system = "oet"
+        self.oet_api = tm_oet.TM_OET()
+        # Observation Execution Tool TCP Client
+        self.oet_endpoint = TCPClient(description=self.oet_system, queue=self.get_queue(), host=self.get_args().oet_host, port=self.get_args().oet_port)
+        self.oet_endpoint.connect()
+        # Register Observation Execution Tool interface with the App
+        self.register_interface(self.oet_system, self.oet_api, self.oet_endpoint)
+        # Initialise Observation Execution Tool comms status
+        self.telmodel.oet.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.tm.oet_connected = CommunicationStatus.NOT_ESTABLISHED
 
         # Digitiser interface
         self.dig_system = "dig"
@@ -86,6 +103,9 @@ class TelescopeManager(App):
         arg_parser.add_argument("--sdp_host", type=str, required=False, help="TCP server host to connect to the Science Data Processor",default="localhost")
         arg_parser.add_argument("--sdp_port", type=int, required=False, help="TCP server port to connect to the Science Data Processor", default=50001)
 
+        arg_parser.add_argument("--oet_host", type=str, required=False, help="TCP server host to connect to the Observation Execution Tool", default="localhost")
+        arg_parser.add_argument("--oet_port", type=int, required=False, help="TCP server port to connect to the Observation Execution Tool", default=50002) 
+
     def process_init(self) -> Action:
         """ Processes initialisation events.
         """
@@ -101,35 +121,28 @@ class TelescopeManager(App):
 
         action = Action()
 
-        # Compare each item in the new configuration with the old configuration
-        for i, new_item in enumerate(event.new_config):
+        if event.category == "DIG" and self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
 
-            property = method = value = None
+            for config_key in event.new_config.keys():
+                config_value = event.new_config[config_key]
 
-            # Map from configuration item to method/property and value
-            (method, value) = map.get_method_name(new_item[0], new_item[1])
-            (property, value) = map.get_property_name(new_item[0], new_item[1]) if method is None else (None, None)
-                
-            if method is None and property is None:
-                logger.warning(f"Telescope Manager received unknown configuration item at row {i}: {new_item} with value {new_item[1]}")
-                continue
+                # If key value is unchanged, skip it
+                if event.old_config and config_key in event.old_config and event.old_config[config_key] == config_value:
+                    continue
 
-            update = False
+                logger.info(f"Digitiser configuration update for key: {config_key}, value: {config_value}")
 
-            if event.old_config is not None:
-                if i < len(event.old_config):
-                    old_item = event.old_config[i]
-                    if new_item != old_item:
-                        update = True
-                        logger.info(f"Telescope property '{property}' changed at row {i}: from {old_item} to {new_item}")
-                else:
-                    update = True
-                    logger.info(f"Telescope property '{property}' added at row {i}: {new_item}")
-            else:
-                update = True
-                logger.info(f"Telescope property '{property}' initialising at row {i}: {new_item}")
+                property = method = value = None
 
-            if update and self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
+                (method, value) = map.get_method_name_value(config_key, config_value)
+                (property, value) = map.get_property_name_value(config_key, config_value) if method is None else (None, config_value)
+
+                if method is None and property is None:
+                    logger.warning(f"Telescope Manager received unknown configuration item: {key}")
+                    continue
+
+                logger.info(f"Sending digitiser configuration update for method: {method}, property: {property}, value: {value}")
+            
                 dig_req = self._construct_req_to_dig(property=property, method=method, value=value, message="")
                 action.set_msg_to_remote(dig_req)
 
@@ -137,6 +150,49 @@ class TelescopeManager(App):
                     name=f"dig_req_timer:{dig_req.get_timestamp()}", 
                     timer_action=self.telmodel.tm.app.msg_timeout_ms, 
                     echo_data=dig_req))
+
+        else:
+            logger.info(f"Telescope Manager updated configuration received for {event.category}.")
+
+        return action
+
+    def process_oet_connected(self, event) -> Action:
+        """ Processes Observation Execution Tool connected events.
+        """
+        logger.info(f"Telescope Manager connected to Observation Execution Tool: {event.remote_addr}")
+
+        self.telmodel.oet.tm_connected = CommunicationStatus.ESTABLISHED
+        self.telmodel.tm.oet_connected = CommunicationStatus.ESTABLISHED
+
+        action = Action()
+        return action
+
+    def process_oet_disconnected(self, event) -> Action:
+        """ Processes Observation Execution Tool disconnected events.
+        """
+        logger.info(f"Telescope Manager disconnected from Observation Execution Tool: {event.remote_addr}")
+
+        self.telmodel.oet.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.tm.oet_connected = CommunicationStatus.NOT_ESTABLISHED
+
+    def process_oet_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
+        """ Processes api messages received on the Observation Execution Tool service access point (SAP)
+            API messages are already translated and validated before being passed to this method.
+        """
+        logger.info(f"Telescope Manager received observation execution tool {api_call['msg_type']} message with action code: {api_call['action_code']}")
+        
+        action = Action()
+
+        if api_call.get('status','') != tm_dig.STATUS_ERROR:
+
+            if api_call.get('property','') == tm_oet.PROPERTY_STATUS:
+                logger.debug(f"Telescope Manager received Observation Execution Tool STATUS update: {api_call['value']}")
+
+                self.telmodel.oet = OETModel.from_dict(api_call['value'])
+
+        # Update Telescope Model based on received Observation Execution Tool api_call
+        dt = api_msg.get("timestamp")
+        self.telmodel.oet.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
 
         return action
 
@@ -149,8 +205,6 @@ class TelescopeManager(App):
         self.telmodel.tm.dig_connected = CommunicationStatus.ESTABLISHED
 
         action = Action()
-        # TBD, remove this once we have a UI to control reading samples
-        action.set_timer_action(Action.Timer(name="read_samples", timer_action=10000))
         return action
 
     def process_dig_disconnected(self, event) -> Action:
@@ -173,6 +227,7 @@ class TelescopeManager(App):
 
             if api_call.get('property','') == tm_dig.PROPERTY_FEED:
                 self.telmodel.dsh.feed = Feed(api_call['value'])
+                self.telmodel.dig.feed = Feed(api_call['value'])
             elif api_call.get('property','') == tm_dig.PROPERTY_STREAMING:
                 self.telmodel.dig.streaming = api_call['value']
             elif api_call.get('property','') == tm_dig.PROPERTY_GAIN:
@@ -190,7 +245,7 @@ class TelescopeManager(App):
             elif api_call.get('property','') == tm_dig.PROPERTY_STATUS:
                 logger.debug(f"Telescope Manager received Digitiser STATUS update: {api_call['value']}")
 
-                self.telmodel.dig.from_dict(api_call['value'])
+                self.telmodel.dig = DigitiserModel.from_dict(api_call['value'])
 
         # Update Telescope Model based on received Digitiser api_call
         dt = api_msg.get("timestamp")
@@ -230,9 +285,7 @@ class TelescopeManager(App):
 
             # If a status update is received, update the Telescope Model 
             if api_call.get('property','') == tm_sdp.PROPERTY_STATUS:
-                logger.debug(f"Telescope Manager received Science Data Processor STATUS update: {api_call['value']}")
-
-                self.telmodel.sdp.from_dict(api_call['value'])
+                self.telmodel.sdp = ScienceDataProcessorModel.from_dict(api_call['value'])
 
         dt = api_msg.get("timestamp")
         self.telmodel.sdp.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
@@ -250,19 +303,7 @@ class TelescopeManager(App):
 
         action = Action()
 
-        if event.name.startswith("read_samples"):
-            if self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
-                dig_req = self._construct_req_to_dig(method="read_samples")
-                action.set_msg_to_remote(dig_req)
-
-                action.set_timer_action(Action.Timer(
-                    name=f"dig_req_timer:{dig_req.get_timestamp()}", 
-                    timer_action=self.telmodel.tm.app.msg_timeout_ms, 
-                    echo_data=dig_req))
-            else:
-                action.set_timer_action(Action.Timer(name="read_samples", timer_action=self.telmodel.tm.app.msg_timeout_ms))
-
-        elif event.name.startswith("dig_req_timer"):
+        if event.name.startswith("dig_req_timer"):
             logger.warning(f"Telescope Manager timed out waiting for acknowledgement from Digitiser for request {event}")
 
         return action
@@ -284,7 +325,7 @@ class TelescopeManager(App):
         """
         status = self.get_app_processor_state()
 
-        scan_store_dir = self.telmodel.sdp.app.arguments.get('output_dir','~/')
+        scan_store_dir = self.telmodel.sdp.app.arguments.get('output_dir','~/') if self.telmodel.sdp.app.arguments is not None else '~/'
 
         if Path(scan_store_dir).exists():
 
@@ -295,12 +336,12 @@ class TelescopeManager(App):
             gain_files = list(Path(scan_store_dir).glob("*gain.csv"))
             meta_files = list(Path(scan_store_dir).glob("*meta.json"))
 
-            # Sort by file name in reverse order (newest last)
-            spr_files.sort(key=lambda x: x.name, reverse=True)
-            load_files.sort(key=lambda x: x.name, reverse=True)
-            tsys_files.sort(key=lambda x: x.name, reverse=True)
-            gain_files.sort(key=lambda x: x.name, reverse=True)
-            meta_files.sort(key=lambda x: x.name, reverse=True)
+            # Sort by creation date in reverse order (newest first)
+            spr_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
+            load_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
+            tsys_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
+            gain_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
+            meta_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
 
             # Limit to the latest 100 files of each type
             spr_files = spr_files[:100]
@@ -312,25 +353,24 @@ class TelescopeManager(App):
             # Combine into a single list of scan files
             scan_files = spr_files + load_files + tsys_files + gain_files + meta_files
 
-            self.telmodel.tm.scan_store.spr_files = []
-            self.telmodel.tm.scan_store.load_files = []
-            self.telmodel.tm.scan_store.tsys_files = []
-            self.telmodel.tm.scan_store.gain_files = []
-            self.telmodel.tm.scan_store.meta_files = []
-
+            self.telmodel.oda.scan_store.spr_files = []
+            self.telmodel.oda.scan_store.load_files = []
+            self.telmodel.oda.scan_store.tsys_files = []
+            self.telmodel.oda.scan_store.gain_files = []
+            self.telmodel.oda.scan_store.meta_files = []
             for scan_file in scan_files:
                 if scan_file.name.endswith("spr.csv"):
-                    self.telmodel.tm.scan_store.spr_files.append(scan_file.name)
+                    self.telmodel.oda.scan_store.spr_files.append(scan_file.name)
                 elif scan_file.name.endswith("load.csv"):
-                    self.telmodel.tm.scan_store.load_files.append(scan_file.name)
+                    self.telmodel.oda.scan_store.load_files.append(scan_file.name)
                 elif scan_file.name.endswith("tsys.csv"):
-                    self.telmodel.tm.scan_store.tsys_files.append(scan_file.name)
+                    self.telmodel.oda.scan_store.tsys_files.append(scan_file.name)
                 elif scan_file.name.endswith("gain.csv"):
-                    self.telmodel.tm.scan_store.gain_files.append(scan_file.name)
+                    self.telmodel.oda.scan_store.gain_files.append(scan_file.name)
                 elif scan_file.name.endswith("meta.json"):
-                    self.telmodel.tm.scan_store.meta_files.append(scan_file.name)
+                    self.telmodel.oda.scan_store.meta_files.append(scan_file.name)
 
-            self.telmodel.tm.scan_store.last_update = datetime.now(timezone.utc)
+            self.telmodel.oda.scan_store.last_update = datetime.now(timezone.utc)
 
         self.telmodel.tm.last_update = datetime.now(timezone.utc)
 
@@ -439,13 +479,54 @@ def main():
 
     sheet = service.spreadsheets()
 
-    last_dig_snapshot = None
-    last_sdp_snapshot = None
+    # Initialize last config pull snapshots and last model push datetimes
+    last_dig_config_snapshot = last_oet_config_snapshot = None
+    last_tm_model_push = last_dig_model_push = last_sdp_model_push = last_oet_model_push = datetime.min.replace(tzinfo=timezone.utc)
 
     try:
         while True:
 
-            # Exchange Digitiser data with the UI if comms is established
+            # If comms to the OET is established then exchange Observation Execution Tool data with the UI 
+            if tm.telmodel.tm.oet_connected == CommunicationStatus.ESTABLISHED:
+        
+                result = execute_sheets_request(sheet.values().get(
+                    spreadsheetId=ALSTON_RADIO_TELESCOPE, 
+                    range=OET_OBS_LIST,
+                    valueRenderOption="UNFORMATTED_VALUE")) # Retrieve values in their original form e.g. int, float, string, date
+
+                if 'error' in result:
+                    error = result['error']['details'][0]
+                    error_msg = error.get('errorMessage', 'Unknown error')
+                    logger.error(f'TM - error getting OET configuration: {error_msg}')
+                else:
+                    values = result.get("values", [])
+
+                    try:
+                        json_config = json.loads(values[0][0])
+                    except IndexError:
+                        logger.error(f"TM - no data in sheet range {DIG001_CONFIG}")
+                        json_config = None
+                    except json.JSONDecodeError as e:
+                        logger.error(f"TM - invalid JSON in sheet row {values[0]}: {e}")
+                        json_config = None
+       
+                    if json_config != last_oet_config_snapshot:
+
+                        config = ConfigEvent(
+                            category="OET",
+                            old_config=last_oet_config_snapshot,
+                            new_config=json_config,
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        tm.get_queue().put(config)
+
+                        last_oet_config_snapshot = json_config
+
+            else:
+                # Reset the snapshot such that config is re-read upon reconnection
+                last_oet_config_snapshot = None
+
+            # If comms to the Digitiser is established then exchange Digitiser data with the UI 
             if tm.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
         
                 result = execute_sheets_request(sheet.values().get(
@@ -460,50 +541,102 @@ def main():
                 else:
                     values = result.get("values", [])
 
-                    if values != last_dig_snapshot:
+                    try:
+                        json_config = json.loads(values[0][0])
+                    except IndexError:
+                        logger.error(f"TM - no data in sheet range {DIG001_CONFIG}")
+                        json_config = None
+                    except json.JSONDecodeError as e:
+                        logger.error(f"TM - invalid JSON in sheet row {values[0]}: {e}")
+                        json_config = None
+       
+                    if json_config != last_dig_config_snapshot:
 
-                        config = ConfigEvent(old_config=last_dig_snapshot, new_config=values, timestamp=datetime.now(timezone.utc))
+                        config = ConfigEvent(category="DIG", old_config=last_dig_config_snapshot, new_config=json_config, timestamp=datetime.now(timezone.utc))
                         tm.get_queue().put(config)
 
-                        last_dig_snapshot = values
+                        last_dig_config_snapshot = json_config
 
-                dig_dict = tm.telmodel.dig.to_dict()
-                dig_str = json.dumps(dig_dict, indent=4)
+                dig_latest_update = tm.telmodel.dig.last_update if tm.telmodel.dig.last_update else datetime.now(timezone.utc)
 
-                execute_sheets_request(sheet.values().update(
-                    spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                    range=TM_UI_API + "B2",                      
-                    valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                    body={"values": [[dig_str]]}
-                ))
+                # Push updated Digitiser model to Google Sheets if there are updates
+                if dig_latest_update > last_dig_model_push:
+
+                    dig_dict = tm.telmodel.dig.to_dict()
+                    dig_str = json.dumps(dig_dict, indent=4)
+
+                    execute_sheets_request(sheet.values().update(
+                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                        range=TM_UI_API + "B2",                      
+                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                        body={"values": [[dig_str]]}
+                    ))
+
+                    last_dig_model_push = dig_latest_update
 
             else:
                 # Reset the snapshot such that config is re-read upon reconnection
-                last_dig_snapshot = None
+                last_dig_config_snapshot = None
 
-            # Exchange SDP data with the UI if comms is established
+            # If comms to the SDP is established then exchange SDP data with the UI 
             if tm.telmodel.sdp.tm_connected == CommunicationStatus.ESTABLISHED:
 
-                sdp_dict = tm.telmodel.sdp.to_dict()
-                sdp_str = json.dumps(sdp_dict, indent=4)
+                sdp_latest_update = tm.telmodel.sdp.last_update if tm.telmodel.sdp.last_update else datetime.now(timezone.utc)
+
+                # Push updated SDP model to Google Sheets if there are updates
+                if sdp_latest_update > last_sdp_model_push:
+
+                    sdp_dict = tm.telmodel.sdp.to_dict()
+                    sdp_str = json.dumps(sdp_dict, indent=4)
+
+                    execute_sheets_request(sheet.values().update(
+                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                        range=TM_UI_API + "C2",
+                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                        body={"values": [[sdp_str]]}
+                    ))
+
+                    last_sdp_model_push = sdp_latest_update
+
+            # If comms to the OET is established then exchange Observation Design Tool data with the UI 
+            if tm.telmodel.oet.tm_connected == CommunicationStatus.ESTABLISHED:
+
+                oet_latest_update = tm.telmodel.oet.last_update if tm.telmodel.oet.last_update else datetime.now(timezone.utc)
+                oda_latest_update = tm.telmodel.oda.last_update if tm.telmodel.oda.last_update else datetime.now(timezone.utc)
+
+                if oet_latest_update > last_oet_model_push or oda_latest_update > last_oda_model_push:
+
+                    oet_dict = tm.telmodel.oet.to_dict()
+                    oet_str = json.dumps(oet_dict, indent=4)
+
+                    oda_dict = tm.telmodel.oda.to_dict()
+                    oda_str = json.dumps(oda_dict, indent=4)
+
+                    execute_sheets_request(sheet.values().update(
+                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                        range=TM_UI_API + "D2:E2",
+                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                        body={"values": [[oet_str, oda_str]]}
+                    ))
+
+                    last_obs_model_push = max(oet_latest_update, oda_latest_update)
+
+            tm_latest_update = tm.telmodel.tm.last_update if tm.telmodel.tm.last_update else datetime.now(timezone.utc)
+
+            if tm_latest_update > last_tm_model_push:
+
+                # Update TM model in Google Sheets
+                tm_dict = tm.telmodel.tm.to_dict()
+                tm_str = json.dumps(tm_dict, indent=4)
 
                 execute_sheets_request(sheet.values().update(
                     spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                    range=TM_UI_API + "C2",
-                    valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                    body={"values": [[sdp_str]]}
+                    range=TM_UI_API + "A2",
+                    valueInputOption="USER_ENTERED",  # allow Sheets to parse as datetime
+                    body={"values": [[tm_str]]}
                 ))
-                
-            # Update TM model in Google Sheets
-            tm_dict = tm.telmodel.tm.to_dict()
-            tm_str = json.dumps(tm_dict, indent=4)
 
-            execute_sheets_request(sheet.values().update(
-                spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                range=TM_UI_API + "A2",
-                valueInputOption="USER_ENTERED",  # allow Sheets to parse as datetime
-                body={"values": [[tm_str]]}
-            ))
+                last_tm_model_push = tm_latest_update
 
             # TM to UI Poll interval
             time.sleep(TM_UI_POLL_INTERVAL_S) 

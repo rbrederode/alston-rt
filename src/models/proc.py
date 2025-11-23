@@ -58,3 +58,10 @@ if __name__ == "__main__":
     print("Processor002 Model Initialized")
     pprint.pprint(proc002.to_dict())
     print("="*40)
+
+    print('Tests from_dict method')
+    print('='*40)
+
+    proc003 = ProcessorModel().from_dict(proc001.to_dict())
+
+    pprint.pprint(proc003.to_dict())
