@@ -83,6 +83,9 @@ class ObsState(enum.IntEnum):
     allocated resources and no configuration defined.
     """
 
+    COMPLETED = 11
+    """The subarray has completed the observation successfully."""
+
 class ObsModel(BaseModel):
     """A class representing a model of an observation"""
 
@@ -110,7 +113,7 @@ class ObsModel(BaseModel):
         "freq_overlap": And(Or(None, float), lambda v: v is None or v >= 0.0),  # Overlap between frequency scans (Hz)
         "freq_duration": And(Or(None, float), lambda v: v is None or v >= 0.0), # Duration of each frequency scan (seconds)
         "scan_iterations": And(Or(None, int), lambda v: v is None or v >= 0),   # Number of scan iterations (within a frequency scan)
-        "scan_duration": And(Or(None, float), lambda v: v is None or v >= 0.0),     # Duration of each scan (seconds)
+        "scan_duration": And(Or(None, float), lambda v: v is None or v >= 0.0), # Duration of each scan (seconds)
 
         "scans": And(list, lambda v: isinstance(v, list)),                      # List of scans to be performed for this observation
 

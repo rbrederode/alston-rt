@@ -43,6 +43,7 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 ALSTON_RADIO_TELESCOPE = "1r73N0VZHSQC6RjRv94gzY50pTgRvaQWfctGGOMZVpzc"
 DIG001_CONFIG = "DIG001!D4:E11"     # Range for Digitiser 001 configuration
 DIG002_CONFIG = "DIG002!D4:E11"     # Range for Digitiser 002 configuration
+ODT_CONFIG = "OBS DESIGN!A3:Z3"     # Range for Observation Design Tool
 TM_UI_API = "TM_UI_API!"            # Range for UI-TM API data
 TM_UI_POLL_INTERVAL_S = 5            # Poll interval in seconds
 
@@ -125,8 +126,8 @@ class TelescopeManager(App):
             property = method = value = None
 
             # Map from configuration item to method/property and value
-            (method, value) = map.get_method_name_value(new_item[0], new_item[1])
-            (property, value) = map.get_property_name_value(new_item[0], new_item[1]) if method is None else (None, None)
+            (method, value) = map.get_method_name_value(event.category, new_item[0], new_item[1])
+            (property, value) = map.get_property_name_value(event.category, new_item[0], new_item[1]) if method is None else (None, None)
                 
             if method is None and property is None:
                 logger.warning(f"Telescope Manager received unknown configuration item at row {i}: {new_item} with value {new_item[1]}")
@@ -147,7 +148,7 @@ class TelescopeManager(App):
                 update = True
                 logger.info(f"Telescope property '{property}' initialising at row {i}: {new_item}")
 
-            if update and self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
+            if event.category == "DIG" and update and self.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
                 dig_req = self._construct_req_to_dig(property=property, method=method, value=value, message="")
                 action.set_msg_to_remote(dig_req)
 
@@ -481,11 +482,37 @@ def main():
 
     sheet = service.spreadsheets()
 
-    last_dig_snapshot = None
-    last_sdp_snapshot = None
+    # Initialize last config pull snapshots and last model push datetimes
+    last_dig_config_snapshot = last_odt_config_snapshot = None
+    last_tm_model_push = last_dig_model_push = last_sdp_model_push = last_obs_model_push = datetime.min.replace(tzinfo=timezone.utc)
 
     try:
         while True:
+
+            # Exchange Observation Design data with the UI if comms to the OET is established
+            if tm.telmodel.tm.oet_connected == CommunicationStatus.ESTABLISHED:
+        
+                result = execute_sheets_request(sheet.values().get(
+                    spreadsheetId=ALSTON_RADIO_TELESCOPE, 
+                    range=ODT_CONFIG,
+                    valueRenderOption="UNFORMATTED_VALUE")) # Retrieve values in their original form e.g. int, float, string, date
+
+                if 'error' in result:
+                    error = result['error']['details'][0]
+                    error_msg = error.get('errorMessage', 'Unknown error')
+                    logger.error(f'TM - error getting ODT configuration: {error_msg}')
+                else:
+                    values = result.get("values", [])
+
+                    if values != last_odt_config_snapshot:
+                        config = ConfigEvent(category="ODT", old_config=last_odt_config_snapshot, new_config=values, timestamp=datetime.now(timezone.utc))
+                        tm.get_queue().put(config)
+
+                        last_odt_config_snapshot = values
+
+            else:
+                # Reset the snapshot such that config is re-read upon reconnection
+                last_odt_config_snapshot = None
 
             # Exchange Digitiser data with the UI if comms is established
             if tm.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
@@ -502,66 +529,93 @@ def main():
                 else:
                     values = result.get("values", [])
 
-                    if values != last_dig_snapshot:
+                    if values != last_dig_config_snapshot:
 
-                        config = ConfigEvent(old_config=last_dig_snapshot, new_config=values, timestamp=datetime.now(timezone.utc))
+                        config = ConfigEvent(category="DIG", old_config=last_dig_config_snapshot, new_config=values, timestamp=datetime.now(timezone.utc))
                         tm.get_queue().put(config)
 
-                        last_dig_snapshot = values
+                        last_dig_config_snapshot = values
 
-                dig_dict = tm.telmodel.dig.to_dict()
-                dig_str = json.dumps(dig_dict, indent=4)
+                dig_latest_update = tm.telmodel.dig.last_update if tm.telmodel.dig.last_update else datetime.now(timezone.utc)
 
-                execute_sheets_request(sheet.values().update(
-                    spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                    range=TM_UI_API + "B2",                      
-                    valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                    body={"values": [[dig_str]]}
-                ))
+                # Push updated Digitiser model to Google Sheets if there are updates
+                if dig_latest_update > last_dig_model_push:
+
+                    dig_dict = tm.telmodel.dig.to_dict()
+                    dig_str = json.dumps(dig_dict, indent=4)
+
+                    execute_sheets_request(sheet.values().update(
+                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                        range=TM_UI_API + "B2",                      
+                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                        body={"values": [[dig_str]]}
+                    ))
+
+                    last_dig_model_push = dig_latest_update
 
             else:
                 # Reset the snapshot such that config is re-read upon reconnection
-                last_dig_snapshot = None
+                last_dig_config_snapshot = None
 
             # Exchange SDP data with the UI if comms is established
             if tm.telmodel.sdp.tm_connected == CommunicationStatus.ESTABLISHED:
 
-                sdp_dict = tm.telmodel.sdp.to_dict()
-                sdp_str = json.dumps(sdp_dict, indent=4)
+                sdp_latest_update = tm.telmodel.sdp.last_update if tm.telmodel.sdp.last_update else datetime.now(timezone.utc)
 
-                execute_sheets_request(sheet.values().update(
-                    spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                    range=TM_UI_API + "C2",
-                    valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                    body={"values": [[sdp_str]]}
-                ))
+                # Push updated SDP model to Google Sheets if there are updates
+                if sdp_latest_update > last_sdp_model_push:
+
+                    sdp_dict = tm.telmodel.sdp.to_dict()
+                    sdp_str = json.dumps(sdp_dict, indent=4)
+
+                    execute_sheets_request(sheet.values().update(
+                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                        range=TM_UI_API + "C2",
+                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                        body={"values": [[sdp_str]]}
+                    ))
+
+                    last_sdp_model_push = sdp_latest_update
 
             # Exchange OET and ODA data with the UI if comms is established
             if tm.telmodel.oet.tm_connected == CommunicationStatus.ESTABLISHED:
 
-                oet_dict = tm.telmodel.oet.to_dict()
-                oet_str = json.dumps(oet_dict, indent=4)
+                oet_latest_update = tm.telmodel.oet.last_update if tm.telmodel.oet.last_update else datetime.now(timezone.utc)
+                oda_latest_update = tm.telmodel.oda.last_update if tm.telmodel.oda.last_update else datetime.now(timezone.utc)
 
-                oda_dict = tm.telmodel.oda.to_dict()
-                oda_str = json.dumps(oda_dict, indent=4)
+                if oet_latest_update > last_obs_model_push or oda_latest_update > last_obs_model_push:
+
+                    oet_dict = tm.telmodel.oet.to_dict()
+                    oet_str = json.dumps(oet_dict, indent=4)
+
+                    oda_dict = tm.telmodel.oda.to_dict()
+                    oda_str = json.dumps(oda_dict, indent=4)
+
+                    execute_sheets_request(sheet.values().update(
+                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                        range=TM_UI_API + "D2:E2",
+                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                        body={"values": [[oet_str, oda_str]]}
+                    ))
+
+                    last_obs_model_push = max(oet_latest_update, oda_latest_update)
+
+            tm_latest_update = tm.telmodel.tm.last_update if tm.telmodel.tm.last_update else datetime.now(timezone.utc)
+
+            if tm_latest_update > last_tm_model_push:
+
+                # Update TM model in Google Sheets
+                tm_dict = tm.telmodel.tm.to_dict()
+                tm_str = json.dumps(tm_dict, indent=4)
 
                 execute_sheets_request(sheet.values().update(
                     spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                    range=TM_UI_API + "D2:E2",
-                    valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                    body={"values": [[oet_str, oda_str]]}
+                    range=TM_UI_API + "A2",
+                    valueInputOption="USER_ENTERED",  # allow Sheets to parse as datetime
+                    body={"values": [[tm_str]]}
                 ))
-                
-            # Update TM model in Google Sheets
-            tm_dict = tm.telmodel.tm.to_dict()
-            tm_str = json.dumps(tm_dict, indent=4)
 
-            execute_sheets_request(sheet.values().update(
-                spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                range=TM_UI_API + "A2",
-                valueInputOption="USER_ENTERED",  # allow Sheets to parse as datetime
-                body={"values": [[tm_str]]}
-            ))
+                last_tm_model_push = tm_latest_update
 
             # TM to UI Poll interval
             time.sleep(TM_UI_POLL_INTERVAL_S) 

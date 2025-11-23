@@ -62,6 +62,7 @@ class BaseModel:
         if name in data:
             return data[name]
         raise XSoftwareFailure(f"Base model attribute name: {name} not found for type {type(self).__name__}")
+
     def __setattr__(self, name, value):
         if name.startswith("_"):
             super().__setattr__(name, value)
@@ -74,12 +75,58 @@ class BaseModel:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]):
+        """ A classmethod is a method that receives the class itself (not an instance) as its first argument 
+            (typically named cls). It's called on the class rather than an instance, and can create and return new 
+            instances of that class
+        """
         parsed = cls._deserialise(data)
+        
         # Check if parsed is a BaseModel and has the same class name
         # (to handle cases where __main__ vs module imports create different class objects)
         if not isinstance(parsed, BaseModel) or parsed.__class__.__name__ != cls.__name__:
             raise XAPIValidationFailed(f"Base model from_dict failed for type {cls.__name__}: expected {cls.__name__}, got {type(parsed).__name__}")
+        
+        # If this model has a last_update field, find the latest datetime in all nested models
+        if 'last_update' in parsed.schema.schema:
+            latest = parsed.find_latest_update()
+            if latest is not None:
+                # Add UTC timezone if the datetime is naive
+                if latest.tzinfo is None:
+                    from datetime import timezone
+                    latest = latest.replace(tzinfo=timezone.utc)
+                parsed._data['last_update'] = latest
+        
         return parsed
+    
+    def find_latest_update(self):
+        """Recursively find the latest last_update datetime in this model and all nested models."""
+        latest = None
+        
+        for key, value in self._data.items():
+            # Only check datetime fields that are named 'last_update'
+            if key == 'last_update' and isinstance(value, datetime):
+                # Normalize to naive datetime for comparison
+                value_naive = value.replace(tzinfo=None) if value.tzinfo else value
+                if latest is None or value_naive > latest:
+                    latest = value_naive
+            elif isinstance(value, BaseModel):
+                nested_latest = value.find_latest_update()
+                if nested_latest and (latest is None or nested_latest > latest):
+                    latest = nested_latest
+            elif isinstance(value, dict):
+                for v in value.values():
+                    if isinstance(v, BaseModel):
+                        nested_latest = v.find_latest_update()
+                        if nested_latest and (latest is None or nested_latest > latest):
+                            latest = nested_latest
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, BaseModel):
+                        nested_latest = item.find_latest_update()
+                        if nested_latest and (latest is None or nested_latest > latest):
+                            latest = nested_latest
+        
+        return latest
 
     def to_dict(self):
         # Sort keys for consistent output and convert non-serializable
@@ -183,7 +230,7 @@ class BaseModel:
                 return AppModel(**deserialized_fields)
             elif model_type == "datetime":
                 if isinstance(v["value"], str):
-                    return datetime.fromisoformat(v["value"])
+                    return datetime.fromisoformat(v["value"])  
             elif model_type == "DigitiserModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return DigitiserModel(**deserialized_fields)
@@ -271,4 +318,5 @@ class BaseModel:
             return {k: BaseModel._deserialise(val) for k, val in v.items()}
         elif isinstance(v, enum.IntEnum):
             return type(v)(v.value)
+
         return v

@@ -4,6 +4,7 @@ tzlocal
 pytz
 astropy
 astroplan
+astroquery
 witmotion
 pyrtlsdr
 scipy
