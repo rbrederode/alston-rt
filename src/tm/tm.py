@@ -33,6 +33,7 @@ from models.sdp import ScienceDataProcessorModel
 from models.telescope import TelescopeModel
 from util import log, util
 from util.xbase import XBase, XStreamUnableToExtract
+from webhook_handler import WebhookHandler
 
 logger = logging.getLogger(__name__)
 
@@ -137,8 +138,16 @@ class TelescopeManager(App):
                 (method, value) = map.get_method_name_value(config_key, config_value)
                 (property, value) = map.get_property_name_value(config_key, config_value) if method is None else (None, config_value)
 
+                # Currently only support updating dig001
+                if config_key == "id":
+                    if config_value.lower().startswith("dig001"):
+                        continue
+                    else:
+                        logger.warning(f"Telescope Manager only supports configuration of dig001, ignoring config for {config_value}")
+                        break
+
                 if method is None and property is None:
-                    logger.warning(f"Telescope Manager received unknown configuration item: {key}")
+                    logger.warning(f"Telescope Manager received unknown configuration item: {config_key}")
                     continue
 
                 logger.info(f"Sending digitiser configuration update for method: {method}, property: {property}, value: {value}")
@@ -451,7 +460,12 @@ def execute_sheets_request(request):
 def main():
   
     tm = TelescopeManager()
-    tm.start() 
+    tm.start()
+    
+    # Start webhook handler in background thread
+    webhook_handler = WebhookHandler(event_queue=tm.get_queue(), host='127.0.0.1', port=5001)
+    webhook_handler.start()
+    logger.info("Webhook handler initialized and running on port 5001")
 
     """Uses the Google Sheets API to authenticate with Google """
     creds = None
@@ -489,10 +503,14 @@ def main():
             # If comms to the OET is established then exchange Observation Execution Tool data with the UI 
             if tm.telmodel.tm.oet_connected == CommunicationStatus.ESTABLISHED:
         
-                result = execute_sheets_request(sheet.values().get(
-                    spreadsheetId=ALSTON_RADIO_TELESCOPE, 
-                    range=OET_OBS_LIST,
-                    valueRenderOption="UNFORMATTED_VALUE")) # Retrieve values in their original form e.g. int, float, string, date
+                try:
+                    result = execute_sheets_request(sheet.values().get(
+                        spreadsheetId=ALSTON_RADIO_TELESCOPE, 
+                        range=OET_OBS_LIST,
+                        valueRenderOption="UNFORMATTED_VALUE")) # Retrieve values in their original form e.g. int, float, string, date
+                except Exception as err:
+                    logger.error(f"Socket timeout when accessing Google Sheets API: {err}")
+                    result = {'error': {'details': [{'errorMessage': str(err)}]}}
 
                 if 'error' in result:
                     error = result['error']['details'][0]
@@ -528,34 +546,6 @@ def main():
 
             # If comms to the Digitiser is established then exchange Digitiser data with the UI 
             if tm.telmodel.dig.tm_connected == CommunicationStatus.ESTABLISHED:
-        
-                result = execute_sheets_request(sheet.values().get(
-                    spreadsheetId=ALSTON_RADIO_TELESCOPE, 
-                    range=DIG001_CONFIG,
-                    valueRenderOption="UNFORMATTED_VALUE")) # Retrieve values in their original form e.g. int, float, string, date
-
-                if 'error' in result:
-                    error = result['error']['details'][0]
-                    error_msg = error.get('errorMessage', 'Unknown error')
-                    logger.error(f'TM - error getting DIG configuration: {error_msg}')
-                else:
-                    values = result.get("values", [])
-
-                    try:
-                        json_config = json.loads(values[0][0])
-                    except IndexError:
-                        logger.error(f"TM - no data in sheet range {DIG001_CONFIG}")
-                        json_config = None
-                    except json.JSONDecodeError as e:
-                        logger.error(f"TM - invalid JSON in sheet row {values[0]}: {e}")
-                        json_config = None
-       
-                    if json_config != last_dig_config_snapshot:
-
-                        config = ConfigEvent(category="DIG", old_config=last_dig_config_snapshot, new_config=json_config, timestamp=datetime.now(timezone.utc))
-                        tm.get_queue().put(config)
-
-                        last_dig_config_snapshot = json_config
 
                 dig_latest_update = tm.telmodel.dig.last_update if tm.telmodel.dig.last_update else datetime.now(timezone.utc)
 
@@ -564,13 +554,15 @@ def main():
 
                     dig_dict = tm.telmodel.dig.to_dict()
                     dig_str = json.dumps(dig_dict, indent=4)
-
-                    execute_sheets_request(sheet.values().update(
-                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                        range=TM_UI_API + "B2",                      
-                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                        body={"values": [[dig_str]]}
-                    ))
+                    try:    
+                        execute_sheets_request(sheet.values().update(
+                            spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                            range=TM_UI_API + "B2",                      
+                            valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                            body={"values": [[dig_str]]}
+                        ))
+                    except Exception as err:
+                        logger.error(f"Error updating Digitiser model in Google Sheets: {err}")
 
                     last_dig_model_push = dig_latest_update
 
@@ -589,12 +581,16 @@ def main():
                     sdp_dict = tm.telmodel.sdp.to_dict()
                     sdp_str = json.dumps(sdp_dict, indent=4)
 
-                    execute_sheets_request(sheet.values().update(
-                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                        range=TM_UI_API + "C2",
-                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                        body={"values": [[sdp_str]]}
-                    ))
+                    try:    
+                        execute_sheets_request(sheet.values().update(
+                            spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                            range=TM_UI_API + "C2",
+                            valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                            body={"values": [[sdp_str]]}
+                        ))
+                    except Exception as err:
+                        logger.error(f"Error updating SDP model in Google Sheets: {err}")
+                    
 
                     last_sdp_model_push = sdp_latest_update
 
@@ -612,12 +608,15 @@ def main():
                     oda_dict = tm.telmodel.oda.to_dict()
                     oda_str = json.dumps(oda_dict, indent=4)
 
-                    execute_sheets_request(sheet.values().update(
-                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                        range=TM_UI_API + "D2:E2",
-                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                        body={"values": [[oet_str, oda_str]]}
-                    ))
+                    try:    
+                        execute_sheets_request(sheet.values().update(
+                            spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                            range=TM_UI_API + "D2:E2",
+                            valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                            body={"values": [[oet_str, oda_str]]}
+                        ))
+                    except Exception as err:
+                        logger.error(f"Error updating Observation Design Tool model in Google Sheets: {err}")
 
                     last_obs_model_push = max(oet_latest_update, oda_latest_update)
 
@@ -629,12 +628,15 @@ def main():
                 tm_dict = tm.telmodel.tm.to_dict()
                 tm_str = json.dumps(tm_dict, indent=4)
 
-                execute_sheets_request(sheet.values().update(
-                    spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                    range=TM_UI_API + "A2",
-                    valueInputOption="USER_ENTERED",  # allow Sheets to parse as datetime
-                    body={"values": [[tm_str]]}
-                ))
+                try:
+                    execute_sheets_request(sheet.values().update(
+                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                        range=TM_UI_API + "A2",
+                        valueInputOption="USER_ENTERED",  # allow Sheets to parse as datetime
+                        body={"values": [[tm_str]]}
+                    ))
+                except Exception as err:
+                    logger.error(f"Error updating TM model in Google Sheets: {err}")
 
                 last_tm_model_push = tm_latest_update
 
