@@ -235,7 +235,11 @@ class TCPServer:
                 logger.error(f"TCP Server {self.description} invalid client socket provided. Cannot send message.\n{msg}")
                 return
 
-            peername = client_socket.getpeername()
+            try:
+                peername = client_socket.getpeername()
+            except OSError:
+                logger.error(f"TCP Server {self.description} cannot get peername of client socket. Cannot send message.\n{msg}")
+                return
 
             if not isinstance(msg, message.Message):
                 logging.error(f"TCP Server {self.description} invalid message type provided. Expected 'message.Message', got {type(msg)}.")
