@@ -134,6 +134,22 @@ class BaseModel:
 
         return {k: BaseModel._serialise(v) for k, v in self._data.items()}
 
+    def save_to_disk(self, filename: str):
+        """ Save the model to a JSON file on disk. """
+        import json
+
+        with open(filename, 'w') as f:
+            json.dump(self.to_dict(), f, indent=4)
+
+    def load_from_disk(cls, filename: str) -> BaseModel:
+        """ Load the model from a JSON file on disk. """
+        import json
+
+        with open(filename, 'r') as f:
+            data = json.load(f)
+
+        return cls.from_dict(data)
+
     @staticmethod
     def _serialise(v):
 
@@ -207,21 +223,25 @@ class BaseModel:
         from models.app import AppModel
         from models.comms import CommunicationStatus
         from models.dig import DigitiserModel
-        from models.dsh import DishModel, DishMgrModel
-        from models.dsh import Feed
+        from models.dsh import DishMode, DishModel, DishList, DishManagerModel, Feed, PointingState, CapabilityStates
         from models.health import HealthState
-        from models.obs import ObsState, ObsModel
+        from models.obs import ObsState, Observation
         from models.oda import ObsList, ScanStore, ODAModel
         from models.oet import OETModel
         from models.proc import ProcessorModel
         from models.scan import ScanModel, ScanState
         from models.sdp import ScienceDataProcessorModel
-        from models.target import TargetModel, TargetType
-        from models.tm import TelescopeManagerModel
+        from models.target import TargetModel, PointingType, TargetConfig
+        from models.tm import TelescopeManagerModel, ResourceAllocations, Allocation, AllocationState
         
         if isinstance(v, dict) and "_type" in v:
+
             model_type = v["_type"]
-            if model_type == "AltAz":
+
+            if model_type == "Allocation":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return Allocation(**deserialized_fields)
+            elif model_type == "AltAz":
                 location = BaseModel._deserialise(v["location"])
                 obstime = BaseModel._deserialise(v["obstime"])
                 return AltAz(alt=v["alt"]*u.deg, az=v["az"]*u.deg, obstime=obstime, location=location)
@@ -234,12 +254,15 @@ class BaseModel:
             elif model_type == "DigitiserModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return DigitiserModel(**deserialized_fields)
-            elif model_type == "DishMgrModel":
+            elif model_type == "DishManagerModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
-                return DishMgrModel(**deserialized_fields)
+                return DishManagerModel(**deserialized_fields)
             elif model_type == "DishModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return DishModel(**deserialized_fields)
+            elif model_type == "DishList":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return DishList(**deserialized_fields)
             elif model_type == "EarthLocation":
                 return EarthLocation(lat=v["lat"]*u.deg, lon=v["lon"]*u.deg, height=v["height"]*u.m)
             elif model_type == "enum.IntEnum":
@@ -248,12 +271,16 @@ class BaseModel:
 
                 # Map class name to actual enum class
                 enum_class = {
+                    "AllocationState": AllocationState,
+                    "CapabilityStates": CapabilityStates,
                     "CommunicationStatus": CommunicationStatus,
-                    "HealthState": HealthState,
-                    "ScanState": ScanState,
-                    "ObsState": ObsState,
-                    "TargetType": TargetType,
+                    "DishMode": DishMode,
                     "Feed": Feed,
+                    "HealthState": HealthState,
+                    "ObsState": ObsState,
+                    "PointingType": PointingType,
+                    "PointingState": PointingState,
+                    "ScanState": ScanState, 
                 }.get(enum_class_name)
                 if enum_class is not None:
                     return enum_class[enum_value_name]
@@ -267,9 +294,9 @@ class BaseModel:
             elif model_type == "Observer":
                 location = BaseModel._deserialise(v["location"])
                 return Observer(name=v["name"], location=location)
-            elif model_type == "ObsModel":
+            elif model_type == "Observation":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
-                return ObsModel(**deserialized_fields)
+                return Observation(**deserialized_fields)
             elif model_type == "ObsList":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ObsList(**deserialized_fields)
@@ -282,6 +309,9 @@ class BaseModel:
             elif model_type == "ProcessorModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ProcessorModel(**deserialized_fields)
+            elif model_type == "ResourceAllocations":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return ResourceAllocations(**deserialized_fields)
             elif model_type == "ScanModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ScanModel(**deserialized_fields)
@@ -292,18 +322,33 @@ class BaseModel:
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ScienceDataProcessorModel(**deserialized_fields)
             elif model_type == "SkyCoord":
-                # Check which coordinate system is used
-                if "ra" in v and "dec" in v:
-                    # ICRS, FK5, etc. frames with RA/Dec
-                    return SkyCoord(ra=v["ra"]*u.deg, dec=v["dec"]*u.deg, frame=v["frame"])
-                elif "az" in v and "alt" in v:
-                    # AltAz frame
-                    obstime = BaseModel._deserialise(v["obstime"]) if v.get("obstime") else None
-                    location = BaseModel._deserialise(v["location"]) if v.get("location") else None
-                    return SkyCoord(az=v["az"]*u.deg, alt=v["alt"]*u.deg, frame=v["frame"], obstime=obstime, location=location)
+                frame = v.get("frame", "icrs")
+                
+                # Handle different coordinate frames
+                if frame == "icrs" or frame == "fk5":
+                    if "ra" in v and "dec" in v:
+                        return SkyCoord(ra=v["ra"]*u.deg, dec=v["dec"]*u.deg, frame=frame)
+                    else:
+                        raise ValueError(f"Cannot reconstruct SkyCoord from {v}: missing ra/dec")
+                
+                elif frame == "galactic":
+                    if "l" in v and "b" in v:
+                        return SkyCoord(l=v["l"]*u.deg, b=v["b"]*u.deg, frame=frame)
+                    else:
+                        raise ValueError(f"Cannot reconstruct SkyCoord from {v}: missing l/b")
+                
+                elif frame == "altaz":
+                    if "alt" in v and "az" in v:
+                        return SkyCoord(alt=v["alt"]*u.deg, az=v["az"]*u.deg, frame=frame)
+                    else:
+                        raise ValueError(f"Cannot reconstruct SkyCoord from {v}: missing alt/az")
+                
                 else:
-                    # Fallback - can't reconstruct
-                    raise ValueError(f"Cannot reconstruct SkyCoord from {v}")
+                    raise ValueError(f"Unsupported SkyCoord frame: {frame}")
+
+            elif model_type == "TargetConfig":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return TargetConfig(**deserialized_fields)
             elif model_type == "TargetModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return TargetModel(**deserialized_fields)
