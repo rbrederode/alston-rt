@@ -75,9 +75,9 @@ class TelescopeManager(App):
         # Digitiser interface
         self.dig_system = "dig"
         self.dig_api = tm_dig.TM_DIG()
-        # Digitiser TCP Client
-        self.dig_endpoint = TCPClient(description=self.dig_system, queue=self.get_queue(), host=self.get_args().dig_host, port=self.get_args().dig_port)
-        self.dig_endpoint.connect()
+        # Digitiser TCP Server
+        self.dig_endpoint = TCPServer(description=self.dig_system, queue=self.get_queue(), host=self.get_args().dig_host, port=self.get_args().dig_port)
+        self.dig_endpoint.start()
         # Register Digitiser interface with the App
         self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint)
         # Initialise Digitiser comms status
@@ -127,6 +127,9 @@ class TelescopeManager(App):
 
         if event.category == "DIG" and self.telmodel.dig_mgr.tm_connected == CommunicationStatus.ESTABLISHED:
 
+            # Extract dig_id from the incoming DIG configuration event (JSON)
+            dig_id = event.new_config.get("dig_id", None)
+
             for config_key in event.new_config.keys():
                 config_value = event.new_config[config_key]
 
@@ -141,21 +144,13 @@ class TelescopeManager(App):
                 (method, value) = map.get_method_name_value(config_key, config_value)
                 (property, value) = map.get_property_name_value(config_key, config_value) if method is None else (None, config_value)
 
-                # Currently only support updating dig001
-                if config_key == "dig_id":
-                    if config_value.lower().startswith("dig001"):
-                        continue
-                    else:
-                        logger.warning(f"Telescope Manager only supports configuration of dig001, ignoring config for {config_value}")
-                        break
-
                 if method is None and property is None:
                     logger.warning(f"Telescope Manager received unknown configuration item: {config_key}")
                     continue
 
                 logger.info(f"Sending digitiser configuration update for method: {method}, property: {property}, value: {value}")
             
-                dig_req = self._construct_req_to_dig(property=property, method=method, value=value, message="")
+                dig_req = self._construct_req_to_dig(entity=dig_id, property=property, method=method, value=value, message="")
                 action.set_msg_to_remote(dig_req)
 
                 action.set_timer_action(Action.Timer(
@@ -298,37 +293,50 @@ class TelescopeManager(App):
         """ Processes api messages received on the Digitiser service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
-        logger.info(f"Telescope Manager received digitiser {api_call['msg_type']} message with action code: {api_call['action_code']}")
-        
+        logger.info(f"Telescope Manager received digitiser {api_call['msg_type']} msg with action code: {api_call['action_code']} on entity: {api_msg['entity']}")
+
         action = Action()
 
         if api_call.get('status','') != tm_dig.STATUS_ERROR:
 
-            if api_call.get('property','') == tm_dig.PROPERTY_FEED:
-                self.telmodel.dsh_mgr.feed = Feed(api_call['value'])
-                self.telmodel.dig_mgr.feed = Feed(api_call['value'])
-            elif api_call.get('property','') == tm_dig.PROPERTY_STREAMING:
-                self.telmodel.dig_mgr.streaming = api_call['value']
-            elif api_call.get('property','') == tm_dig.PROPERTY_GAIN:
-                self.telmodel.dig_mgr.gain = api_call['value']
-            elif api_call.get('property','') == tm_dig.PROPERTY_SAMPLE_RATE:
-                self.telmodel.dig_mgr.sample_rate = api_call['value']
-            elif api_call.get('property','') == tm_dig.PROPERTY_BANDWIDTH:
-                self.telmodel.dig_mgr.bandwidth = api_call['value']
-            elif api_call.get('property','') == tm_dig.PROPERTY_CENTER_FREQ:
-                self.telmodel.dig_mgr.center_freq = api_call['value']
-            elif api_call.get('property','') == tm_dig.PROPERTY_FREQ_CORRECTION:
-                self.telmodel.dig_mgr.freq_correction = api_call['value']
-            elif api_call.get('property','') == tm_dig.PROPERTY_SDP_COMMS:
-                self.telmodel.dig_mgr.sdp_connected = CommunicationStatus(api_call['value'])
-            elif api_call.get('property','') == tm_dig.PROPERTY_STATUS:
+            # Retrieve the digitiser entity from the Digitiser Manager Model
+            digitiser = next((dig for dig in self.telmodel.dig_mgr.dig_store.dig_list if dig.dig_id == api_msg['entity']), None)
+
+            if api_call.get('property','') == tm_dig.PROPERTY_STATUS:
                 logger.debug(f"Telescope Manager received Digitiser STATUS update: {api_call['value']}")
 
-                self.telmodel.dig_mgr = DigitiserModel.from_dict(api_call['value'])
+                # If the digitiser is not found in the Digitiser Manager store, create it
+                if digitiser is None:
+                    digitiser = DigitiserModel.from_dict(api_call['value'])
+                    self.telmodel.dig_mgr.dig_store.dig_list.append(digitiser)
+                else:
+                    digitiser = DigitiserModel.from_dict(api_call['value'])
+            
+            elif digitiser is None:
+                logger.warning(f"Telescope Manager received Digitiser message for unknown Digitiser: {api_msg['entity']}")
+                return action
 
-        # Update Telescope Model based on received Digitiser api_call
-        dt = api_msg.get("timestamp")
-        self.telmodel.dig_mgr.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
+            # Update Telescope Model timestamps based on received Digitiser api_call
+            dt = api_msg.get("timestamp")
+            self.telmodel.dig_mgr.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
+            digitiser.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
+
+            if api_call.get('property','') == tm_dig.PROPERTY_FEED:
+                digitiser.feed = Feed(api_call['value'])
+            elif api_call.get('property','') == tm_dig.PROPERTY_STREAMING:
+                digitiser.streaming = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_GAIN:
+                digitiser.gain = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_SAMPLE_RATE:
+                digitiser.sample_rate = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_BANDWIDTH:
+                digitiser.bandwidth = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_CENTER_FREQ:
+                digitiser.center_freq = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_FREQ_CORRECTION:
+                digitiser.freq_correction = api_call['value']
+            elif api_call.get('property','') == tm_dig.PROPERTY_SDP_COMMS:
+                digitiser.sdp_connected = CommunicationStatus(api_call['value'])
 
         # If the api call is a rsp message, stop the corresponding timer
         if api_call['msg_type'] == tm_dig.MSG_TYPE_RSP and dt is not None:
@@ -536,7 +544,7 @@ class TelescopeManager(App):
 
         self.telmodel.tel_mgr.last_update = datetime.now(timezone.utc)
 
-    def _construct_req_to_dig(self, property=None, method=None, value=None, message=None) -> APIMessage:
+    def _construct_req_to_dig(self, entity=None, property=None, method=None, value=None, message=None) -> APIMessage:
         """ Constructs a request message to the Digitiser.
         """
 
@@ -549,6 +557,7 @@ class TelescopeManager(App):
                 dt=datetime.now(timezone.utc), 
                 from_system=self.app_model.app_name, 
                 to_system="dig", 
+                entity=entity if entity else "<undefined>",
                 api_call={
                     "msg_type": "req", 
                     "action_code": "method", 
@@ -561,6 +570,7 @@ class TelescopeManager(App):
                 dt=datetime.now(timezone.utc), 
                 from_system=self.app_model.app_name, 
                 to_system="dig", 
+                entity=entity if entity else "<undefined>",
                 api_call={
                     "msg_type": "req", 
                     "action_code": "set", 

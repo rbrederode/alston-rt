@@ -28,7 +28,7 @@ class TelescopeModel:
         self.oda = ODAModel(id="oda001")                            # Observation Data Archive model
         self.tel_mgr = TelescopeManagerModel(id="telmgr001")        # Telescope Manager (App) model
         self.dsh_mgr = DishManagerModel(id="dshmgr001")             # Dish Manager (App) model
-        self.dig_mgr = DigitiserManagerModel(dig_id="digmgr001")    # Digitiser Manager (App) model
+        self.dig_mgr = DigitiserManagerModel(id="digmgr001")    # Digitiser Manager (App) model
         self.digitisers = [DigitiserModel(dig_id="dig001")]         # List of digitiser models
         self.sdp = ScienceDataProcessorModel(id="sdp001")           # Science Data Processor (App) model
     

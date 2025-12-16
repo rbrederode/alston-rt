@@ -37,9 +37,9 @@ class Digitiser(App):
         # Telescope Manager interface
         self.tm_system = "tm"
         self.tm_api = tm_dig.TM_DIG()
-        # Telescope Manager TCP Server
-        self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
-        self.tm_endpoint.start()
+        # Telescope Manager TCP Client
+        self.tm_endpoint = TCPClient(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
+        self.tm_endpoint.connect()
         # Register Telescope Manager interface with the App
         self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint)
         # Set initial Telescope Manager connection status

@@ -173,7 +173,7 @@ if __name__ == "__main__":
         last_update=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     )
 
-    dig002 = DigitiserModel(id="dig002")
+    dig002 = DigitiserModel(dig_id="dig002")
 
     import pprint
     print("="*40)
@@ -266,3 +266,10 @@ if __name__ == "__main__":
         last_update=datetime.now(timezone.utc)
     )
     pprint.pprint(digmgr001.to_dict())
+
+    # Retrieve digitiser "dig002" from the digitiser manager store
+    dig_retrieved = next((dig for dig in digmgr001.dig_store.dig_list if dig.dig_id == "dig002"), None)
+    print("="*40)
+    print("Retrieved Digitiser dig002 from Digitiser Manager Store")
+    print("="*40)
+    pprint.pprint(dig_retrieved.to_dict() if dig_retrieved else "Digitiser not found")
