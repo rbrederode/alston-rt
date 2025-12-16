@@ -89,33 +89,11 @@ class WebhookHandler:
                 
                 event_type = data.get('event', 'unknown')
                 
-                if event_type in ['cell_edited', 'monitored_cell_edited']:
-                    # Example: Convert Google Sheets edit to a ConfigEvent
-                    from env.events import ConfigEvent
-                    
-                    sheet_name = data.get('sheet_name', '')
-                    cell_data = data.get('cell', {})
-                    values = data.get('values', {})
-                    
-                    # Determine which category based on sheet name
-                    category = self._map_sheet_to_category(sheet_name)
-                    
-                    if category:
-                        config_event = ConfigEvent(
-                            category=category,
-                            old_config={cell_data.get('address'): values.get('old')},
-                            new_config={cell_data.get('address'): values.get('new')},
-                            timestamp=datetime.fromisoformat(data.get('timestamp')) if data.get('timestamp') else datetime.now(timezone.utc)
-                        )
-                        
-                        # Push to TM event queue
-                        self.event_queue.put(config_event)
-                        logger.info(f"Injected {category} config event into TM queue")
-                    else:
-                        logger.warning(f"Unknown sheet name for webhook: {sheet_name}")
-                
-                elif event_type == 'alston-rt.ui.dig':
+                if event_type == 'alston-rt.ui.dig' or event_type == 'alston-rt.ui.odt' or event_type == 'alston-rt.ui.sdp':
                     message_data = data.get('message', '')
+                    
+                    # Extract rightmost 3 characters and convert to uppercase
+                    category = event_type[-3:].upper()
                     
                     # If message was parsed as JSON (dict), use it directly
                     if isinstance(message_data, dict):
@@ -124,14 +102,14 @@ class WebhookHandler:
                         # Create ConfigEvent from the parsed message
                         from env.events import ConfigEvent
                         config_event = ConfigEvent(
-                            category="DIG",  # Assume digitiser config for now
+                            category=category,
                             old_config=None,
                             new_config=message_data,
                             timestamp=datetime.fromisoformat(data.get('timestamp')) if data.get('timestamp') else datetime.now(timezone.utc)
                         )
                         
                         self.event_queue.put(config_event)
-                        logger.info(f"Injected DIG config event into TM queue")
+                        logger.info(f"Injected {category} config event into TM queue")
                     else:
                         logger.info(f"Webhook received: {message_data}")
                 
@@ -161,14 +139,14 @@ class WebhookHandler:
             sheet_name: Name of the Google Sheet
             
         Returns:
-            Category string (DIG, OET, SDP) or empty string if unknown
+            Category string (DIG, ODT, SDP) or empty string if unknown
         """
         # Customize this mapping based on your Google Sheets structure
         sheet_mapping = {
             'Digitiser': 'DIG',
             'DIG': 'DIG',
-            'Observations': 'OET',
-            'OET': 'OET',
+            'Observations': 'ODT',
+            'ODT': 'ODT',
             'SDP': 'SDP',
             'Science Data': 'SDP'
         }

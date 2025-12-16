@@ -8,29 +8,29 @@ from astropy.coordinates import SkyCoord, EarthLocation, AltAz
 from astropy.time import Time
 
 from models.base import BaseModel
+from models.dsh import Feed
 
 #=======================================
 # Models comprising a Target (TARGET)
 #=======================================
 
-class TargetType(enum.IntEnum):
-    """Python enumerated type for target types."""
+class PointingType(enum.IntEnum):
+    """Python enumerated type for pointing types."""
 
-    SIDEREAL = 0        # Sidereal target (fixed RA/Dec)
-    SOLAR = 1           # Solar system target (e.g. planet or Sun)
-    LUNAR = 2           # Lunar target (the Moon)
-    TERRESTRIAL = 3     # Terrestrial target (e.g. ground station)
-    SATELLITE = 4       # Satellite target (e.g. communications satellite)
+    SIDEREAL_TRACK = 0        # Sidereal tracking (fixed RA/Dec) e.g. Andromeda Galaxy
+    NON_SIDEREAL_TRACK = 1    # Solar system or satellite tracking e.g. planet, moon or Sun
+    DRIFT_SCAN = 2            # Fixed Alt-azimuth target e.g. Zenith
+    FIVE_POINT_SCAN = 3       # Center point and 4 offset points e.g. for beam mapping
 
 class TargetModel(BaseModel):
     """A class representing a target model."""
 
     schema = Schema({
         "_type": And(str, lambda v: v == "TargetModel"),
-        "name": Or(None, And(str, lambda v: isinstance(v, str))),                         # Target name
-        "type": And(TargetType, lambda v: isinstance(v, TargetType)),                       # Target type
-        "sky_coord": Or(None, lambda v: v is None or isinstance(v, SkyCoord)),  # Sky coordinates (any frame)
-        "altaz": Or(None, lambda v: v is None or isinstance(v, (SkyCoord, AltAz))),      # Alt-az coordinates (SkyCoord or AltAz)
+        "id": Or(None, And(str, lambda v: isinstance(v, str))),                     # Target identifier
+        "pointing": And(PointingType, lambda v: isinstance(v, PointingType)),               # Target type
+        "sky_coord": Or(None, lambda v: v is None or isinstance(v, SkyCoord)),      # Sky coordinates (any frame)
+        "altaz": Or(None, dict, lambda v: v is None or isinstance(v, (dict, SkyCoord))), # Alt-az coordinates (SkyCoord or AltAz)
     })
 
     allowed_transitions = {}
@@ -40,10 +40,51 @@ class TargetModel(BaseModel):
         # Default values
         defaults = {
             "_type": "TargetModel",
-            "name": None,                   # Used for solar and lunar (and optionally sidereal) targets e.g. "Sun", "Moon", "Mars", "Vega"
-            "type": TargetType.SIDEREAL,    # Default to sidereal target
-            "sky_coord": None,              # Used for sidereal targets (ra,dec or l,b)
-            "altaz": None,                  # Used for terrestrial and satellite targets
+            "id": None,                             # Used for solar and lunar (and optionally sidereal) targets e.g. "Sun", "Moon", "Mars", "Vega"
+            "pointing": PointingType.DRIFT_SCAN,    # Default to drift scan pointing
+            "sky_coord": None,                      # Used for sidereal targets (ra,dec or l,b)
+            "altaz": None,                          # Used for non-sidereal targets e.g. solar, terrestrial or satellite targets
+        }
+
+        # Apply defaults if not provided in kwargs
+        for key, value in defaults.items():
+            if key not in kwargs:
+                kwargs.setdefault(key, value)
+
+        super().__init__(**kwargs)
+
+class TargetConfig(BaseModel):
+    """A class representing a target and associated configuration."""
+
+    schema = Schema({
+        "_type": And(str, lambda v: v == "TargetConfig"),
+        "target": And(TargetModel, lambda v: isinstance(v, TargetModel)),   # Target object
+        "feed": And(Feed, lambda v: isinstance(v, Feed)),                   # Feed enum
+        "gain": And(Or(int, float), lambda v: v >= 0.0),                    # Gain (dBi)
+        "center_freq": And(Or(int, float), lambda v: v >= 0.0),             # Center frequency (Hz) 
+        "bandwidth": And(Or(int, float), lambda v: v >= 0.0),               # Bandwidth (Hz) 
+        "sample_rate": And(Or(int, float), lambda v: v >= 0.0),             # Sample rate (Hz) 
+        "integration_time": And(Or(int, float), lambda v: v >= 0.0),        # Integration time (seconds)
+        "spectral_resolution": And(int, lambda v: v >= 0),                  # Spectral resolution (fft size)
+        "target_id": And(int, lambda v: v >= -1),                           # Target identifier
+      })
+
+    allowed_transitions = {}
+
+    def __init__(self, **kwargs):
+
+        # Default values
+        defaults = {
+            "_type": "TargetConfig",
+            "target": TargetModel(),           # Target object
+            "feed": Feed.NONE,                 # Default to None feed
+            "gain": 0.0,                       # Gain (dBi)
+            "center_freq": 0.0,                # Center frequency (Hz) 
+            "bandwidth": 0.0,                  # Bandwidth (Hz) 
+            "sample_rate": 0.0,                # Sample rate (Hz) 
+            "integration_time": 0.0,           # Integration time (seconds)
+            "spectral_resolution": 0,          # Spectral resolution (fft size)
+            "target_id": -1,                   # Target identifier
         }
 
         # Apply defaults if not provided in kwargs
@@ -58,11 +99,11 @@ if __name__ == "__main__":
     import pprint
 
     coord = SkyCoord(ra="18h36m56.33635s", dec="+38d47m01.2802s", frame="icrs")
-    altaz = AltAz(alt=45.0*u.deg, az=180.0*u.deg)
+    altaz = {"alt": 45.0*u.deg, "az": 180.0*u.deg}
 
     target001 = TargetModel(
-        name="Vega",
-        type=TargetType.SIDEREAL,
+        id="Vega",
+        pointing=PointingType.SIDEREAL_TRACK,
         sky_coord=coord,
         altaz=None
     )
@@ -72,8 +113,8 @@ if __name__ == "__main__":
     pprint.pprint(target001.to_dict())
 
     target002 = TargetModel(
-        name="Ground Station Alpha",
-        type=TargetType.TERRESTRIAL,
+        id="Ground Station Alpha",
+        pointing=PointingType.DRIFT_SCAN,
         sky_coord=None,
         altaz=altaz
     )
@@ -96,12 +137,14 @@ if __name__ == "__main__":
     print("Computed AltAz for Moon at", dt.isoformat())
 
     target003 = TargetModel(
-        name="Moon",
-        type=TargetType.SOLAR,
+        id="Moon",
+        pointing=PointingType.NON_SIDEREAL_TRACK,
         sky_coord=None,
-        altaz=altaz
+        altaz={"alt": altaz.alt, "az": altaz.az}
         )
 
+    print('='*40)
+    print("Target Model: Solar Target (Moon)")
     print('='*40)
 
     pprint.pprint(target003.to_dict())
