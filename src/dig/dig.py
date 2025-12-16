@@ -58,8 +58,8 @@ class Digitiser(App):
         
         # Software Defined Radio (internal) interface
         self.sdr = SDR()
-        self.dig_model.sdr_connected = self.sdr.get_comms_status()
         self.dig_model.sdr_eeprom = self.sdr.get_eeprom_info()
+        self.dig_model.sdr_connected = self.sdr.get_comms_status()
 
         self.dig_model.streaming = False # Flag indicating if we are currently streaming samples (from the SDR)
  
@@ -544,6 +544,7 @@ def main():
         pass
     finally:
         digitiser.stop()
+        digitiser.sdr.close()
 
 if __name__ == "__main__":
     main()
