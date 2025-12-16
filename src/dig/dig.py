@@ -490,7 +490,7 @@ class Digitiser(App):
         
         # Construct metadata using the digitiser model and sample read info
         metadata = [   
-            {"property": "dig_id", "value": self.dig_model.id},                 # Digitiser Id
+            {"property": "dig_id", "value": self.dig_model.dig_id},                 # Digitiser Id
             {"property": "feed", "value": self.dig_model.feed.name},            # Feed name
             {"property": "center_freq", "value": self.dig_model.center_freq},   # Hz    
             {"property": "sample_rate", "value": self.dig_model.sample_rate},   # Hz
