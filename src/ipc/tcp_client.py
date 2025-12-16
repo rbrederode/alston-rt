@@ -253,8 +253,12 @@ class TCPClient:
 
             return self.last_result
 
-    def send(self, msg: message.Message):
-        """Send a message to the server"""
+    def send(self, msg: message.Message, client_socket=None):
+        """Send a message to the server
+            Parameters
+                msg: Message to send
+                client_socket: Dummy parameter for compatibility with server interface
+        """
 
         with self._send_lock:  # Ensure that only one thread can send a message at a time
 
