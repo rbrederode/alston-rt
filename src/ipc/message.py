@@ -204,6 +204,7 @@ class APIMessage(AppMessage):
         "timestamp":            YYYY-MM-DDTHH:MM:SS.sssZ formatted timestamp (UTC) of when the message was transmitted 
         "from":                 system originating the api call e.g. cam
         "to":                   system intended to receive the api call e.g. sdp
+        "entity":               optional entity ID to uniquely identify an instance of an entity e.g. Dishes: 'dsh001', Digitisers: 'dig001'
         "api_call":             json formatted api call request or response
         "echo_data":            optional json formatted data that will simply be echoed back in a subsequent response
         "payload_length":       conditional if payload is present, integer length of payload data in bytes 
@@ -232,7 +233,8 @@ class APIMessage(AppMessage):
                 api_version=api_msg.get("api_version"),
                 dt=datetime.datetime.fromisoformat(api_msg.get("timestamp").replace("Z", "+00:00")),
                 from_system=api_msg.get("from"),      
-                to_system=api_msg.get("to"),      
+                to_system=api_msg.get("to"),
+                entity=api_msg.get("entity"),
                 api_call=api_msg.get("api_call"),
                 echo=api_msg.get("echo_data")
             )
@@ -243,13 +245,17 @@ class APIMessage(AppMessage):
         if payload is not None:
             self.set_payload_data(payload)
 
-    def set_json_api_header(self, api_version: str, dt: datetime, from_system: str, to_system: str, api_call: dict=None, echo: dict=None):
+    def set_json_api_header(self, api_version: str, dt: datetime, from_system: str, to_system: str, api_call: dict=None, echo: dict=None, entity: str=None):
         """
         Sets the json API header data.
         """
         self.set_api_version(api_version)
         self.set_from(from_system)
         self.set_to(to_system)
+        
+        if entity is not None:
+            self.set_entity(entity)
+
         self.set_timestamp(dt)
         self.set_api_call(api_call)
         self.set_echo_data(echo)
@@ -298,6 +304,15 @@ class APIMessage(AppMessage):
             self.json_api_header_dict = {}
 
         self.json_api_header_dict["to"] = to_system
+
+    def set_entity(self, entity: str):
+        """
+        Sets the entity field in the json API header data.
+        """
+        if self.json_api_header_dict is None:
+            self.json_api_header_dict = {}
+
+        self.json_api_header_dict["entity"] = entity
 
     def switch_from_to(self):
         """
@@ -413,6 +428,18 @@ class APIMessage(AppMessage):
 
         return None
 
+    def get_entity(self):
+        """
+        Returns the entity field from the JSON API header as a string.
+        """
+        if self.json_api_header_dict is None:
+            return None
+
+        if "entity" in self.json_api_header_dict:
+            return self.json_api_header_dict["entity"]
+
+        return None
+
     def get_api_call(self):
         """
         Returns the api_call field from the JSON API header as a dictionary.
@@ -456,6 +483,7 @@ class APIMessage(AppMessage):
             "timestamp": self.get_timestamp(),
             "from": self.get_from_system(),
             "to": self.get_to_system(),
+            "entity": self.get_entity(),
             "echo_data": self.get_echo_data()
         }
 
@@ -623,6 +651,7 @@ def test_api_message_with_payload():
         dt=datetime.datetime.now(datetime.timezone.utc),
         from_system="cam",
         to_system="dig",
+        entity="dig001",
         api_call={"action": "set", "property": "data"},
         echo={"request_id": "67890", "note": "This message contains a payload"}
     )
@@ -641,6 +670,7 @@ def test_api_message_with_echo_data():
         dt=datetime.datetime.now(datetime.timezone.utc),
         from_system="cam",
         to_system="dig",
+        entity="dsh101",
         api_call={"action": "get", "property": "frequency"},
         echo={"request_id": "12345", "note": "This is a test echo"}
     )
@@ -649,7 +679,7 @@ def test_api_message_with_echo_data():
     assert api_echo_msg.get_echo_data() == {"request_id": "12345", "note": "This is a test echo"}
 
     # Unpack
-    data = b'{"byteorder": "little", "content-type": "application/json", "content-encoding": "utf-8", "content-length": 394}{"payload_length": 0, "api_version": "1.0", "timestamp": "2025-09-15T15:35:39.610Z", "from": "cam", "to": "dig", "api_call": {"action": "get", "property": "frequency"}, "echo_data": {"request_id": "12345", "note": "This is a test echo"}}{"api_version": "2.2", "timestamp": "2025-09-30T15:35:39.610Z", "from": "sdp", "to": "cam", "api_call": {"action": "set", "property": "frequency"}}'
+    data = b'{"byteorder": "little", "content-type": "application/json", "content-encoding": "utf-8", "content-length": 394}{"payload_length": 0, "api_version": "1.0", "timestamp": "2025-09-15T15:35:39.610Z", "from": "cam", "to": "dig", "entity": "dsh101", "api_call": {"action": "get", "property": "frequency"}, "echo_data": {"request_id": "12345", "note": "This is a test echo"}}{"api_version": "2.2", "timestamp": "2025-09-30T15:35:39.610Z", "from": "sdp", "to": "cam", "api_call": {"action": "set", "property": "frequency"}}'
     offset = api_echo_msg.from_data(data)
     assert offset > 0
     assert isinstance(api_echo_msg.get_echo_data(), dict)
@@ -752,6 +782,7 @@ if __name__ == "__main__":
         dt=datetime.datetime.now(datetime.timezone.utc),
         from_system="cam",
         to_system="dig", 
+        entity="dsh101",
         api_call={"action": "get", "property": "frequency"}
     )
 
@@ -761,7 +792,7 @@ if __name__ == "__main__":
     print('-'*50)
     print(f"Test unpacking an api message")    
     print('-'*50)
-    data = b'{"byteorder": "little", "content-type": "application/json", "content-encoding": "utf-8", "content-length": 316}{"payload_length": 1, "api_version": "1.0", "timestamp": "2025-09-15T15:35:39.610Z", "from": "cam", "to": "dig", "api_call": {"action": "get", "property": "frequency"}}Z{"api_version": "2.2", "timestamp": "2025-09-30T15:35:39.610Z", "from": "sdp", "to": "cam", "api_call": {"action": "set", "property": "frequency"}}'
+    data = b'{"byteorder": "little", "content-type": "application/json", "content-encoding": "utf-8", "content-length": 316}{"payload_length": 1, "api_version": "1.0", "timestamp": "2025-09-15T15:35:39.610Z", "from": "cam", "to": "dig", "entity": "dsh101", "api_call": {"action": "get", "property": "frequency"}}Z{"api_version": "2.2", "timestamp": "2025-09-30T15:35:39.610Z", "from": "sdp", "to": "cam", "api_call": {"action": "set", "property": "frequency"}}'
     offset = api_msg.from_data(data)
     print(f"{api_msg}")
     print(f"Offset after unpacking: {offset}")
@@ -779,6 +810,7 @@ if __name__ == "__main__":
         dt=datetime.datetime.now(datetime.timezone.utc),
         from_system="cam",
         to_system="dig", 
+        entity="dig001",
         api_call={"action": "get", "property": "frequency"},
         echo={"request_id": "12345", "note": "This is a test echo"}
     )

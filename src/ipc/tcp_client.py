@@ -385,6 +385,9 @@ if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser(description="set_debug")
     arg_parser.add_argument("--host", type=str, required=False, help="TCP server host",default="localhost")
     arg_parser.add_argument("--port", type=int, required=False, help="TCP server port", default=50000)
+    arg_parser.add_argument("--from_id", type=str, required=False, help="From System ID", default="tm")
+    arg_parser.add_argument("--to_id", type=str, required=False, help="To System ID", default="dig")
+    arg_parser.add_argument("--entity", type=str, required=False, help="Entity ID", default=None)
  
     set_sample_rate_apicall = {}
     set_sample_rate_apicall["msg_type"] = "req"
@@ -438,7 +441,7 @@ if __name__ == "__main__":
             from api.tm_dig import TM_DIG
 
             if system_name in ["tm", "dig"]:
-                return (TM_DIG(), None)
+                return (TM_DIG(), None, False)  # No entity driver associated with this interface
             else:
                 raise XSoftwareFailure(f"Driver has no interface for system {system_name}")
 
@@ -455,8 +458,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=set_sample_rate_apicall
     )
 
@@ -467,8 +471,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=get_sample_rate_apicall
     )
 
@@ -477,8 +482,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=set_center_freq_apicall
     )
 
@@ -489,8 +495,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=get_auto_gain_apicall
     )
 
@@ -501,8 +508,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=read_samples_apicall
     )
 
@@ -513,8 +521,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=set_gain_apicall
     )
 

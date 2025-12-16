@@ -22,6 +22,14 @@ HOST_PORT = 60000
 
 MAX_BLOCK_SIZE = 65535   # Define a maximum block size for sending data (65,535 bytes to fit in 64KB packet)
 
+class ConnectionState:
+    """Class to hold the state of a connection including the receive buffer and message being constructed.
+        The TCPServer associates an instance of this class with each client connection. """
+
+    def __init__(self):
+        self.recv_buffer = bytearray()
+        self.recv_msg = message.Message()
+
 class TCPServer:
     """TCP Server class to handle connections and data from/to clients using IPv4.
         It runs in non-blocking mode and processes events in its own daemon thread.
@@ -46,12 +54,9 @@ class TCPServer:
         self._create_socket()
 
         self.event_handler = None # Thread to handle server socket events
-        self.event_q = queue if queue else None # Queue to keep track of events
-    
+        self.event_q = queue if queue else None # Queue to keep track of events   
         self.started = False # Flag to indicate if the server has been started or stopped
 
-        self.recv_buffer = bytearray() # Buffer to store incoming data
-        self.recv_msg = message.Message() # Message being received
         self.max_block_size = max_block_size if max_block_size > 0 else MAX_BLOCK_SIZE
 
         self._send_lock = threading.Lock() # Lock to ensure thread-safe sending of messages
@@ -71,99 +76,108 @@ class TCPServer:
             self.server_socket.close()
             self.server_socket = None
 
-    def _process_connection(self, client_socket):
-        """Accept incoming connection events from a client and register the connection with the selector."""
+    def _process_connection(self, listening_socket):
+        """Accept incoming connection events an a listening socket (fileobj).
+            Store the resulting client socket and address in a new ConnectEvent
+        """
 
         # Accept the connection
-        conn, addr = client_socket.accept()
-        conn.setblocking(False)
+        client_socket, addr = listening_socket.accept()
+        client_socket.setblocking(False)
 
-        # Create a new (empty) message instance and associate it with the connection
-        msg = message.Message()
-        self.sel.register(conn, selectors.EVENT_READ, data=msg)
-        event = events.ConnectEvent(self, conn, addr, datetime.now())
+        # Create a new connection state containing an(empty) message & recv_buffer instance
+        state = ConnectionState()
+
+        # Register the connection with the selector for read events and associate the state with it
+        # This allows the selector to monitor this particular connection for incoming data
+        self.sel.register(client_socket, selectors.EVENT_READ, data=state)
+        event = events.ConnectEvent(self, client_socket, addr, datetime.now())
         # Add the event to the queue for further processing
         self.event_q.put(event)
 
         logger.debug(f"{event}")
 
-    def _process_disconnect(self, client_socket):
+    def _process_disconnect(self, client_socket, peername=None):
         """Process a disconnect from a client and deregister the connection from the selector."""
-        
-        # Create a disconnect event and add it to the queue
-        event = events.DisconnectEvent(self, client_socket, client_socket.getpeername(), datetime.now())
-        self.event_q.put(event)
 
-        # Unregister the connection from the selector
-        self.sel.unregister(client_socket)
-        client_socket.close()
+        try:
+            try:
+                self.sel.unregister(client_socket)
+            except (KeyError, ValueError):
+                pass
 
-        self.recv_buffer = bytearray()  # Clear the receive buffer
-        self.recv_msg = message.Message()  # Reset the receive message
+            try:
+                client_socket.close()
+            except (OSError, ValueError):
+                pass
+
+        finally:
+            # Create a disconnect event and add it to the queue
+            event = events.DisconnectEvent(self, client_socket, peername if peername else "", datetime.now())
+            self.event_q.put(event)
 
         logger.debug(f"{event}")
 
-    def _process_msg(self, client_socket, msg):
+    def _process_msg(self, client_socket, state: ConnectionState):
 
         """Process incoming msg events from the client in non-blocking mode."""
 
-        if not self.validate_client_socket(client_socket):
-            logger.error(f"TCP Server {self.description} invalid client socket provided. Cannot receive message.\n{msg}")
-            return
+        valid_client_socket, peername = self.validate_client_socket(client_socket)
 
-        peername = client_socket.getpeername()
+        if not valid_client_socket:
+            logger.error(f"TCP Server {self.description} invalid client socket provided. Cannot process message.")
+            return
 
         try:
             data = client_socket.recv(MAX_BLOCK_SIZE)  # non-blocking, might return 0..MAX_BLOCK_SIZE bytes
         except BlockingIOError:
             return  # no data ready
         except (ConnectionResetError, OSError) as e:
-            logging.exception(f"TCP Server {self.description} socket connection reset / OSError. Cannot receive message.\n{msg}")
-            self._process_disconnect(client_socket)
+            logging.exception(f"TCP Server {self.description} socket connection reset / OSError. Cannot process message.")
+            self._process_disconnect(client_socket, peername)
             return
 
         # Check if the connection has been closed i.e. zero bytes received
         if not data:
-            self._process_disconnect(client_socket)
+            self._process_disconnect(client_socket, peername)
             return
 
         # Append data to the receive buffer
-        self.recv_buffer.extend(data)
+        state.recv_buffer.extend(data)
 
         # Try to parse all complete blocks
         while True:
             # Need at least 4 bytes for header
-            if len(self.recv_buffer) < 4:
+            if len(state.recv_buffer) < 4:
                 break
 
-            block_size, remaining_blocks = struct.unpack('>HH', self.recv_buffer[:4])
+            block_size, remaining_blocks = struct.unpack('>HH', state.recv_buffer[:4])
 
             # Check if a full block has arrived
-            if len(self.recv_buffer) < 4 + block_size:
+            if len(state.recv_buffer) < 4 + block_size:
                 break  # wait for at least one block of data
 
             # Extract one block following the 4 byte header
-            block = bytes(self.recv_buffer[4:4 + block_size])
-
+            block = bytes(state.recv_buffer[4:4 + block_size])
             # Trim from buffer
-            del self.recv_buffer[:4 + block_size]
+            del state.recv_buffer[:4 + block_size]
 
             # Add block to message
-            self.recv_msg.msg_data.extend(block)
+            state.recv_msg.msg_data.extend(block)
 
             # If last block -> full message complete
             if remaining_blocks == 0:
 
                 msg = message.Message()
-                msg.from_data(self.recv_msg.msg_data)
+                msg.from_data(state.recv_msg.msg_data)
 
                 event = events.DataEvent(
-                    self, client_socket, client_socket.getpeername(),
+                    self, client_socket, peername,
                     msg.msg_data, datetime.now()
                 )
 
                 self.event_q.put(event)
-                self.recv_msg = message.Message()  # Reset for next message
+                state.recv_msg = message.Message()  # Reset for next message
 
                 logger.debug(f"TCP Server {self.description} received message on {self.host} port {self.port} from {peername} Message:\n{msg}")
 
@@ -177,7 +191,8 @@ class TCPServer:
             events = self.sel.select(timeout=1) 
             for key, mask in events:
 
-                # key.data is None for the server socket
+                # key.data is None for the listening socket (register with data=None)
+                # key.data is the per-connection state instance associated with this client socket
                 if key.data is None:
                     self._process_connection(key.fileobj)
                 else:
@@ -201,6 +216,10 @@ class TCPServer:
         
         self.started = True
         self.server_socket.listen()
+
+        # Register the listening socket with the selector for read events where data is None
+        # An EVENT.READ on this socket means an incoming connection request, and accept should be called
+
         self.sel.register(self.server_socket, selectors.EVENT_READ, data=None)
 
         logger.debug(f"TCP Server {self.description} started listening on host {self.host} port {self.port}")
@@ -210,35 +229,39 @@ class TCPServer:
         self.event_handler.daemon = True 
         self.event_handler.start()
 
-    def validate_client_socket(self, client_socket) -> bool:
+    def validate_client_socket(self, client_socket) -> (bool, str):
         """Check if the provided client socket is valid and connected to the server."""
 
         if client_socket is None or client_socket.fileno() == -1:
             logger.warning(f"TCP Server {self.description} invalid client socket detected on host {self.host} port {self.port}")
-            return False
+            return False, None
 
         if client_socket not in [key.fileobj for key in self.sel.get_map().values() if key.data is not None]:
             logger.warning(f"TCP Server {self.description} client socket not connected to server on host {self.host} port {self.port}")
-            return False
+            return False, None
 
-        return True
+        try:
+            peername = client_socket.getpeername()
+        except OSError:
+            logger.warning(f"TCP Server {self.description} cannot get peername from client socket. Socket may be disconnected on host {self.host} port {self.port}")
+            return False, None
+
+        return True, peername
 
     def send(self, msg, client_socket=None):
         """Send a message to a specific connected client."""
 
-        with self._send_lock:  # Ensure that only one thread can send a message at a time to prevent interleaving of messages
+        # Ensure that only one thread can send a message at a time to prevent interleaving of messages
+        with self._send_lock:  
 
+            # If no client socket is provided, send to the first connected client
             if client_socket is None:
                 client_socket = next((key.fileobj for key in self.sel.get_map().values() if key.data is not None), None)
-            
-            if not self.validate_client_socket(client_socket):
-                logger.error(f"TCP Server {self.description} invalid client socket provided. Cannot send message.\n{msg}")
-                return
 
-            try:
-                peername = client_socket.getpeername()
-            except OSError:
-                logger.error(f"TCP Server {self.description} cannot get peername of client socket. Cannot send message.\n{msg}")
+            valid_client_socket, peername = self.validate_client_socket(client_socket)
+            
+            if not valid_client_socket:
+                logger.error(f"TCP Server {self.description} invalid client socket provided. Cannot send message.\n{msg}")
                 return
 
             if not isinstance(msg, message.Message):
@@ -275,7 +298,7 @@ class TCPServer:
                 logger.error(f"TCP Server {self.description} error sending message to {peername}: {e}")
             except Exception as e:
                 logger.error(f"TCP Server {self.description} error sending message to {peername}: {e}")
-                self._process_disconnect(client_socket)
+                self._process_disconnect(client_socket, peername)
 
     def broadcast(self, msg):
         """Send a message to all connected clients."""
