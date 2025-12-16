@@ -66,7 +66,7 @@ class AppProcessor(Processor):
         start_time = time.time()
         st = datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat()
         
-        logger.info(f"AppProcessor {self.name} started  processing event {type(event)} at {st}")
+        logger.info(f"AppProcessor {self.name} started processing event {type(event)} at {st}")
 
         try:
             if isinstance(event, InitEvent):
@@ -118,7 +118,7 @@ class AppProcessor(Processor):
                     api_msg.from_data(event.data)
                     api_msg.add_echo_api_header()
 
-                    api, endpoint = self.driver.get_interface(api_msg.get_from_system())
+                    api, endpoint, entity_driver = self.driver.get_interface(api_msg.get_from_system())
 
                     # Validate and translate the API message to the driver's API version
                     api_transl_msg = api.translate(api_msg.get_json_api_header())
@@ -128,20 +128,32 @@ class AppProcessor(Processor):
                     if getattr(self.driver, "app_model", None) is not None and hasattr(self.driver.app_model, "app_name"):
                         driver_app_name = self.driver.app_model.app_name
                     else:
-                        logger.error(f"AppProcessor {self.name} driver has no app_model or app_name attribute")
+                        logger.error(f"AppProcessor {self.name} driver has no app_model.app_name attribute")
                         driver_app_name = getattr(self.driver, "app_name", None) or type(self.driver).__name__
 
-                    # Check if the message is not intended for this App
-                    if api_msg.get_to_system() != driver_app_name:
+                    # Resolve the driver's entity id from the arguments safely. 
+                    entity_id = None
+                    if hasattr(self.driver, "get_args"):
+                        args = self.driver.get_args()
+                        if hasattr(args, "entity_id"):
+                            entity_id = args.entity_id
+
+                    # Check whether the entity in the API message matches the driver's entity id (if any)
+                    matching_entity = (api_msg.get_entity() is None and entity_id is None)
+                    if not matching_entity and entity_id is not None and api_msg.get_entity() is not None:
+                        matching_entity = (api_msg.get_entity() == entity_id)
+                    
+                    # Check if the message is not intended for this App or entity
+                    if api_msg.get_to_system() != driver_app_name or (entity_driver and not matching_entity):
                         rsp_msg = APIMessage(api_msg.get_json_api_header())
                         rsp_msg.switch_from_to()
 
                         api_call = rsp_msg.get_api_call()
                         api_call['status'] = 'error'
-                        api_call['message'] = f"Message not intended for {driver_app_name}, but for {api_msg.get_to_system()}"
+                        api_call['message'] = f"Message not intended for {driver_app_name}:{entity_id}, but for {api_msg.get_to_system()}:{api_msg.get_entity()}"
 
                         rsp_msg.set_api_call(api_call)
-                        logger.warning(f"AppProcessor {self.name} received API message intended for {api_msg.get_to_system()} i.e. not for this App {rsp_msg}")
+                        logger.warning(f"AppProcessor {self.name} received API message intended for {api_msg.get_to_system()}:{api_msg.get_entity()} i.e. not for this App {rsp_msg}:{driver_app_name}:{entity_id}")
                         self.performActions(Action().set_msg_to_remote(rsp_msg), event.local_sap, event.remote_conn, event.remote_addr)
                         return True
 
@@ -239,7 +251,7 @@ class AppProcessor(Processor):
                 continue
 
             dest_system = msg.get_to_system()
-            api, endpoint = self.driver.get_interface(dest_system)
+            api, endpoint, entity_driver = self.driver.get_interface(dest_system)
 
             msg_to_send = msg
 
@@ -258,11 +270,11 @@ class AppProcessor(Processor):
                 logger.error(f"AppProcessor {self.name} failed to perform action 'send message to remote' because validate/translate of API message failed: {e} Message:\n{msg}")
                 continue
 
-            # If the destination endpoint is the same as the local_sap of the originating event, send the message on the originating connection (socket)
+            # If the destination endpoint is the same as the local_sap of the originating event, send the message on the originating connection (client_socket)
             if endpoint == local_sap and remote_conn is not None:
-                endpoint.send(msg_to_send)  # NOTE TBD ! Send the message on the originating connection (socket)
+                endpoint.send(msg_to_send, remote_conn)  # Send the message on the originating connection (socket)
             else:
-                endpoint.send(msg_to_send)  # Send the message on the registered endpoint's default connection (socket)
+                endpoint.send(msg_to_send)               # Send the message on the registered endpoint's default connection (socket)
         
             action.msgs_to_remote.remove(msg)  # Remove the msg from the list                
         

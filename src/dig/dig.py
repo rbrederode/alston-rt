@@ -32,7 +32,7 @@ class Digitiser(App):
 
         super().__init__(app_name=app_name, app_model = self.dig_model.app)
 
-        self.dig_model.id = self.get_args().id
+        self.dig_model.dig_id = self.get_args().entity_id
 
         # Telescope Manager interface
         self.tm_system = "tm"
@@ -67,8 +67,6 @@ class Digitiser(App):
         """ Specifies the digitiser's command line arguments.
         """
         super().add_args(arg_parser)
-
-        arg_parser.add_argument("--id", type=str, required=True, help="Digitiser ID dig<id> e.g. dig001", default="dig001")
 
         arg_parser.add_argument("--tm_host", type=str, required=False, help="TCP host to listen on for Telescope Manager commands", default="localhost")
         arg_parser.add_argument("--tm_port", type=int, required=False, help="TCP port to listen on for Telescope Manager commands", default=50000)
@@ -459,6 +457,7 @@ class Digitiser(App):
             dt=datetime.now(timezone.utc), 
             from_system=self.dig_model.app.app_name, 
             to_system="tm", 
+            entity=self.dig_model.dig_id,
             api_call={
                 "msg_type": "adv", 
                 "action_code": "set", 
@@ -485,6 +484,7 @@ class Digitiser(App):
             dt=datetime.now(timezone.utc), 
             from_system=self.dig_model.app.app_name, 
             to_system="sdp", 
+            entity=self.dig_model.dig_id,
             api_call={}
         )
         

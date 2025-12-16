@@ -314,11 +314,12 @@ def main():
         api_version="1.0",
         dt=datetime.datetime.now(timezone.utc),
         from_system="tm",
-        to_system="dig",
+        to_system="dig001",
         api_call=api_call
     )
 
     api = TM_DIG()
+    api.translate(send_msg.get_json_api_header(), target_version="2.0")
     api.validate(send_msg.get_json_api_header())
 
     sent_data = send_msg.to_data()
