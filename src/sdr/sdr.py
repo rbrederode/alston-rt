@@ -247,29 +247,33 @@ class SDR:
             logger.warning("SDR device not connected.")
             return None, None
 
-        # Remember original SDR gain setting
-        orig_gain = self.gain 
-        sample_rate = sample_rate if sample_rate is not None else self.sample_rate
+        # Lock access to the SDR during gain testing so that no other thread can interfere
+        # Ideally streaming should be stopped ahead of this call and then restarted afterwards
+        with SDR._mutex:
 
-        # Loop over each gain setting
-        for gain in Glist:
+            # Remember original SDR gain setting
+            orig_gain = self.gain 
+            sample_rate = sample_rate if sample_rate is not None else self.sample_rate
 
-            self.set_gain(gain)  # Set the SDR gain
-            result, (p_r, p_i) = self.get_gain_gaussianity(sample_rate=sample_rate, time_in_secs=time_in_secs)
+            # Loop over each gain setting
+            for gain in Glist:
 
-            p_r_list.append(p_r)
-            p_i_list.append(p_i)
+                self.set_gain(gain)  # Set the SDR gain
+                result, (p_r, p_i) = self.get_gain_gaussianity(sample_rate=sample_rate, time_in_secs=time_in_secs)
 
-        gaussian = False
-        gauss_gain = None
-        for i in range(len(Glist) - 1):
-            if (p_r_list[i] > p_threshold and p_i_list[i] > p_threshold and
-                p_r_list[i+1] > p_threshold and p_i_list[i+1] > p_threshold):
-                gaussian = True
-                gauss_gain = Glist[i+1]
-                break
+                p_r_list.append(p_r)
+                p_i_list.append(p_i)
 
-            self.set_gain(orig_gain)  # Restore original gain setting
+            gaussian = False
+            gauss_gain = None
+            for i in range(len(Glist) - 1):
+                if (p_r_list[i] > p_threshold and p_i_list[i] > p_threshold and
+                    p_r_list[i+1] > p_threshold and p_i_list[i+1] > p_threshold):
+                    gaussian = True
+                    gauss_gain = Glist[i+1]
+                    break
+
+                self.set_gain(orig_gain)  # Restore original gain setting
 
         # If we find a gaussian gain
         if gaussian:
