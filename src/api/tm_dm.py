@@ -34,16 +34,16 @@ ACTION_CODES = (
 )
 
 # Allowable origins (from) and destinations (to) of api msg calls
-OET = "oet"  # Observation Execution Tool 
+DM = "dm"  # Dish Manager 
 TM = "tm"  # Telescope Manager
 
 FROM = (
-    OET,
+    DM,
     TM
 )
 
 TO = (
-    OET,
+    DM,
     TM
 )
 
@@ -108,9 +108,9 @@ MSG_FIELDS_DEFINITIONS = {
     },
 }
 
-class TM_OET(API):
+class TM_DM(API):
     """
-    Class responsible for enforcing the Telescope Manager-Observation Execution Tool API.
+    Class responsible for enforcing the Telescope Manager-Dish Manager API.
 
     The API defines the structure and rules for API messages between these systems.
 
@@ -261,14 +261,14 @@ def main():
     send_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.datetime.now(timezone.utc),
-        from_system="oet",
+        from_system="dm",
         to_system="tm",
         api_call=api_call
     )
 
     send_msg.set_payload_data(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09')  # Example byte array payload depicting IQ samples
 
-    api = TM_OET()
+    api = TM_DM()
     api.translate(send_msg.get_json_api_header(), target_version="1.0")
     api.validate(send_msg.get_json_api_header())
 

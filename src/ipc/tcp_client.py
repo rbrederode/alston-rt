@@ -98,7 +98,7 @@ class TCPClient:
     def _process_connection(self):
         """Accept incoming connection events from a client and register the connection with the selector."""
 
-        event = events.ConnectEvent(local_sap=self, remote_conn=self, remote_addr=(self.host, self.port), timestamp=datetime.now())
+        event = events.ConnectEvent(local_sap=self, remote_conn=self.client_socket, remote_addr=(self.host, self.port), timestamp=datetime.now())
         self.event_q.put(event)
 
         logging.info(f"TCP Client {self.description} connected to host {self.host} port {self.port}")
@@ -179,7 +179,7 @@ class TCPClient:
                 msg.from_data(self.recv_msg.msg_data)
 
                 event = events.DataEvent(
-                    local_sap=self, remote_conn=self, remote_addr=(self.host, self.port), data=msg.msg_data, timestamp=datetime.now())
+                    local_sap=self, remote_conn=self.client_socket, remote_addr=(self.host, self.port), data=msg.msg_data, timestamp=datetime.now())
                 self.event_q.put(event)
                 self.recv_msg = message.Message()  # Reset for next message
 
@@ -195,7 +195,7 @@ class TCPClient:
                 if self.connected: # Only process events if connected to a server
                     for key, mask in events:
 
-                        # key.data is None for the client socket
+                        # key.data (state) should not be None as we associated a message instance with the socket   
                         if key.data is None:
                             raise XSoftwareFailure(f"TCP Client {self.description} no key data associated with the socket")
                         else:
@@ -253,8 +253,12 @@ class TCPClient:
 
             return self.last_result
 
-    def send(self, msg: message.Message):
-        """Send a message to the server"""
+    def send(self, msg: message.Message, client_socket=None):
+        """Send a message to the server
+            Parameters
+                msg: Message to send
+                client_socket: Dummy parameter for compatibility with server interface
+        """
 
         with self._send_lock:  # Ensure that only one thread can send a message at a time
 
@@ -385,6 +389,9 @@ if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser(description="set_debug")
     arg_parser.add_argument("--host", type=str, required=False, help="TCP server host",default="localhost")
     arg_parser.add_argument("--port", type=int, required=False, help="TCP server port", default=50000)
+    arg_parser.add_argument("--from_id", type=str, required=False, help="From System ID", default="tm")
+    arg_parser.add_argument("--to_id", type=str, required=False, help="To System ID", default="dig")
+    arg_parser.add_argument("--entity", type=str, required=False, help="Entity ID", default=None)
  
     set_sample_rate_apicall = {}
     set_sample_rate_apicall["msg_type"] = "req"
@@ -438,7 +445,7 @@ if __name__ == "__main__":
             from api.tm_dig import TM_DIG
 
             if system_name in ["tm", "dig"]:
-                return (TM_DIG(), None)
+                return (TM_DIG(), None, False)  # No entity driver associated with this interface
             else:
                 raise XSoftwareFailure(f"Driver has no interface for system {system_name}")
 
@@ -455,8 +462,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=set_sample_rate_apicall
     )
 
@@ -467,8 +475,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=get_sample_rate_apicall
     )
 
@@ -477,8 +486,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=set_center_freq_apicall
     )
 
@@ -489,8 +499,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=get_auto_gain_apicall
     )
 
@@ -501,8 +512,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=read_samples_apicall
     )
 
@@ -513,8 +525,9 @@ if __name__ == "__main__":
     api_msg.set_json_api_header(
         api_version="1.0",
         dt=datetime.now(timezone.utc),
-        from_system="tm",
-        to_system="dig",
+        from_system=arg_parser.parse_args().from_id,
+        to_system=arg_parser.parse_args().to_id,
+        entity=arg_parser.parse_args().entity,
         api_call=set_gain_apicall
     )
 

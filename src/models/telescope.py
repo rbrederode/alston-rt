@@ -3,8 +3,8 @@ from datetime import datetime
 
 from models.app import AppModel
 from models.comms import CommunicationStatus
-from models.dsh import DishModel, DishMode, PointingState, Feed, CapabilityStates
-from models.dig import DigitiserModel
+from models.dsh import DishManagerModel, DishModel, DishMode, PointingState, Feed, CapabilityStates
+from models.dig import DigitiserList, DigitiserModel
 from models.health import HealthState
 from models.oet import OETModel
 from models.oda import ODAModel
@@ -17,77 +17,20 @@ class TelescopeModel:
     """A class representing the telescope model, which includes:
 
         - Observation Data Archive,
-        - Observation Execution Tool,
         - Telescope Manager, 
-        - Dish, 
-        - Digitiser, and the
+        - Dish Manager, 
+        - Digitiser Manager, and the
         - Science Data Processor
         
     """
     def __init__(self):
 
-        self.oda = ODAModel(id="oda001")
-        self.oet = OETModel(id="oet001")
-        self.tm = TelescopeManagerModel(id="tm001")
-        self.dishes = [DishModel(id="dsh001")]              # List of dish models
-        self.digitisers = [DigitiserModel(id="dig001")]     # List of digitiser models
-        self.sdp = ScienceDataProcessorModel(id="sdp001")
+        self.oda = ODAModel(id="oda001")                            # Observation Data Archive model
+        self.tel_mgr = TelescopeManagerModel(id="telmgr001")        # Telescope Manager (App) model
+        self.dsh_mgr = DishManagerModel(id="dshmgr001")             # Dish Manager (App) model
+        self.dig_str = DigitiserList(list_id="diglist001")          # Digitiser store (just a list of digitisers)
+        self.sdp = ScienceDataProcessorModel(id="sdp001")           # Science Data Processor (App) model
     
-    # Backward-compatible properties for single dish/digitiser access
-    @property
-    def dsh(self):
-        """Returns the first dish (for backward compatibility)."""
-        return self.dishes[0] if self.dishes else None
-    
-    @dsh.setter
-    def dsh(self, value):
-        """Sets the first dish (for backward compatibility)."""
-        if self.dishes:
-            self.dishes[0] = value
-        else:
-            self.dishes.append(value)
-    
-    @property
-    def dig(self):
-        """Returns the first digitiser (for backward compatibility)."""
-        return self.digitisers[0] if self.digitisers else None
-    
-    @dig.setter
-    def dig(self, value):
-        """Sets the first digitiser (for backward compatibility)."""
-        if self.digitisers:
-            self.digitisers[0] = value
-        else:
-            self.digitisers.append(value)
-    
-    def add_dish(self, dish_id: str = None) -> DishModel:
-        """Add a new dish to the telescope and return it."""
-        dish_id = dish_id or f"dsh{len(self.dishes)+1:03d}"
-        dish = DishModel(id=dish_id)
-        self.dishes.append(dish)
-        return dish
-    
-    def add_digitiser(self, dig_id: str = None) -> DigitiserModel:
-        """Add a new digitiser to the telescope and return it."""
-        dig_id = dig_id or f"dig{len(self.digitisers)+1:03d}"
-        digitiser = DigitiserModel(id=dig_id)
-        self.digitisers.append(digitiser)
-        return digitiser
-    
-    def get_dish(self, dish_id: str) -> DishModel:
-        """Get a dish by its ID."""
-        for dish in self.dishes:
-            if dish.id == dish_id:
-                return dish
-        return None
-    
-    def get_digitiser(self, dig_id: str) -> DigitiserModel:
-        """Get a digitiser by its ID."""
-        for dig in self.digitisers:
-            if dig.id == dig_id:
-                return dig
-        return None
-
     def save_to_disk(self):
         # Implement disk saving logic here
         pass
@@ -98,24 +41,15 @@ class TelescopeModel:
 
     def to_dict(self):
         return {
-            "tm": self.tm.to_dict(),
-            "dishes": [dish.to_dict() for dish in self.dishes],
-            "digitisers": [dig.to_dict() for dig in self.digitisers],
+            "oda": self.oda.to_dict(),
+            "tel_mgr": self.tel_mgr.to_dict(),
+            "dsh_mgr": self.dsh_mgr.to_dict(),
+            "dig_str": self.dig_str.to_dict(),
             "sdp": self.sdp.to_dict()
         }
 
 if __name__ == "__main__":
     telescope = TelescopeModel()
-
-    telescope.dsh.mode = DishMode.STARTUP
-    telescope.dsh.pointing_state = PointingState.READY
-    telescope.dsh.app.health = HealthState.OK
-    telescope.dig.gain = 10
-    telescope.dig.sample_rate = 240000
-    telescope.dig.app.health = HealthState.OK
-
-    telescope.sdp.app.health = HealthState.OK
-    telescope.sdp.channels = 1024
 
     import pprint
     print("="*40)

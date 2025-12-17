@@ -1,15 +1,60 @@
+
 /**
 * Test helper for onEdit(e). Simulates an edit on cell B34 on the
 * "OBS DESIGN" sheet by manually constructing an event object.
 * Useful for debugging without manually editing the sheet.
 */
 function testOnEdit() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("OBS DESIGN");;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("OBS STORE");;
   const e = {
-    range: sheet.getRange("D3"),
+    range: sheet.getRange("J4"),
     value: "TRUE"
   };
-  onEdit(e);
+  onEditHandler(e);
+}
+
+// Configuration
+const WEBHOOK_URL = 'https://webhook.dmd2000.org/webhook';
+const WEBHOOK_TOKEN = PropertiesService.getScriptProperties().getProperty('WEBHOOK_TOKEN');
+
+/**
+ * Send POST request to webhook
+ */
+function sendWebhook(toSystem, jsonStr) {
+
+  const fromSystem = "UI"
+
+  const payload = {
+    event: ('ALSTON-RT' + "." + fromSystem + "." + toSystem).toLowerCase(),
+    timestamp: new Date().toISOString(),
+    message: jsonStr,
+    sheet_name: SpreadsheetApp.getActiveSheet().getName()
+  };
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      'X-Webhook-Token': WEBHOOK_TOKEN
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  
+  try {
+    const response = UrlFetchApp.fetch(WEBHOOK_URL, options);
+    const responseCode = response.getResponseCode();
+    
+    if (responseCode === 200) {
+      console.log('Webhook sent successfully');
+    } else {
+      console.error('Webhook failed with status:', responseCode);
+      console.error('Response:', response.getContentText());
+    }
+    
+  } catch (error) {
+    console.error('Failed to send webhook:', error);
+  }
 }
 
 /**
@@ -222,25 +267,35 @@ function parseRAtoDeg(s) {
 * @return {number} Dec in degrees.
 */
 function parseDECtoDeg(s) {
-  if (s.match(/[dDmMsS°'":]/) || (s.split(/\s+/).length === 3 && s.indexOf(":") === -1)) {
-    // replace common separators
-    const cleaned = s.replace(/[°dDmMsS'"]/g, " ").replace(/:+/g, " ").trim();
-    const parts = cleaned.split(/\s+/);
-    if (parts.length < 3) throw new Error("Cannot parse Dec: " + s);
-    let sign = 1;
-    let degPart = parts[0];
-    if (degPart.startsWith("+") || degPart.startsWith("-")) {
-      if (degPart.startsWith("-")) sign = -1;
-      degPart = degPart.substring(1);
-    }
-    const d = parseFloat(degPart), m = parseFloat(parts[1]), sec = parseFloat(parts[2]);
-    if (isNaN(d) || isNaN(m) || isNaN(sec)) throw new Error("Cannot parse Dec: " + s);
-    return sign * (d + m/60 + sec/3600);
-  } else {
-    const v = parseFloat(s);
-    if (isNaN(v)) throw new Error("Cannot parse Dec: " + s);
-    return v;
+  // Remove spaces
+  s = s.trim();
+
+  // Try to parse as simple decimal (with optional ° symbol)
+  let decimal = parseFloat(s.replace("°",""));
+  if (!isNaN(decimal)) return decimal;
+
+  // If not decimal, assume DMS/sexagesimal format
+  // Replace common separators (°, d, m, s, ', ")
+  const cleaned = s.replace(/[°dDmMsS'"]/g, " ").replace(/:+/g, " ").trim();
+  const parts = cleaned.split(/\s+/);
+
+  if (parts.length < 3) throw new Error("Cannot parse Dec: " + s);
+
+  let sign = 1;
+  let degPart = parts[0];
+
+  if (degPart.startsWith("+") || degPart.startsWith("-")) {
+    if (degPart.startsWith("-")) sign = -1;
+    degPart = degPart.substring(1);
   }
+
+  const d = parseFloat(degPart);
+  const m = parseFloat(parts[1]);
+  const sec = parseFloat(parts[2]);
+
+  if (isNaN(d) || isNaN(m) || isNaN(sec)) throw new Error("Cannot parse Dec: " + s);
+
+  return sign * (d + m / 60 + sec / 3600);
 }
 
 /**
@@ -344,10 +399,7 @@ function roundTo(x, dp) {
 /**
 * Remove empty rows in DB TARGET LIST, keeping only rows with data.
 */
-function consolidateRows() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName('DB TARGET LIST');
-
+function consolidateRows(sheet) {
   // 1. Read data (skip header row)
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return;  // nothing to do
@@ -404,16 +456,16 @@ function consolidateRows() {
  * @param {Range} e.range - Edited range object.
  * @param {string} e.value - New value entered in the edited cell.
  */
-function onEdit(e) {
+function onEditHandler(e) {
   const sheet = e.range.getSheet();
   const sheetName = sheet.getName();
 
   const userEmail = Session.getActiveUser().getEmail();  // Works only on INSTALLABLE trigger
 
-  Logger.log(`onEdit triggered on sheet: ${sheetName}, cell: ${e.range.getA1Notation()} by user: ${userEmail}`);
-
   const col = e.range.getColumn();
   const row = e.range.getRow();
+
+  Logger.log(`onEdit triggered on sheet: ${sheetName}, cell: ${e.range.getA1Notation()} col: ${col} row: ${row} by user: ${userEmail}`);
 
   const ss = SpreadsheetApp.getActive();
   const apiSheet = ss.getSheetByName("TM_UI_API");
@@ -421,15 +473,13 @@ function onEdit(e) {
 
   // ---------- DIG001 sheet: Digitiser config ----------
   if (sheetName === "DIG001" && col === 5 && row >= 4 && row <= 10) {
-    const jsonStr = generateJSON(sheet, ["D4:E10"]);
+    const jsonStr = generateJSON(sheet, ["A3:B3","D4:E10"]);
 
-    //apiSheet.getRange("B3").setValue(jsonStr);
+    apiSheet.getRange("B3").setValue(jsonStr);
     Logger.log("Digitiser JSON updated in TM_UI_API B3");
+    sendWebhook("dig", jsonStr);
     return;
   }
-
-  // ---------- OBS DESIGN sheet ----------
-  if (sheetName !== "OBS DESIGN") return;
 
   const targetSheet = ss.getSheetByName("DB TARGET LIST");
   if (!targetSheet) {
@@ -438,7 +488,7 @@ function onEdit(e) {
   }
 
   // --- Update Altitude Plot if target changed ---
-  if (col === 2 && (row === 25 || row === 30) || (col === 5 && row ===32)) {
+  if (sheetName === "OBS DESIGN" && col === 2 && (row === 25 || row === 30) || (col === 5 && row ===32)) {
 
     const startSB = sheet.getRange("E32").getValues()
     Logger.log("Scheduling Block Start:"+startSB)
@@ -449,13 +499,13 @@ function onEdit(e) {
   }
 
   // --- Delete Target checkbox logic (column F, rows ≥38) ---
-  if (col === 6 && row >= 38 && e.value === "TRUE") {
+  if (sheetName === "OBS DESIGN" && col === 6 && row >= 38 && e.value === "TRUE") {
     const targetRow = row - 36; // Map 38->2, 39->3, etc.
     Logger.log(`Deleting JSON in DB TARGET LIST row: ${targetRow}`);
     targetSheet.getRange("A" + targetRow).clearContent();
 
     if (typeof consolidateRows === "function") {
-      consolidateRows();
+      consolidateRows(targetSheet);
     }
 
     // Reset the checkbox
@@ -464,12 +514,30 @@ function onEdit(e) {
     return;
   }
 
+  // --- Delete Observation checkbox logic (sheet OBS STORE, column J, rows ≥4) ---
+  if (sheetName === "OBS STORE" && col === 10 && row >= 4 && e.value === "TRUE") {
+    const obsRow = row - 2; // Map 4->2, 5->3, etc.
+    Logger.log(`Deleting JSON in DB OBS LIST row: ${obsRow}`);
+    obsSheet.getRange("A" + obsRow).clearContent();
+
+    if (typeof consolidateRows === "function") {
+      consolidateRows(obsSheet);
+    }
+
+    // Reset the checkbox
+    sheet.getRange(row, col).setValue(false);
+    Logger.log(`Delete checkbox reset for row ${row}`);
+    obsListJSON = generateObsList()
+    sendWebhook("odt", obsListJSON);
+    return;
+  }
+
   // --- Observation Submission (D3) ---
-  if (col === 4 && row === 3 && e.value === "TRUE") {
+  if (sheetName === "OBS DESIGN" && col === 4 && row === 3 && e.value === "TRUE") {
     
     const lastTargetRow = targetSheet.getLastRow();
     Logger.log("Last Target Row"+lastTargetRow)
-    const targets = [];
+    const target_configs = [];
 
     if (lastTargetRow >= 2) { // skip header
       const targetValues = targetSheet.getRange(2, 1, lastTargetRow - 1, 1).getValues();
@@ -493,7 +561,7 @@ function onEdit(e) {
             }
           });
 
-          targets.push(targetObj);
+          target_configs.push(targetObj);
         } catch (err) {
           Logger.log(`Skipping invalid target JSON: ${err}`);
         }
@@ -529,14 +597,15 @@ function onEdit(e) {
     const obs_id = start_datetime + "-" + dish_id;
     obsJsonObj["obs_id"] = obs_id
 
-    // Set ObsState to IDLE initially
+    // Set ObsState to EMPTY initially
     obsJsonObj["obs_state"] = { 
             "_type": "enum.IntEnum",
             "instance": "ObsState",
-            "value": "IDLE"
+            "value": "EMPTY"
     };
     // Add targets and meta data to the observation
-    obsJsonObj["targets"] = targets;
+    obsJsonObj["_type"] = "Observation"
+    obsJsonObj["target_configs"] = target_configs
     obsJsonObj["user_email"] = userEmail
     obsJsonObj["created"] = {
       "_type": "datetime",
@@ -554,6 +623,7 @@ function onEdit(e) {
 
     // Update consumed Scheduling Blocks
     updateConsumedBlocks(dish_id)
+    clearExpiredBlocks()
 
     // Reset the checkbox
     sheet.getRange(row, col).setValue(false);
@@ -565,7 +635,8 @@ function onEdit(e) {
     targetSheet.getRange("A2:A").clearContent();
     
     // Update TM_UI_API
-    generateObsList
+    obsListJSON = generateObsList()
+    sendWebhook("odt", obsListJSON);
     return;
   }
 
@@ -580,7 +651,7 @@ function onEdit(e) {
   addTargetCell.setValue(false); // reset immediately
 
   const targetRanges = ["A14:B18", "A25:B25", "A29:B32", "D25:E26"];
-  const targetJsonStr = generateJSON(sheet, targetRanges);
+  const targetJsonStr = generateJSON(sheet, targetRanges, false, false, "TargetConfig");
 
   // Write JSON to DB TARGET LIST
   const lastTargetRow = targetSheet.getLastRow();
@@ -667,6 +738,57 @@ function updateConsumedBlocks(dish_id) {
   Logger.log(`Appended ${rows.length} blocks starting at row ${writeRow}`);
 }
 
+/**
+ * Clears expired scheduling blocks (older than 5 days) from column AL
+ * and then compacts the remaining entries upward to remove gaps.
+ *
+ * Column AL = col 37
+ * Rows start at row 2.
+ */
+function clearExpiredBlocks() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const lookup = ss.getSheetByName("Lookup");
+  if (!lookup) throw new Error("Sheet 'Lookup' not found.");
+
+  const col = 38;       // AL
+  const startRow = 3;
+
+  const lastRow = lookup.getLastRow();
+  if (lastRow < startRow) return;
+
+  const numRows = lastRow - startRow + 1;
+  const range = lookup.getRange(startRow, col, numRows, 1);
+  const values = range.getValues();
+
+  const cutoff = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000); // now - 5d
+
+  Logger.log("Cutoff:" + cutoff)
+
+  // Step 1: Clear expired blocks
+  for (let i = 0; i < values.length; i++) {
+    const cell = values[i][0];
+    const rowNum = startRow + i;
+
+    if (cell instanceof Date && !isNaN(cell.getTime())) {
+
+      Logger.log("Looking at row:" + rowNum + " with value " + cell.getTime())
+
+      if (cell.getTime() < cutoff.getTime()) {
+        values[i][0] = "";
+      }
+    }
+  }
+
+  // Step 2: Clear entire AL column (from row 2 downward)
+  range.clearContent();
+
+  // Step 3: Write values back at the top
+  if (values.length > 0) {
+    lookup.getRange(startRow, col, values.length, 1).setValues(values);
+  }
+
+  Logger.log("Expired scheduling blocks cleared.");
+}
 
 /**
  * Custom function to generate JSON from ranges in a given sheet.
@@ -704,7 +826,7 @@ function generateObsList() {
   const ss = SpreadsheetApp.getActive();
   const sourceSheet = ss.getSheetByName("DB OBS LIST");
   const targetSheet = ss.getSheetByName("TM_UI_API");  
-  const targetCell = targetSheet.getRange("D3");
+  const targetCell = targetSheet.getRange("D2");
 
   // Get all values in column A (JSON objects)
   const values = sourceSheet.getRange("A2:A").getValues(); // skip header
@@ -725,11 +847,17 @@ function generateObsList() {
   const result = {
     _type: "ObsList",
     obs_list: obsList,
-    last_update: new Date().toISOString()  // valid ISO datetime
+    last_update: {
+      "_type": "datetime",
+      "value": new Date().toISOString()  // valid ISO datetime
+    }
   };
 
+  const obsListJSON = JSON.stringify(result, null, 2)
+
   // Write JSON back to the sheet
-  targetCell.setValue(JSON.stringify(result, null, 2));
+  targetCell.setValue(obsListJSON);
+  return obsListJSON
 }
 
 /**
@@ -793,17 +921,25 @@ function cleanupObservations() {
  * @param {boolean} [log=false] - If true, logs the generated JSON
  * @return {string|Object} JSON string (default) or JS object
  */
-function generateJSON(sheet, cellRanges, returnObject = false, log = false) {
+function generateJSON(sheet, cellRanges, returnObject = false, log = false, type = "") {
   const jsonObj = {};
   const keyCount = {};
+
+  // Check if "type" has contents
+  if (type && String(type).length > 0) {
+    jsonObj["_type"] = type;
+  }
 
   cellRanges.forEach(rangeStr => {
     const values = sheet.getRange(rangeStr).getValues();
     values.forEach(row => {
       const rawKey = row[0];
-      const key = rawKey.toString().toLowerCase().replace(/ /g, "_");
+      let key = rawKey.toString().toLowerCase().replace(/ /g, "_");
 
       let value = row[1];
+
+      if (log) Logger.log("Key:" + key + " Value:"+ value);
+
       if (!key || value === "") return;
 
       // Convert Feed key/value pairs to enum objects
@@ -813,7 +949,131 @@ function generateJSON(sheet, cellRanges, returnObject = false, log = false) {
           "instance": "Feed",
           "value": value
         }
+      } else if (key === 'altaz') {
+        // .*?alt:([+-]?[0-9.]+) → Altitude (signed digits + decimal)
+        // .*?az:([+-]?[0-9.]+)  → Azimuth (signed digits + decimal)
+        const regex = /^alt:([+-]?[0-9.]+).*?az:([+-]?[0-9.]+)/;
+        const match = value.match(regex);
+
+        if (match) {
+          const alt = match[1];
+          const az = match[2];
+
+          key = "target"
+          value = {
+            "_type": "TargetModel",
+            "altaz": {
+                "alt":alt,
+                "az":az
+              },
+            "pointing":{
+              "_type":"enum.IntEnum",
+              "instance": "PointingType",
+              "value": "DRIFT_SCAN"
+            }
+          }
+        } else value = {}
+
+      } else if (key === "solar_system") {
+
+        key = "target"
+        value = {
+          "_type": "TargetModel",
+          "id": value,
+          "pointing":{
+              "_type":"enum.IntEnum",
+              "instance": "PointingType",
+              "value": "NON_SIDEREAL_TRACK"
+            }
+        }
+
+      } else if (key === "skycoord") {
+
+        // Try ICRS target: e.g. "Glazar0724-29.2 ra:111.7165°, dec:-29.7725°"
+        const icrsRegex = /^.*?ra:([^,]+),.*?dec:(.+)$/;
+        let match = value.match(icrsRegex);
+
+        if (match) {
+          const ra = parseRAtoDeg(match[1]);
+          const dec = parseDECtoDeg(match[2]);
+
+          key = "target"
+          value = {
+            "_type": "TargetModel",
+            "sky_coord": {
+              "_type": "SkyCoord",
+              "frame": "icrs",
+              "ra": ra,
+              "dec": dec
+            },
+            "pointing": {
+              "_type": "enum.IntEnum",
+              "instance": "PointingType",
+              "value": "SIDEREAL_TRACK"
+            }
+          };
+
+        } else {
+          // Try Galactic coordinates: e.g. "l:29.7523, b:+49.4326"
+          const galRegex = /^l:([^,]+),\s*b:(.+)$/i;
+          match = value.match(galRegex);
+
+          if (match) {
+            const l = parseFloat(match[1]);
+            const b = parseFloat(match[2]);
+
+            key = "target"
+            value = {
+              "_type": "TargetModel",
+              "sky_coord": {
+                "_type": "SkyCoord",
+                "frame": "galactic",
+                "l": l,
+                "b": b
+              },
+              "pointing": {
+                "_type": "enum.IntEnum",
+                "instance": "PointingType",
+                "value": "SIDEREAL_TRACK"
+              }
+            };
+          } else {
+            // No match
+            value = {};
+          }
+        }
+
+      } else if (key === "target") {
+
+        // ^(\S+)           → target ID (one or more non-whitespace chars)
+        // .*?ra:([^,]+),   → RA (matches any chars after "ra:" up to ",")
+        // .*?dec:(.+)$     → Dec (matches any chars after "dec:" up to end of string)
+        const regex = /^(\S+).*?ra:([^,]+),.*?dec:(.+)$/;
+        const match = value.match(regex);
+
+        if (match) {
+          const targetId = match[1];
+          const ra = parseRAtoDeg(match[2]);
+          const dec = parseDECtoDeg(match[3]);
+
+          value = {
+            "_type": "TargetModel",
+            "sky_coord": {
+                "_type": "SkyCoord",
+                "frame": "icrs",
+                "ra":ra,
+                "dec":dec
+              },
+            "id": targetId,
+            "pointing":{
+              "_type":"enum.IntEnum",
+              "instance": "PointingType",
+              "value": "SIDEREAL_TRACK"
+            }
+          }
+        } else value = {}
       }
+
       // Convert Date objects to ISO strings
       if (value instanceof Date && !isNaN(value.getTime())) {
         value = {
@@ -834,8 +1094,17 @@ function generateJSON(sheet, cellRanges, returnObject = false, log = false) {
       jsonObj[finalKey] = value;
     });
   });
+
+  // Update pointing if it was set
+  var t = jsonObj.target;
+  var pointing = jsonObj.pointing;
+  if (pointing) {
+    t.pointing.value = pointing.toUpperCase().replace(/\s+/g, "_");
+    delete jsonObj.pointing;
+  }
+
   if (log) Logger.log("Generated JSON:\n" + JSON.stringify(jsonObj, null, 2));
-    return returnObject ? jsonObj : JSON.stringify(jsonObj, null, 2);
+  return returnObject ? jsonObj : JSON.stringify(jsonObj, null, 2);
 }
 
 /**
@@ -1128,29 +1397,50 @@ function getTargetFromJSON(jsonText) {
   try {
     var obj = JSON.parse(jsonText);
 
-    // Check Solar System first
-    if (obj["solar_system"] && obj["solar_system"].toString().trim() !== "") {
-      return obj["solar_system"];
+    if (!obj.target) return "";
+
+    var t = obj.target;
+    var pointing = (t.pointing && t.pointing.value) ? (t.pointing.value).toUpperCase() : "Unknown";
+    var id = (t.id) ? t.id : "";
+
+    var result = pointing;
+    if (id) result += " " + id;
+
+    // --- Handle sky coordinates ---
+    if (t.sky_coord) {
+      var sc = t.sky_coord;
+      var frame = (sc.frame || "").toLowerCase();
+
+      if (frame === "icrs") {
+        if (sc.ra != null && sc.dec != null) {
+          result += ` (RA:${sc.ra}°, Dec:${sc.dec}°)`;
+        }
+      }
+
+      else if (frame === "galactic") {
+        if (sc.l != null && sc.b != null) {
+          result += ` (l:${sc.l}°, b:${sc.b}°)`;
+        }
+      }
     }
 
-    if (obj["altaz"] && obj["altaz"].toString().trim() !== "") {
-      return obj["altaz"];
+    if (t.altaz) {
+      aa = t.altaz
+      if (aa.alt != null && aa.az != null) {
+        result += ` (Alt:${aa.alt}°, Az:${aa.az}°)`;
+      }
     }
 
-    if (obj["skycoord"] && obj["skycoord"].toString().trim() !== "") {
-      return obj["skycoord"];
-    }
+    return result;
 
-    // Fallback to Target
-    if (obj["target"]) {
-      return obj["target"];
-    }
-
-    return "";  // neither exists
   } catch (e) {
-    // JSON parse failed
-    return "Invalid JSON" + e;
+    return "Invalid JSON: " + e;
   }
+}
+
+// Small helper
+function capitalize(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : "";
 }
 
 /**

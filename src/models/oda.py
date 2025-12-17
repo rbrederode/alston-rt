@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
 
 from models.base import BaseModel
-from models.obs import ObsModel, ObsState
+from models.obs import Observation, ObsState
 
 # Models comprising the Observation Data Archive (ODA)
 
@@ -76,7 +76,7 @@ class ODAModel(BaseModel):
     schema = Schema({
         "_type": And(str, lambda v: v == "ODAModel"),
         "scan_store": And(ScanStore, lambda v: isinstance(v, ScanStore)),
-        "obs_list": And(ObsList, lambda v: isinstance(v, ObsList)),
+        "obs_store": And(ObsList, lambda v: isinstance(v, ObsList)),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -88,7 +88,7 @@ class ODAModel(BaseModel):
         defaults = {
             "_type": "ODAModel",
             "scan_store": ScanStore(),
-            "obs_list": ObsList(),
+            "obs_store": ObsList(),
             "last_update": datetime.now(timezone.utc),
         }
 
@@ -102,6 +102,15 @@ class ODAModel(BaseModel):
 if __name__ == "__main__":
     
     import pprint
+
+    obs_list_dict = {'_type': 'ObsList', 'obs_list': [{'_type': 'Observation', 'dish_id': 'Dish002', 'capabilities': 'Drift Scan over Zenith', 'diameter': 3, 'f/d_ratio': 1.3, 'latitude': 53.2421, 'longitude': -2.3067, 'total_integration_time': 60, 'estimated_slewing_time': 30, 'estimated_observation_duration': '00:01:30', 'scheduling_block_start': {'_type': 'datetime', 'value': '2025-12-07T19:00:00.000Z'}, 'scheduling_block_end': {'_type': 'datetime', 'value': '2025-12-07T20:00:00.000Z'}, 'obs_id': '2025-12-07T19:00Z-Dish002', 'obs_state': {'_type': 'enum.IntEnum', 'instance': 'ObsState', 'value': 'IDLE'}, 'target_configs': [{'_type': 'TargetConfig', 'feed': {'_type': 'enum.IntEnum', 'instance': 'Feed', 'value': 'H3T_1420'}, 'gain': 12, 'center_freq': 1420400000, 'bandwidth': 1000000, 'sample_rate': 2400000, 'target': {'_type': 'TargetModel', 'sky_coord': {'_type': 'SkyCoord', 'frame': 'icrs', 'ra': 204.2538, 'dec': -29.8658}, 'id': 'M83', 'type': {'_type': 'enum.IntEnum', 'instance': 'TargetType', 'value': 'SIDEREAL'}}, 'integration_time': 60, 'spectral_resolution': 128, 'target_id': 1}], 'user_email': 'ray.brederode@skao.int', 'created': {'_type': 'datetime', 'value': '2025-12-07T18:19:37.503Z'}}], 'last_update': {'_type': 'datetime', 'value': '2025-12-07T18:19:46.369Z'}}
+  
+    obslist001 = ObsList().from_dict(obs_list_dict) 
+    print("="*40)
+    print("Observation List from Dict")
+    print("="*40)
+    pprint.pprint(obslist001.to_dict())
+
 
     ss001 = ScanStore()
     ss_dir = "/Users/r.brederode/samples"
@@ -129,18 +138,12 @@ if __name__ == "__main__":
     ss002.from_dict(ss001.to_dict())
     pprint.pprint(ss002.to_dict())
 
-    obs001 = ObsModel(
+    obs001 = Observation(
         obs_id="obs001",
-        short_desc="Test Observation",
-        long_desc="This is a test observation of a celestial target.",
+        title="Test Observation",
+        description="This is a test observation of a celestial target.",
         state=ObsState.EMPTY,
-        targets=[],
-        target_durations=[],
-        dsh_id="dish001",
-        center_freq=1420405752.0,
-        bandwidth=2048000.0,
-        sample_rate=1024.0,
-        channels=1024,
+        dish_id="dish001",
         scans=[],
         start_dt=datetime.now(timezone.utc),
         end_dt=datetime.now(timezone.utc),
@@ -151,10 +154,10 @@ if __name__ == "__main__":
         last_update=datetime.now(timezone.utc)
     )
 
-    obslist = ObsList()
-    obslist.obs_list.append(obs001)
+    obs_list = ObsList()
+    obs_list.obs_list.append(obs001)
     print("="*40)
     print("Observation List with One Observation")
     print("="*40)
-    pprint.pprint(obslist.to_dict())
+    pprint.pprint(obs_list.to_dict())
 

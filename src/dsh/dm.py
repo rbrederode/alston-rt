@@ -4,61 +4,57 @@ from queue import Queue
 import time
 import logging
 
-from api import tm_oet
+from api import tm_dm
 from env.app import App
 from ipc.message import APIMessage
 from ipc.action import Action
 from ipc.message import AppMessage
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
-from models.comms import CommunicationStatus
+from models.comms import CommunicationStatus, InterfaceType
 from models.health import HealthState
-from models.obs import ObsModel
+from models.obs import Observation
 from models.oda import ObsList, ScanStore
-from models.oet import OETModel
+from models.dsh import DishManagerModel
 from util import log
 from util.xbase import XBase, XStreamUnableToExtract
 
-OUTPUT_DIR = '/Users/r.brederode/samples'  # Directory to store observations
-
 logger = logging.getLogger(__name__)
 
-# Observation Execution Tool (OET)
+# Dish Manager (DM)
 
-class OET(App):
-    """A class representing the Observation Execution Tool."""
+class DM(App):
+    """A class representing the Dish Manager."""
 
-    oet_model = OETModel(id="oet001")
+    dm_model = DishManagerModel(id="dm001")
 
-    def __init__(self, app_name: str = "oet"):
+    def __init__(self, app_name: str = "dm"):
 
-        super().__init__(app_name=app_name, app_model = self.oet_model.app)
+        super().__init__(app_name=app_name, app_model = self.dm_model.app)
 
         # Telescope Manager interface (TBD)
         self.tm_system = "tm"
-        self.tm_api = tm_oet.TM_OET()
+        self.tm_api = tm_dm.TM_DM()
         # Telescope Manager TCP Server
         self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
         self.tm_endpoint.start()
         # Register Telescope Manager interface with the App
-        self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint)
+        self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint, InterfaceType.APP_APP)
         # Set initial Telescope Manager connection status
-        self.oet_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.dm_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
 
     def add_args(self, arg_parser): 
-        """ Specifies the science data processors command line arguments.
+        """ Specifies the Dish Manager's command line arguments.
         """
         super().add_args(arg_parser)
 
         arg_parser.add_argument("--tm_host", type=str, required=False, help="TCP host to listen on for Telescope Manager commands", default="localhost")
         arg_parser.add_argument("--tm_port", type=int, required=False, help="TCP port for Telescope Manager commands", default=50002)
 
-        arg_parser.add_argument("--output_dir", type=str, required=False, help="Directory to store observations", default=OUTPUT_DIR)
-
     def process_init(self) -> Action:
         """ Processes initialisation events.
         """
-        logger.debug(f"OET initialisation event")
+        logger.debug(f"DM initialisation event")
 
         action = Action()
         return action
@@ -66,9 +62,9 @@ class OET(App):
     def process_tm_connected(self, event) -> Action:
         """ Processes Telescope Manager connected events.
         """
-        logger.info(f"Observation Execution Tool connected to Telescope Manager: {event.remote_addr}")
+        logger.info(f"Dish Manager connected to Telescope Manager: {event.remote_addr}")
 
-        self.oet_model.tm_connected = CommunicationStatus.ESTABLISHED
+        self.dm_model.tm_connected = CommunicationStatus.ESTABLISHED
         
         action = Action()
         
@@ -80,15 +76,15 @@ class OET(App):
     def process_tm_disconnected(self, event) -> Action:
         """ Processes Telescope Manager disconnected events.
         """
-        logger.info(f"Observation Execution Tool disconnected from Telescope Manager: {event.remote_addr}")
+        logger.info(f"Dish Manager disconnected from Telescope Manager: {event.remote_addr}")
 
-        self.oet_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.dm_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
 
     def process_tm_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Telescope Manager service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
-        logger.info(f"Observation Execution Tool received Telescope Manager {api_call['msg_type']} message with action code: {api_call['action_code']}")
+        logger.info(f"Dish Manager received Telescope Manager {api_call['msg_type']} message with action code: {api_call['action_code']}")
 
         action = Action()
         return action
@@ -96,7 +92,7 @@ class OET(App):
     def process_timer_event(self, event) -> Action:
         """ Processes timer events.
         """
-        logger.debug(f"OET timer event: {event}")
+        logger.debug(f"DM timer event: {event}")
 
         action = Action()
         return action
@@ -109,7 +105,7 @@ class OET(App):
         action = Action()
 
         # If connected to Telescope Manager, send status advice message
-        if self.oet_model.tm_connected == CommunicationStatus.ESTABLISHED:
+        if self.dm_model.tm_connected == CommunicationStatus.ESTABLISHED:
             tm_adv = self._construct_status_adv_to_tm()
             action.set_msg_to_remote(tm_adv)
 
@@ -118,7 +114,7 @@ class OET(App):
     def get_health_state(self) -> HealthState:
         """ Returns the current health state of this application.
         """
-        if self.oet_model.tm_connected != CommunicationStatus.ESTABLISHED:
+        if self.dm_model.tm_connected != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
         else:
             return HealthState.OK
@@ -130,46 +126,20 @@ class OET(App):
         tm_adv.set_json_api_header(
             api_version=self.tm_api.get_api_version(), 
             dt=datetime.now(timezone.utc), 
-            from_system=self.oet_model.app.app_name, 
+            from_system=self.dm_model.app.app_name, 
             to_system="tm", 
             api_call={
                 "msg_type": "adv", 
                 "action_code": "set", 
-                "property": tm_oet.PROPERTY_STATUS, 
-                "value": self.oet_model.to_dict(), 
-                "message": "OET status update"
+                "property": tm_dm.PROPERTY_STATUS, 
+                "value": self.dm_model.to_dict(), 
+                "message": "DM status update"
             })
         return tm_adv
 
-    def add_observation(self, obs: ObsModel) -> None:
-        """Add an observation to the OET store."""
-        self.oet_model.add_obs(obs)
-        
-    def get_observations(self) -> list[ObsModel]:
-        """Get the list of observations in the OET store."""
-        return self.oet_model.processing_obs
-
-    def get_observation(self, obs_id: str) -> ObsModel | None:
-        """Get an observation by its ID."""
-        for obs in self.oet_model.processing_obs:
-            if obs.obs_id == obs_id:
-                return obs
-        return None
-
-    def exec_observation(self, obs_id: str) -> bool:
-        """Execute an observation by its ID."""
-        obs = self.get_observation(obs_id)
-        if obs:
-            
-            print(f"Executing observation {obs_id}")
-            return True
-        else:
-            print(f"Observation {obs_id} not found")
-            return False
-
 def main():
-    oet = OET()
-    oet.start()
+    dm = DM()
+    dm.start()
 
     try:
         while True:
@@ -179,7 +149,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        oet.stop()
+        dm.stop()
 
 if __name__ == "__main__":
     main()

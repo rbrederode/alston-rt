@@ -14,7 +14,7 @@ from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.app import AppModel
-from models.comms import CommunicationStatus
+from models.comms import CommunicationStatus, InterfaceType
 from models.dig import DigitiserModel
 from models.dsh import Feed
 from models.health import HealthState
@@ -32,16 +32,16 @@ class Digitiser(App):
 
         super().__init__(app_name=app_name, app_model = self.dig_model.app)
 
-        self.dig_model.id = self.get_args().id
+        self.dig_model.dig_id = self.get_args().entity_id
 
         # Telescope Manager interface
         self.tm_system = "tm"
         self.tm_api = tm_dig.TM_DIG()
-        # Telescope Manager TCP Server
-        self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
-        self.tm_endpoint.start()
+        # Telescope Manager TCP Client
+        self.tm_endpoint = TCPClient(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
+        self.tm_endpoint.connect()
         # Register Telescope Manager interface with the App
-        self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint)
+        self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint, InterfaceType.ENTITY)
         # Set initial Telescope Manager connection status
         self.dig_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
 
@@ -52,14 +52,14 @@ class Digitiser(App):
         self.sdp_endpoint = TCPClient(description=self.sdp_system, queue=self.get_queue(), host=self.get_args().sdp_host, port=self.get_args().sdp_port)
         self.sdp_endpoint.connect()
         # Register Science Data Processor interface with the App
-        self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint)
+        self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint, InterfaceType.ENTITY)
         # Set initial Science Data Processor connection status
         self.dig_model.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
         
         # Software Defined Radio (internal) interface
         self.sdr = SDR()
-        self.dig_model.sdr_connected = self.sdr.get_comms_status()
         self.dig_model.sdr_eeprom = self.sdr.get_eeprom_info()
+        self.dig_model.sdr_connected = self.sdr.get_comms_status()
 
         self.dig_model.streaming = False # Flag indicating if we are currently streaming samples (from the SDR)
  
@@ -68,13 +68,13 @@ class Digitiser(App):
         """
         super().add_args(arg_parser)
 
-        arg_parser.add_argument("--id", type=str, required=True, help="Digitiser ID dig<id> e.g. dig001", default="dig001")
-
         arg_parser.add_argument("--tm_host", type=str, required=False, help="TCP host to listen on for Telescope Manager commands", default="localhost")
         arg_parser.add_argument("--tm_port", type=int, required=False, help="TCP port to listen on for Telescope Manager commands", default=50000)
         
         arg_parser.add_argument("--sdp_host", type=str, required=False, help="TCP server host to connect to for downstream Science Data Processor transport",default="localhost")
         arg_parser.add_argument("--sdp_port", type=int, required=False, help="TCP server port to connect to for downstream Science Data Processor transport", default=60000)
+
+        arg_parser.add_argument("--local_host", type=str, required=True, help="Localhost (ip4 address) on which the digitiser is running e.g. 192.168.0.1", default="0.0.0.0")
 
     def process_init(self) -> Action:
         """ Processes initialisation events.
@@ -459,6 +459,7 @@ class Digitiser(App):
             dt=datetime.now(timezone.utc), 
             from_system=self.dig_model.app.app_name, 
             to_system="tm", 
+            entity=self.dig_model.dig_id,
             api_call={
                 "msg_type": "adv", 
                 "action_code": "set", 
@@ -485,12 +486,13 @@ class Digitiser(App):
             dt=datetime.now(timezone.utc), 
             from_system=self.dig_model.app.app_name, 
             to_system="sdp", 
+            entity=self.dig_model.dig_id,
             api_call={}
         )
         
         # Construct metadata using the digitiser model and sample read info
         metadata = [   
-            {"property": "dig_id", "value": self.dig_model.id},                 # Digitiser Id
+            {"property": "dig_id", "value": self.dig_model.dig_id},                 # Digitiser Id
             {"property": "feed", "value": self.dig_model.feed.name},            # Feed name
             {"property": "center_freq", "value": self.dig_model.center_freq},   # Hz    
             {"property": "sample_rate", "value": self.dig_model.sample_rate},   # Hz
@@ -544,6 +546,7 @@ def main():
         pass
     finally:
         digitiser.stop()
+        digitiser.sdr.close()
 
 if __name__ == "__main__":
     main()

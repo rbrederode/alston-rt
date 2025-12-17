@@ -54,22 +54,38 @@ class SDR:
             else:
                 logger.warning("SDR unable to retrieve device information.")
 
-            try:
-                self.rtlsdr = RtlSdr()
-                self.connected = CommunicationStatus.ESTABLISHED
-            except OSError as e:
-                logger.error(f"SDR could not connect due to OSError: {e}")
-            except Exception as e:
-                logger.exception(f"SDR could not connect due to exception: {e}")
+            if self.open():
+                logger.info("SDR connection successful during initialization.")
 
-            # Cached rtlsdr properties
-            self.gain = self.rtlsdr.gain if self.rtlsdr is not None else None
-            self.center_freq = self.rtlsdr.center_freq if self.rtlsdr is not None else None
-            self.bandwidth = self.rtlsdr.bandwidth if self.rtlsdr is not None else None
-            self.freq_correction = self.rtlsdr.freq_correction if self.rtlsdr is not None else None
-            self.sample_rate = int(math.ceil(self.rtlsdr.sample_rate)) if self.rtlsdr is not None else None
+                # Cached rtlsdr properties
+                self.gain = self.rtlsdr.gain if self.rtlsdr is not None else None
+                self.center_freq = self.rtlsdr.center_freq if self.rtlsdr is not None else None
+                self.bandwidth = self.rtlsdr.bandwidth if self.rtlsdr is not None else None
+                self.freq_correction = self.rtlsdr.freq_correction if self.rtlsdr is not None else None
+                self.sample_rate = int(math.ceil(self.rtlsdr.sample_rate)) if self.rtlsdr is not None else None
 
-    def __del__(self):
+    
+    def open(self) -> bool:
+        """ Open the SDR device connection if not already connected.
+            :returns: True if the SDR is connected, False otherwise
+        """
+        with SDR._mutex:
+
+            if self.rtlsdr is None:
+                try:
+                    self.rtlsdr = RtlSdr()
+                    self.connected = CommunicationStatus.ESTABLISHED
+                    logger.info("SDR connection established.")
+                except OSError as e:
+                    logger.error(f"SDR could not connect due to OSError: {e}")
+                    return False
+                except Exception as e:
+                    logger.exception(f"SDR could not connect due to exception: {e}")
+                    return False
+
+            return True
+    
+    def close(self):
 
         with SDR._mutex:
 
@@ -96,10 +112,13 @@ class SDR:
         with SDR._mutex:
 
             try:
+                self.close()  # Ensure device is closed before running rtl_eeprom
                 result = subprocess.run(['rtl_eeprom', '-d', '0'], capture_output=True, text=True)
             except Exception as e:
                 logger.exception(f"SDR exception occurred while retrieving SDR information. {e}")
                 raise e
+            finally:
+                self.open()  # Reopen device after running rtl_eeprom
 
             eeprom_info = {}
 
@@ -134,10 +153,13 @@ class SDR:
             cmd = ['rtl_biast', '-b', '1'] if enable else ['rtl_biast', '-b', '0']
 
             try:
+                self.close()  # Ensure device is closed before running rtl_eeprom
                 result = subprocess.run(cmd, capture_output=True, text=True)
             except Exception as e:
                 logger.exception(f"SDR exception occurred while running command: {' '.join(cmd)} {e}")
                 raise e
+            finally:
+                self.open()  # Reopen device after running rtl_eeprom
 
             if result.returncode == 0:
                 logger.info(f"SDR switched BiasT to {'ON' if enable else 'OFF'} with command: {' '.join(cmd)}")
@@ -221,11 +243,13 @@ class SDR:
         p_r_list = []
         p_i_list = []
 
-        with SDR._mutex:
+        if self.rtlsdr is None:
+            logger.warning("SDR device not connected.")
+            return None, None
 
-            if self.rtlsdr is None:
-                logger.warning("SDR device not connected.")
-                return None, None
+        # Lock access to the SDR during gain testing so that no other thread can interfere
+        # Ideally streaming should be stopped ahead of this call and then restarted afterwards
+        with SDR._mutex:
 
             # Remember original SDR gain setting
             orig_gain = self.gain 
@@ -249,7 +273,7 @@ class SDR:
                     gauss_gain = Glist[i+1]
                     break
 
-            self.set_gain(orig_gain)  # Restore original gain setting
+                self.set_gain(orig_gain)  # Restore original gain setting
 
         # If we find a gaussian gain
         if gaussian:

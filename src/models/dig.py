@@ -14,11 +14,14 @@ from models.comms import CommunicationStatus
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
 
 class DigitiserModel(BaseModel):
-    """A class representing the digitiser model."""
+    """A class representing a digitiser application. The digitiser application is deployed at the telescope to digitise the analog RF signals.
+        The digitiser is controlled by the Telescope Manager.    
+        The digitiser streams digitised RF data to the SDP for processing.
+    """
 
     schema = Schema({
         "_type": And(str, lambda v: v == "DigitiserModel"),
-        "id": And(str, lambda v: isinstance(v, str)),
+        "dig_id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
         "feed": And(Feed, lambda v: isinstance(v, Feed)),
         "gain": And(float, lambda v: 0 <= v <= 100.0),
@@ -41,7 +44,7 @@ class DigitiserModel(BaseModel):
         # Default values
         defaults = {
             "_type": "DigitiserModel",
-            "id": "<undefined>",
+            "dig_id": "<undefined>",
             "app": AppModel(
                 app_name="dig",
                 app_running=False,
@@ -73,25 +76,54 @@ class DigitiserModel(BaseModel):
 
         super().__init__(**kwargs)
 
+class DigitiserList(BaseModel):
+    """A class representing a list of digitisers."""
+
+    schema = Schema({
+        "_type": And(str, lambda v: v == "DigitiserList"),
+        "list_id": And(str, lambda v: isinstance(v, str)),                  # Digitiser List identifier e.g. "active"         
+        "dig_list": And(list, lambda v: isinstance(v, list)),               # List of DigitiserModel objects
+        "last_update": And(datetime, lambda v: isinstance(v, datetime)),
+    })
+
+    allowed_transitions = {}
+
+    def __init__(self, **kwargs):
+
+        # Default values
+        defaults = {
+            "_type": "DigitiserList",
+            "list_id": "<undefined>",
+            "dig_list": [],
+            "last_update": datetime.now(timezone.utc),
+        }
+
+        # Apply defaults if not provided in kwargs
+        for key, value in defaults.items():
+            if key not in kwargs:
+                kwargs.setdefault(key, value)
+
+        super().__init__(**kwargs)
+
 if __name__ == "__main__":
     
     dig001 = DigitiserModel(
-        id="dig001",
+        dig_id="dig001",
         app=AppModel(
             app_name="dig",
-            app_running=True,
-            num_processors=2,
+            app_running=False,
+            num_processors=4,
             queue_size=0,
-            interfaces=["tm", "sdp"],
+            interfaces=[],
             processors=[],
             health=HealthState.UNKNOWN,
             last_update=datetime.now()
         ),
-        feed=Feed.LOAD,
+        feed=Feed.NONE,
         gain=0.0,
-        sample_rate=2400000.0,
-        bandwidth=200000.0,
-        center_freq=1420000000.0,
+        sample_rate=0.0,
+        bandwidth=0.0,
+        center_freq=0.0,
         freq_correction=0,
         streaming=False,
         tm_connected=CommunicationStatus.NOT_ESTABLISHED,
@@ -101,7 +133,7 @@ if __name__ == "__main__":
         last_update=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     )
 
-    dig002 = DigitiserModel(id="dig002")
+    dig002 = DigitiserModel(dig_id="dig002")
 
     import pprint
     print("="*40)
@@ -140,7 +172,7 @@ if __name__ == "__main__":
             'feed': {'_type': 'enum.IntEnum', 'instance': 'Feed', 'value': 'LOAD'},
             'freq_correction': 0,
             'gain': 0.0,
-            'id': 'dig001',
+            'dig_id': 'dig001',
             'last_update': {'_type': 'datetime', 'value': '2025-11-01T12:00:00+00:00'},
             'sample_rate': 2400000.0,
             'sdp_connected': {'_type': 'enum.IntEnum',
@@ -162,7 +194,7 @@ if __name__ == "__main__":
     print(dig_json)
     print("="*40)
 
-    dig003 = DigitiserModel(id="dig003")
+    dig003 = DigitiserModel(dig_id="dig003")
 
     # Convert Python dict literal string to dictionary (strip indentation first)
     dig_json_dict = ast.literal_eval(dig_json.strip())
@@ -173,3 +205,53 @@ if __name__ == "__main__":
     print("Digitiser 003 after from_dict")
     print("="*40)
     pprint.pprint(dig003.to_dict())
+
+    print("="*40)
+    print("Digitiser List Model")
+    print("="*40)
+    diglist001 = DigitiserList(
+        list_id="diglist001",
+        dig_list=[dig001, dig002],
+        last_update=datetime.now(timezone.utc)
+    )
+    pprint.pprint(diglist001.to_dict())
+
+    # Retrieve digitiser "dig002" from the digitiser list
+    dig_retrieved = next((dig for dig in diglist001.dig_list if dig.dig_id == "dig002"), None)
+    print("="*40)
+    print("Retrieved Digitiser dig002 from Digitiser List")
+    print("="*40)
+    pprint.pprint(dig_retrieved.to_dict() if dig_retrieved else "Digitiser not found")
+
+    print("="*40)
+    print("Save Digitiser List to disk as JSON")
+    print("="*40)
+
+    diglist001.save_to_disk(filename="model_diglist.json")
+
+    print("="*40)
+    print("Delete and then Load Digitiser List from disk as JSON")
+    print("="*40)   
+    del diglist001
+    diglist001 = DigitiserList().load_from_disk(filename="model_diglist.json")
+    pprint.pprint(diglist001.to_dict())
+
+    default_dig001 = DigitiserModel(dig_id="dig001",
+        app=AppModel(
+            arguments={"local_host": "192.168.0.18"},
+        ))
+
+    default_dig002 = DigitiserModel(dig_id="dig002",
+        app=AppModel(
+            arguments={"local_host": "192.168.0.2"},
+        ))
+
+    default_diglist = DigitiserList(
+        list_id="default",
+        dig_list=[default_dig001, default_dig002],
+    )
+
+    default_diglist.save_to_disk(output_dir="./config/default")
+
+
+
