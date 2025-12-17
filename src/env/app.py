@@ -10,6 +10,7 @@ from ipc.tcp_server import TCPServer
 from ipc.message import AppMessage, APIMessage
 from ipc.action import Action
 from models.app import AppModel
+from models.comms import InterfaceType
 from models.proc import ProcessorModel
 from models.health import HealthState
 from util.xbase import XBase
@@ -80,6 +81,7 @@ class App:
         """
         arg_parser.add_argument("--verbose", "-v",action="store_true", help="Enable verbose logging")
         arg_parser.add_argument("--num_processors", "-np", type=int, required=False, help="Number of processor threads to create", default=4)
+        arg_parser.add_argument("--profile", type=str, required=False, help="Configuration profile to use e.g. default, alston etc. See ./config directory for existing profiles", default="default") 
         arg_parser.add_argument("--entity_id", type=str, required=False, help="Alphanumeric entity ID to uniquely identify a dish or digitiser instance <[A-Z][a-z][0-9]+> e.g. dsh001", default="<undefined>")
 
     def start(self):
@@ -182,13 +184,15 @@ class App:
             Timer.manager = None
             logger.info(f"App {self.app_model.app_name} stopped timer manager")
         
-    def register_interface(self, system_name: str, api: API, endpoint, entity_driver=False):
+    def register_interface(self, system_name: str, api: API, endpoint, interface_type: InterfaceType = InterfaceType.UNKNOWN):
         """Registers an interface with the application.
             : param system_name: The name of the system the interface is for
             : param api: The API implementation for the interface
             : param endpoint: The endpoint (e.g. TCPServer or TCPClient) for the interface
-            : param entity_driver: True if the interface is for an entity driver, else False
+            : param interface_type: The type of the interface (e.g. entity_driver, entity or app_app)
             An entity driving interface will connect to multiple entities e.g. dishes or digitisers.
+            An entity interface connects to an entity driving interface e.g. a dish or digitiser
+            An app_app interface connects to another application e.g. TM to SDP
         """
 
         if system_name is None or system_name.strip() == "":
@@ -202,7 +206,7 @@ class App:
 
         logger.info(f"App {self.app_model.app_name} registered interface for system '{system_name}' with API version {api.get_api_version()} at endpoint {endpoint}")
 
-        self.interfaces[system_name] = (api, endpoint, entity_driver)
+        self.interfaces[system_name] = (api, endpoint, interface_type)
         self.app_model.interfaces.append(system_name)
 
     def deregister_interface(self, system_name: str):
@@ -220,7 +224,7 @@ class App:
     def get_interface(self, system_name: str):
         """Gets the interface for a given system name.
             : param system_name: The name of the system the interface is for
-            : return: The API, endpoint, and entity_driver flag if found, else None
+            : return: The API, endpoint, and interface type if found, else None
         """
         if system_name not in self.interfaces:
             raise XBase(f"App {self.app_model.app_name} has no registered interface for system '{system_name}'")

@@ -24,7 +24,7 @@ from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.app import AppModel
-from models.comms import CommunicationStatus
+from models.comms import CommunicationStatus, InterfaceType
 from models.dig import DigitiserModel
 from models.dsh import DishManagerModel, Feed
 from models.obs import Observation, ObsEvent, ObsState
@@ -67,7 +67,7 @@ class TelescopeManager(App):
         self.dm_endpoint = TCPClient(description=self.dm_system, queue=self.get_queue(), host=self.get_args().dm_host, port=self.get_args().dm_port)
         self.dm_endpoint.connect()
         # Register Dish Manager interface with the App
-        self.register_interface(self.dm_system, self.dm_api, self.dm_endpoint)
+        self.register_interface(self.dm_system, self.dm_api, self.dm_endpoint, InterfaceType.APP_APP)
         # Initialise Dish Manager comms status
         self.telmodel.dsh_mgr.tm_connected = CommunicationStatus.NOT_ESTABLISHED
         self.telmodel.tel_mgr.dm_connected = CommunicationStatus.NOT_ESTABLISHED
@@ -79,9 +79,8 @@ class TelescopeManager(App):
         self.dig_endpoint = TCPServer(description=self.dig_system, queue=self.get_queue(), host=self.get_args().dig_host, port=self.get_args().dig_port)
         self.dig_endpoint.start()
         # Register Digitiser interface with the App
-        self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint)
-        # Initialise Digitiser comms status
-        self.telmodel.dig_mgr.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint, InterfaceType.ENTITY_DRIVER)
+        # Initialise Digitiser comms status (NOTE TBD: multiple digitisers?)
         self.telmodel.tel_mgr.dig_connected = CommunicationStatus.NOT_ESTABLISHED
         
         # Science Data Processor interface 
@@ -91,7 +90,7 @@ class TelescopeManager(App):
         self.sdp_endpoint = TCPClient(description=self.sdp_system, queue=self.get_queue(), host=self.get_args().sdp_host, port=self.get_args().sdp_port)
         self.sdp_endpoint.connect()
         # Register Science Data Processor interface with the App
-        self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint)
+        self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint, InterfaceType.APP_APP)
         # Initialise Science Data Processor comms status
         self.telmodel.sdp.tm_connected = CommunicationStatus.NOT_ESTABLISHED
         self.telmodel.tel_mgr.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
@@ -115,6 +114,18 @@ class TelescopeManager(App):
         """
         logger.debug(f"TM initialisation event")
 
+        # Load Digitiser configuration from disk
+        # Config file is located in ./config/<profile>/<model>.json
+        # Config file defines initial list of digitisers to be processed by the TM
+        input_dir = f"./config/{self.get_args().profile}"
+        dig_store = self.telmodel.dig_str.load_from_disk(input_dir=input_dir, filename="DigitiserList.json")
+
+        if dig_store is not None:
+            self.telmodel.dig_str = dig_store
+            logger.info(f"Telescope Manager loaded Digitiser Manager configuration from {input_dir}")
+        else:
+            logger.warning(f"Telescope Manager could not load Digitiser Manager configuration from {input_dir}")
+
         action = Action()
         return action
 
@@ -125,7 +136,7 @@ class TelescopeManager(App):
 
         action = Action()
 
-        if event.category == "DIG" and self.telmodel.dig_mgr.tm_connected == CommunicationStatus.ESTABLISHED:
+        if event.category == "DIG": # Digitiser Config Event
 
             # Extract dig_id from the incoming DIG configuration event (JSON)
             dig_id = event.new_config.get("dig_id", None)
@@ -158,7 +169,7 @@ class TelescopeManager(App):
                     timer_action=self.telmodel.tel_mgr.app.msg_timeout_ms, 
                     echo_data=dig_req))
 
-        elif event.category == "ODT": # Observation Design Tool
+        elif event.category == "ODT": # Observation Design Tool Config Event
 
             # Observation Design Tool (ODT) is the source of truth for new (ObsState = EMPTY) observations
             # Observation Data Archive (ODA) is the source of truth for in progress (ObsState != EMPTY) observations
@@ -270,12 +281,35 @@ class TelescopeManager(App):
         self.telmodel.dsh_mgr.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
         return action
 
+    def get_dig_entity_id(self, event) -> str:
+        """ Determines the digitiser entity ID based on the remote address of the connection.
+        """
+        dig_entity_id = None
+        
+        logger.debug(f"Finding digitiser entity ID for remote address: {event.remote_addr[0]}")
+
+        for digitiser in self.telmodel.dig_str.dig_list:
+
+            if isinstance(digitiser.app.arguments, dict) and "local_host" in digitiser.app.arguments:
+
+                if digitiser.app.arguments["local_host"] == event.remote_addr[0]:
+                    dig_entity_id = digitiser.dig_id
+                    logger.info(f"Found digitiser entity ID: {dig_entity_id} for remote address: {event.remote_addr}")
+                    break
+            else:
+                logger.warning(f"Digitiser {digitiser.dig_id} does not have a valid local_host argument to match against remote address: {event.remote_addr[0]}")
+
+        return dig_entity_id
+
     def process_dig_connected(self, event) -> Action:
         """ Processes Digitiser connected events.
         """
         logger.info(f"Telescope Manager connected to Digitiser: {event.remote_addr}")
 
-        self.telmodel.dig_mgr.tm_connected = CommunicationStatus.ESTABLISHED
+        # Determine which digitiser connected based on remote address
+
+
+        #self.telmodel.dig_mgr.tm_connected = CommunicationStatus.ESTABLISHED
         self.telmodel.tel_mgr.dig_connected = CommunicationStatus.ESTABLISHED
 
         action = Action()
@@ -286,7 +320,7 @@ class TelescopeManager(App):
         """
         logger.info(f"Telescope Manager disconnected from Digitiser: {event.remote_addr}")
 
-        self.telmodel.dig_mgr.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        #self.telmodel.dig_mgr.tm_connected = CommunicationStatus.NOT_ESTABLISHED
         self.telmodel.tel_mgr.dig_connected = CommunicationStatus.NOT_ESTABLISHED
 
     def process_dig_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
@@ -299,29 +333,22 @@ class TelescopeManager(App):
 
         if api_call.get('status','') != tm_dig.STATUS_ERROR:
 
-            # Retrieve the digitiser entity from the Digitiser Manager Model
-            digitiser = next((dig for dig in self.telmodel.dig_mgr.dig_store.dig_list if dig.dig_id == api_msg['entity']), None)
+            # Retrieve the digitiser index and entity from the Digitiser Manager Model
+            result = next(
+                ((i, dig) for i, dig in enumerate(self.telmodel.dig_str.dig_list) if dig.dig_id == api_msg['entity']),
+                (None, None)
+            )
+            index, digitiser = result
 
-            if api_call.get('property','') == tm_dig.PROPERTY_STATUS:
-                logger.debug(f"Telescope Manager received Digitiser STATUS update: {api_call['value']}")
-
-                # If the digitiser is not found in the Digitiser Manager store, create it
-                if digitiser is None:
-                    digitiser = DigitiserModel.from_dict(api_call['value'])
-                    self.telmodel.dig_mgr.dig_store.dig_list.append(digitiser)
-                else:
-                    digitiser = DigitiserModel.from_dict(api_call['value'])
-            
-            elif digitiser is None:
-                logger.warning(f"Telescope Manager received Digitiser message for unknown Digitiser: {api_msg['entity']}")
+            # If the digitiser is not configured in the Digitiser Manager store, log a warning and throw the message away
+            if digitiser is None:
+                logger.warning(f"Telescope Manager received Digitiser message for unknown Digitiser: {api_msg}")
                 return action
 
-            # Update Telescope Model timestamps based on received Digitiser api_call
-            dt = api_msg.get("timestamp")
-            self.telmodel.dig_mgr.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
-            digitiser.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
-
-            if api_call.get('property','') == tm_dig.PROPERTY_FEED:
+            if api_call.get('property','') == tm_dig.PROPERTY_STATUS:
+                digitiser = DigitiserModel.from_dict(api_call['value'])
+                self.telmodel.dig_str.dig_list[index] = digitiser
+            elif api_call.get('property','') == tm_dig.PROPERTY_FEED:
                 digitiser.feed = Feed(api_call['value'])
             elif api_call.get('property','') == tm_dig.PROPERTY_STREAMING:
                 digitiser.streaming = api_call['value']
@@ -337,6 +364,11 @@ class TelescopeManager(App):
                 digitiser.freq_correction = api_call['value']
             elif api_call.get('property','') == tm_dig.PROPERTY_SDP_COMMS:
                 digitiser.sdp_connected = CommunicationStatus(api_call['value'])
+
+             # Update Telescope Model timestamps based on received Digitiser api_call
+            dt = api_msg.get("timestamp")
+            self.telmodel.dig_str.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
+            digitiser.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
 
         # If the api call is a rsp message, stop the corresponding timer
         if api_call['msg_type'] == tm_dig.MSG_TYPE_RSP and dt is not None:
@@ -703,32 +735,6 @@ def main():
 
                         last_odt_config_snapshot = json_config
 
-            # If comms to the Digitiser is established then exchange Digitiser model data with the UI 
-            if tm.telmodel.dig_mgr.tm_connected == CommunicationStatus.ESTABLISHED:
-
-                dig_latest_update = tm.telmodel.dig_mgr.last_update if tm.telmodel.dig_mgr.last_update else datetime.now(timezone.utc)
-
-                # Push updated Digitiser model to Google Sheets if there are updates
-                if dig_latest_update > last_dig_model_push:
-
-                    dig_dict = tm.telmodel.dig_mgr.to_dict()
-                    dig_str = json.dumps(dig_dict, indent=4)
-                    try:    
-                        execute_sheets_request(sheet.values().update(
-                            spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                            range=TM_UI_API + "B2",                      
-                            valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                            body={"values": [[dig_str]]}
-                        ))
-                    except Exception as err:
-                        logger.error(f"Error updating Digitiser model in Google Sheets: {err}")
-
-                    last_dig_model_push = dig_latest_update
-
-            else:
-                # Reset the snapshot such that config is re-read upon reconnection
-                last_dig_config_snapshot = None
-
             # If comms to the Dish Manager is established then exchange Dish Manager model data with the UI 
             if tm.telmodel.dsh_mgr.tm_connected == CommunicationStatus.ESTABLISHED:
 
@@ -776,8 +782,26 @@ def main():
                     except Exception as err:
                         logger.error(f"Error updating SDP model in Google Sheets: {err}")
                     
-
                     last_sdp_model_push = sdp_latest_update
+
+            # Exchange DIG model data with the UI
+            dig_latest_update = tm.telmodel.dig_str.last_update if tm.telmodel.dig_str.last_update else datetime.now(timezone.utc)
+
+            if dig_latest_update > last_dig_model_push:
+
+                dig_dict = tm.telmodel.dig_str.to_dict()
+                dig_str = json.dumps(dig_dict, indent=4)
+                try:    
+                    execute_sheets_request(sheet.values().update(
+                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
+                        range=TM_UI_API + "B2",                      
+                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
+                        body={"values": [[dig_str]]}
+                    ))
+                except Exception as err:
+                    logger.error(f"Error updating Digitiser model in Google Sheets: {err}")
+
+                last_dig_model_push = dig_latest_update
 
             # Exchange ODA model data with the UI
             oda_latest_update = tm.telmodel.oda.last_update if tm.telmodel.oda.last_update else datetime.now(timezone.utc)

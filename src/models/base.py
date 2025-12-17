@@ -134,18 +134,46 @@ class BaseModel:
 
         return {k: BaseModel._serialise(v) for k, v in self._data.items()}
 
-    def save_to_disk(self, filename: str):
+    def save_to_disk(self, output_dir: str=None, filename: str=None):
         """ Save the model to a JSON file on disk. """
         import json
+        from pathlib import Path
 
-        with open(filename, 'w') as f:
+        # Ensure output directory and filename are valid
+        if output_dir is None or output_dir == '':
+            output_dir = "./"
+
+        if filename is None or filename == '':
+            filename = f"{type(self).__name__}.json"
+
+        filepath = Path(output_dir).expanduser() / filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(filepath, 'w') as f:
             json.dump(self.to_dict(), f, indent=4)
 
-    def load_from_disk(cls, filename: str) -> BaseModel:
-        """ Load the model from a JSON file on disk. """
+    @classmethod
+    def load_from_disk(cls, input_dir: str=None, filename: str=None) -> BaseModel:
+        """ Load the model from a JSON file on disk. 
+            :param input_dir: The directory to load the model from
+            :param filename: The filename to load the model from
+            :return: An instance of the model loaded from disk
+            Raises XSoftwareFailure or FileNotFoundError on failure
+        """
         import json
+        from pathlib import Path
 
-        with open(filename, 'r') as f:
+        # Ensure input directory and filename are valid
+        if input_dir is None or input_dir == '':
+            input_dir = "./"
+
+        if filename is None or filename == '':
+            raise XSoftwareFailure("Base model load_from_disk requires a filename")
+
+        filepath = Path(input_dir).expanduser() / filename
+
+        # Load JSON data from file
+        with open(filepath, 'r') as f:
             data = json.load(f)
 
         return cls.from_dict(data)
@@ -221,8 +249,8 @@ class BaseModel:
         import astropy.units as u
 
         from models.app import AppModel
-        from models.comms import CommunicationStatus
-        from models.dig import DigitiserModel
+        from models.comms import CommunicationStatus, InterfaceType
+        from models.dig import DigitiserList, DigitiserModel
         from models.dsh import DishMode, DishModel, DishList, DishManagerModel, Feed, PointingState, CapabilityStates
         from models.health import HealthState
         from models.obs import ObsState, Observation
@@ -251,6 +279,9 @@ class BaseModel:
             elif model_type == "datetime":
                 if isinstance(v["value"], str):
                     return datetime.fromisoformat(v["value"])  
+            elif model_type == "DigitiserList":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return DigitiserList(**deserialized_fields)
             elif model_type == "DigitiserModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return DigitiserModel(**deserialized_fields)
@@ -277,6 +308,7 @@ class BaseModel:
                     "DishMode": DishMode,
                     "Feed": Feed,
                     "HealthState": HealthState,
+                    "InterfaceType": InterfaceType,
                     "ObsState": ObsState,
                     "PointingType": PointingType,
                     "PointingState": PointingState,

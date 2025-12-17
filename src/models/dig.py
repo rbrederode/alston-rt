@@ -81,7 +81,8 @@ class DigitiserList(BaseModel):
 
     schema = Schema({
         "_type": And(str, lambda v: v == "DigitiserList"),
-        "dig_list": And(list, lambda v: isinstance(v, list)),          # List of DigitiserModel objects
+        "list_id": And(str, lambda v: isinstance(v, str)),                  # Digitiser List identifier e.g. "active"         
+        "dig_list": And(list, lambda v: isinstance(v, list)),               # List of DigitiserModel objects
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -92,49 +93,8 @@ class DigitiserList(BaseModel):
         # Default values
         defaults = {
             "_type": "DigitiserList",
+            "list_id": "<undefined>",
             "dig_list": [],
-            "last_update": datetime.now(timezone.utc),
-        }
-
-        # Apply defaults if not provided in kwargs
-        for key, value in defaults.items():
-            if key not in kwargs:
-                kwargs.setdefault(key, value)
-
-        super().__init__(**kwargs)
-
-class DigitiserManagerModel(BaseModel):
-    """A class representing the Digitiser Manager (application) model."""
-
-    schema = Schema({    
-        "_type": And(str, lambda v: v == "DigitiserManagerModel"),     
-        "id": And(str, lambda v: isinstance(v, str)),                                   # Digitiser Manager identifier e.g. "digmgr001"         
-        "dig_store": And(DigitiserList, lambda v: isinstance(v, DigitiserList)),        # List of DigitiserModel objects                        
-        "app": And(AppModel, lambda v: isinstance(v, AppModel)),
-        "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
-        "last_update": And(datetime, lambda v: isinstance(v, datetime)),
-    })
-
-    allowed_transitions = {}
-
-    def __init__(self, **kwargs):
-
-        # Default values
-        defaults = {
-            "_type": "DigitiserManagerModel",
-            "id": "<undefined>",
-            "dig_store": DigitiserList(),
-            "app": AppModel(
-                app_name="digmgr",
-                app_running=False,
-                num_processors=0,
-                queue_size=0,
-                interfaces=[],
-                processors=[],
-                health=HealthState.UNKNOWN,
-                last_update=datetime.now(timezone.utc),
-            ),
-            "tm_connected": CommunicationStatus.NOT_ESTABLISHED,
             "last_update": datetime.now(timezone.utc),
         }
 
@@ -151,19 +111,19 @@ if __name__ == "__main__":
         dig_id="dig001",
         app=AppModel(
             app_name="dig",
-            app_running=True,
-            num_processors=2,
+            app_running=False,
+            num_processors=4,
             queue_size=0,
-            interfaces=["tm", "sdp"],
+            interfaces=[],
             processors=[],
             health=HealthState.UNKNOWN,
             last_update=datetime.now()
         ),
-        feed=Feed.LOAD,
+        feed=Feed.NONE,
         gain=0.0,
-        sample_rate=2400000.0,
-        bandwidth=200000.0,
-        center_freq=1420000000.0,
+        sample_rate=0.0,
+        bandwidth=0.0,
+        center_freq=0.0,
         freq_correction=0,
         streaming=False,
         tm_connected=CommunicationStatus.NOT_ESTABLISHED,
@@ -247,29 +207,49 @@ if __name__ == "__main__":
     pprint.pprint(dig003.to_dict())
 
     print("="*40)
-    print("Digitiser Manager Model")
+    print("Digitiser List Model")
     print("="*40)
-    digmgr001 = DigitiserManagerModel(
-        id="digmgr001",
-        dig_store=DigitiserList(dig_list=[dig001, dig002]),
-        app=AppModel(
-            app_name="digmgr",
-            app_running=True,
-            num_processors=2,
-            queue_size=0,
-            interfaces=["tm"],
-            processors=[],
-            health=HealthState.UNKNOWN,
-            last_update=datetime.now()
-        ),
-        tm_connected=CommunicationStatus.ESTABLISHED,
+    diglist001 = DigitiserList(
+        list_id="diglist001",
+        dig_list=[dig001, dig002],
         last_update=datetime.now(timezone.utc)
     )
-    pprint.pprint(digmgr001.to_dict())
+    pprint.pprint(diglist001.to_dict())
 
-    # Retrieve digitiser "dig002" from the digitiser manager store
-    dig_retrieved = next((dig for dig in digmgr001.dig_store.dig_list if dig.dig_id == "dig002"), None)
+    # Retrieve digitiser "dig002" from the digitiser list
+    dig_retrieved = next((dig for dig in diglist001.dig_list if dig.dig_id == "dig002"), None)
     print("="*40)
-    print("Retrieved Digitiser dig002 from Digitiser Manager Store")
+    print("Retrieved Digitiser dig002 from Digitiser List")
     print("="*40)
     pprint.pprint(dig_retrieved.to_dict() if dig_retrieved else "Digitiser not found")
+
+    print("="*40)
+    print("Save Digitiser List to disk as JSON")
+    print("="*40)
+
+    diglist001.save_to_disk(filename="model_diglist.json")
+
+    print("="*40)
+    print("Delete and then Load Digitiser List from disk as JSON")
+    print("="*40)   
+    del diglist001
+    diglist001 = DigitiserList().load_from_disk(filename="model_diglist.json")
+    pprint.pprint(diglist001.to_dict())
+
+    default_dig001 = DigitiserModel(dig_id="dig001",
+        app=AppModel(
+            arguments={"local_host": "192.168.0.18"},
+        ))
+
+    default_dig002 = DigitiserModel(dig_id="dig002")
+    default_dig003 = DigitiserModel(dig_id="dig003")
+
+    default_diglist = DigitiserList(
+        list_id="default",
+        dig_list=[default_dig001, default_dig002, default_dig003],
+    )
+
+    default_diglist.save_to_disk(output_dir="./config/default")
+
+
+

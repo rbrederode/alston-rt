@@ -14,7 +14,7 @@ from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.app import AppModel
-from models.comms import CommunicationStatus
+from models.comms import CommunicationStatus, InterfaceType
 from models.dig import DigitiserModel
 from models.dsh import Feed
 from models.health import HealthState
@@ -41,7 +41,7 @@ class Digitiser(App):
         self.tm_endpoint = TCPClient(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
         self.tm_endpoint.connect()
         # Register Telescope Manager interface with the App
-        self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint)
+        self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint, InterfaceType.ENTITY)
         # Set initial Telescope Manager connection status
         self.dig_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
 
@@ -52,7 +52,7 @@ class Digitiser(App):
         self.sdp_endpoint = TCPClient(description=self.sdp_system, queue=self.get_queue(), host=self.get_args().sdp_host, port=self.get_args().sdp_port)
         self.sdp_endpoint.connect()
         # Register Science Data Processor interface with the App
-        self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint)
+        self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint, InterfaceType.ENTITY)
         # Set initial Science Data Processor connection status
         self.dig_model.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
         
@@ -73,6 +73,8 @@ class Digitiser(App):
         
         arg_parser.add_argument("--sdp_host", type=str, required=False, help="TCP server host to connect to for downstream Science Data Processor transport",default="localhost")
         arg_parser.add_argument("--sdp_port", type=int, required=False, help="TCP server port to connect to for downstream Science Data Processor transport", default=60000)
+
+        arg_parser.add_argument("--local_host", type=str, required=True, help="Localhost (ip4 address) on which the digitiser is running e.g. 192.168.0.1", default="0.0.0.0")
 
     def process_init(self) -> Action:
         """ Processes initialisation events.

@@ -11,7 +11,7 @@ from ipc.action import Action
 from ipc.message import AppMessage
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
-from models.comms import CommunicationStatus
+from models.comms import CommunicationStatus, InterfaceType
 from models.health import HealthState
 from models.obs import Observation
 from models.oda import ObsList, ScanStore
@@ -39,7 +39,7 @@ class DM(App):
         self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
         self.tm_endpoint.start()
         # Register Telescope Manager interface with the App
-        self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint)
+        self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint, InterfaceType.APP_APP)
         # Set initial Telescope Manager connection status
         self.dm_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
 

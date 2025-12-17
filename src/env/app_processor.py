@@ -7,6 +7,7 @@ from api.api import API
 from ipc.tcp_server import TCPServer
 from ipc.message import AppMessage, APIMessage
 from ipc.action import Action
+from models.comms import InterfaceType
 from util.xbase import XBase
 from util.timer import Timer, TimerManager
 from env import events
@@ -118,7 +119,7 @@ class AppProcessor(Processor):
                     api_msg.from_data(event.data)
                     api_msg.add_echo_api_header()
 
-                    api, endpoint, entity_driver = self.driver.get_interface(api_msg.get_from_system())
+                    api, endpoint, interface_type = self.driver.get_interface(api_msg.get_from_system())
 
                     # Validate and translate the API message to the driver's API version
                     api_transl_msg = api.translate(api_msg.get_json_api_header())
@@ -131,20 +132,44 @@ class AppProcessor(Processor):
                         logger.error(f"AppProcessor {self.name} driver has no app_model.app_name attribute")
                         driver_app_name = getattr(self.driver, "app_name", None) or type(self.driver).__name__
 
-                    # Resolve the driver's entity id from the arguments safely. 
                     entity_id = None
-                    if hasattr(self.driver, "get_args"):
-                        args = self.driver.get_args()
-                        if hasattr(args, "entity_id"):
-                            entity_id = args.entity_id
+                    entity_match = False
 
-                    # Check whether the entity in the API message matches the driver's entity id (if any)
-                    matching_entity = (api_msg.get_entity() is None and entity_id is None)
-                    if not matching_entity and entity_id is not None and api_msg.get_entity() is not None:
-                        matching_entity = (api_msg.get_entity() == entity_id)
+                    if interface_type in [InterfaceType.ENTITY]:
+
+                        # Resolve the entity id from the arguments 
+                        if hasattr(self.driver, "get_args"):
+                            args = self.driver.get_args()
+                            if hasattr(args, "entity_id"):
+                                entity_id = args.entity_id
+
+                        # Check whether the entity in the API message matches the driver's entity id (if any)
+                        entity_match = not (api_msg.get_entity() is None or entity_id is None or api_msg.get_entity() != entity_id)
+
+                    elif interface_type in [InterfaceType.ENTITY_DRIVER]:
+
+                        handler_method = "get_" + api_msg.get_from_system() + "_entity_id"
+
+                        if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
+                            try:
+                                entity_id = getattr(self.driver, handler_method)(event)
+                            except Exception as e:
+                                logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing message from {api_msg.get_from_system()}: {e}")
+                                return False
+                        else:
+                            logger.warning(f"AppProcessor {self.name} driver has no handler to get entity ID from {api_msg.get_from_system()}: {api_msg}")
+                            return False
+
+                        # Check whether the entity in the API message matches the driver's entity id (if any)
+                        entity_match = not (api_msg.get_entity() is None or entity_id is None or api_msg.get_entity() != entity_id)
+
+                    elif interface_type in [InterfaceType.APP_APP]:
+
+                        # No entity matching required for APP_APP interfaces
+                        entity_match = True
                     
                     # Check if the message is not intended for this App or entity
-                    if api_msg.get_to_system() != driver_app_name or (entity_driver and not matching_entity):
+                    if api_msg.get_to_system() != driver_app_name or not entity_match:
                         rsp_msg = APIMessage(api_msg.get_json_api_header())
                         rsp_msg.switch_from_to()
 

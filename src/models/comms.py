@@ -3,6 +3,24 @@
 
 import enum
 
+class InterfaceType(enum.IntEnum):
+    """The type of interface from the perspective of an application.
+       For example, the digitiser app is an ENTITY with respect to the TM.
+       The TM is an ENTITY_DRIVER with respect to the digitiser app.
+       The SDP is an APP_APP interface with respect to the TM.
+    """
+
+    UNKNOWN = -1
+    """Unknown interface type."""
+
+    ENTITY_DRIVER = 0
+    """An entity driving interface will connect to multiple entities e.g. dishes or digitisers."""
+
+    ENTITY = 1
+    """An entity interface connects to an entity driving interface e.g. a dish or digitiser."""
+
+    APP_APP = 2
+    """An app_app interface connects to another application e.g. TM to SDP."""
 
 class CommunicationStatus(enum.IntEnum):
     """The status of communication with the system under controk."""

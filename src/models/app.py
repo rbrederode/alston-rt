@@ -10,11 +10,11 @@ class AppModel(BaseModel):
 
     schema = Schema({
         "_type": And(str, lambda v: v == "AppModel"),
-        "app_name": And(str, lambda v: isinstance(v, str)),
-        "app_running": And(bool, lambda v: isinstance(v, bool)),
-        "health": And(HealthState, lambda v: isinstance(v, HealthState)),
-        "num_processors": And(int, lambda v: v >= 0),
-        "queue_size": And(int, lambda v: v >= 0),
+        "app_name": And(str, lambda v: isinstance(v, str)),                             # Name of the application e.g. "sdp", "tm", "dsh_mgr"
+        "app_running": And(bool, lambda v: isinstance(v, bool)),                        # Is the application currently running
+        "health": And(HealthState, lambda v: isinstance(v, HealthState)),               # Health state of the application (see HealthState enum)
+        "num_processors": And(int, lambda v: v >= 0),                                   # Number of processor instances (threads) used by the application
+        "queue_size": And(int, lambda v: v >= 0),                                       # Size of the event queue for the application
         "interfaces": And(list, lambda v: isinstance(v, list)),
         "processors": And(list, lambda v: isinstance(v, list)),
         "msg_timeout_ms": And(int, lambda v: v >= 0),
