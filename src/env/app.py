@@ -38,6 +38,7 @@ class App:
         self.status_update_event = events.StatusUpdateEvent()  # Reusable status update event
         
         self.interfaces = {}                    # Dictionary to hold registered App interfaces
+        self.entity_connection_map = {}         # Map of entity IDs to client sockets for entity driving interfaces
 
         self.arg_parser = argparse.ArgumentParser(description=self.app_model.app_name)
         self.add_args(self.arg_parser)

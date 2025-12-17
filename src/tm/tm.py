@@ -80,8 +80,7 @@ class TelescopeManager(App):
         self.dig_endpoint.start()
         # Register Digitiser interface with the App
         self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint, InterfaceType.ENTITY_DRIVER)
-        # Initialise Digitiser comms status (NOTE TBD: multiple digitisers?)
-        self.telmodel.tel_mgr.dig_connected = CommunicationStatus.NOT_ESTABLISHED
+        # Entity drivers maintain comms status per entity, so no need to initialise comms status here
         
         # Science Data Processor interface 
         self.sdp_system = "sdp"
@@ -122,9 +121,9 @@ class TelescopeManager(App):
 
         if dig_store is not None:
             self.telmodel.dig_str = dig_store
-            logger.info(f"Telescope Manager loaded Digitiser Manager configuration from {input_dir}")
+            logger.info(f"Telescope Manager loaded Digitiser configuration from {input_dir}")
         else:
-            logger.warning(f"Telescope Manager could not load Digitiser Manager configuration from {input_dir}")
+            logger.warning(f"Telescope Manager could not load Digitiser configuration from {input_dir}")
 
         action = Action()
         return action
@@ -297,31 +296,21 @@ class TelescopeManager(App):
                     logger.info(f"Found digitiser entity ID: {dig_entity_id} for remote address: {event.remote_addr}")
                     break
             else:
-                logger.warning(f"Digitiser {digitiser.dig_id} does not have a valid local_host argument to match against remote address: {event.remote_addr[0]}")
+                logger.warning(f"Digitiser {digitiser.dig_id} is not configured with a valid local_host argument to match against remote address: {event.remote_addr[0]}")
 
         return dig_entity_id
 
     def process_dig_connected(self, event) -> Action:
         """ Processes Digitiser connected events.
+            Call get_dig_entity_id(event) to determine which digitiser connected if necessary.
         """
-        logger.info(f"Telescope Manager connected to Digitiser: {event.remote_addr}")
-
-        # Determine which digitiser connected based on remote address
-
-
-        #self.telmodel.dig_mgr.tm_connected = CommunicationStatus.ESTABLISHED
-        self.telmodel.tel_mgr.dig_connected = CommunicationStatus.ESTABLISHED
-
-        action = Action()
-        return action
+        logger.info(f"Telescope Manager connected to Digitiser entity: {event.remote_addr}")
 
     def process_dig_disconnected(self, event) -> Action:
         """ Processes Digitiser disconnected events.
+            Call get_dig_entity_id(event) to determine which digitiser disconnected if necessary.
         """
-        logger.info(f"Telescope Manager disconnected from Digitiser: {event.remote_addr}")
-
-        #self.telmodel.dig_mgr.tm_connected = CommunicationStatus.NOT_ESTABLISHED
-        self.telmodel.tel_mgr.dig_connected = CommunicationStatus.NOT_ESTABLISHED
+        logger.info(f"Telescope Manager disconnected from Digitiser entity: {event.remote_addr}")
 
     def process_dig_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Digitiser service access point (SAP)
@@ -330,6 +319,9 @@ class TelescopeManager(App):
         logger.info(f"Telescope Manager received digitiser {api_call['msg_type']} msg with action code: {api_call['action_code']} on entity: {api_msg['entity']}")
 
         action = Action()
+
+        # Extract datetime from API message
+        dt = api_msg.get("timestamp")
 
         if api_call.get('status','') != tm_dig.STATUS_ERROR:
 
@@ -365,8 +357,7 @@ class TelescopeManager(App):
             elif api_call.get('property','') == tm_dig.PROPERTY_SDP_COMMS:
                 digitiser.sdp_connected = CommunicationStatus(api_call['value'])
 
-             # Update Telescope Model timestamps based on received Digitiser api_call
-            dt = api_msg.get("timestamp")
+            # Update Telescope Model timestamps based on received Digitiser api_call
             self.telmodel.dig_str.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
             digitiser.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
 
@@ -508,11 +499,11 @@ class TelescopeManager(App):
     def get_health_state(self) -> HealthState:
         """ Returns the current health state of this application.
         """
-        if self.telmodel.tel_mgr.dig_connected != CommunicationStatus.ESTABLISHED:
-            return HealthState.DEGRADED
-        elif self.telmodel.tel_mgr.sdp_connected != CommunicationStatus.ESTABLISHED:
+        if self.telmodel.tel_mgr.sdp_connected != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
         elif self.telmodel.tel_mgr.dm_connected != CommunicationStatus.ESTABLISHED:
+            return HealthState.DEGRADED
+        elif any(dig.tm_connected != CommunicationStatus.ESTABLISHED for dig in self.telmodel.dig_str.dig_list):
             return HealthState.DEGRADED
         else:
             return HealthState.OK

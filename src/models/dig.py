@@ -241,12 +241,14 @@ if __name__ == "__main__":
             arguments={"local_host": "192.168.0.18"},
         ))
 
-    default_dig002 = DigitiserModel(dig_id="dig002")
-    default_dig003 = DigitiserModel(dig_id="dig003")
+    default_dig002 = DigitiserModel(dig_id="dig002",
+        app=AppModel(
+            arguments={"local_host": "192.168.0.2"},
+        ))
 
     default_diglist = DigitiserList(
         list_id="default",
-        dig_list=[default_dig001, default_dig002, default_dig003],
+        dig_list=[default_dig001, default_dig002],
     )
 
     default_diglist.save_to_disk(output_dir="./config/default")

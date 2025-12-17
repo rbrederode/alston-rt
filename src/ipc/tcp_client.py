@@ -98,7 +98,7 @@ class TCPClient:
     def _process_connection(self):
         """Accept incoming connection events from a client and register the connection with the selector."""
 
-        event = events.ConnectEvent(local_sap=self, remote_conn=self, remote_addr=(self.host, self.port), timestamp=datetime.now())
+        event = events.ConnectEvent(local_sap=self, remote_conn=self.client_socket, remote_addr=(self.host, self.port), timestamp=datetime.now())
         self.event_q.put(event)
 
         logging.info(f"TCP Client {self.description} connected to host {self.host} port {self.port}")
@@ -179,7 +179,7 @@ class TCPClient:
                 msg.from_data(self.recv_msg.msg_data)
 
                 event = events.DataEvent(
-                    local_sap=self, remote_conn=self, remote_addr=(self.host, self.port), data=msg.msg_data, timestamp=datetime.now())
+                    local_sap=self, remote_conn=self.client_socket, remote_addr=(self.host, self.port), data=msg.msg_data, timestamp=datetime.now())
                 self.event_q.put(event)
                 self.recv_msg = message.Message()  # Reset for next message
 
@@ -195,7 +195,7 @@ class TCPClient:
                 if self.connected: # Only process events if connected to a server
                     for key, mask in events:
 
-                        # key.data is None for the client socket
+                        # key.data (state) should not be None as we associated a message instance with the socket   
                         if key.data is None:
                             raise XSoftwareFailure(f"TCP Client {self.description} no key data associated with the socket")
                         else:
