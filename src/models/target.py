@@ -66,7 +66,7 @@ class TargetConfig(BaseModel):
         "sample_rate": And(Or(int, float), lambda v: v >= 0.0),             # Sample rate (Hz) 
         "integration_time": And(Or(int, float), lambda v: v >= 0.0),        # Integration time (seconds)
         "spectral_resolution": And(int, lambda v: v >= 0),                  # Spectral resolution (fft size)
-        "target_id": And(int, lambda v: v >= -1),                           # Target identifier
+        "index": And(int, lambda v: v >= 0),                                # Target index (0 = not set,1 = first etc)
       })
 
     allowed_transitions = {}
@@ -84,7 +84,7 @@ class TargetConfig(BaseModel):
             "sample_rate": 0.0,                # Sample rate (Hz) 
             "integration_time": 0.0,           # Integration time (seconds)
             "spectral_resolution": 0,          # Spectral resolution (fft size)
-            "target_id": -1,                   # Target identifier
+            "index": 0,                        # Target index (0 = not set,1 = first etc)
         }
 
         # Apply defaults if not provided in kwargs

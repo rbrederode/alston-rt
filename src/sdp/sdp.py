@@ -14,7 +14,6 @@ from ipc.message import AppMessage
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.comms import CommunicationStatus, InterfaceType
-from models.dsh import Feed
 from models.health import HealthState
 from models.scan import ScanModel, ScanState
 from models.sdp import ScienceDataProcessorModel
@@ -135,7 +134,7 @@ class SDP(App):
             metadata = api_call.get('metadata', [])
 
             # Default values
-            center_freq = gain = sample_rate = read_counter = read_start = read_end = feed = dig_id = None
+            center_freq = gain = sample_rate = read_counter = read_start = read_end = loaddig_id = None
             
             # Extract sample metadata fields
             for item in metadata or []:
@@ -153,17 +152,12 @@ class SDP(App):
                     read_start = datetime.fromisoformat(value)
                 elif prop == sdp_dig.PROPERTY_READ_END:
                     read_end = datetime.fromisoformat(value)
-                elif prop == sdp_dig.PROPERTY_FEED:
-                    # Match Feed enum by name (value is a string like 'LOAD')
-                    try:
-                        feed = Feed[value]
-                    except KeyError:
-                        logger.warning(f"Unknown feed value: {value}, defaulting to NONE")
-                        feed = Feed.NONE
+                elif prop == sdp_dig.PROPERTY_LOAD:
+                    load = value
                 elif prop == sdp_dig.PROPERTY_DIG_ID:
                     dig_id = value
 
-            logger.info(f"SDP received digitiser samples message with metadata: digitiser={dig_id}, feed={feed}, center_freq={center_freq}, gain={gain}, sample rate={sample_rate}, read counter={read_counter}")
+            logger.info(f"SDP received digitiser samples message with metadata: digitiser={dig_id}, center_freq={center_freq}, gain={gain}, sample rate={sample_rate}, read counter={read_counter}, load={load}")
 
             with self._rlock:                    
                 # Loop through scans in the queue until we find one that matches the read_counter
@@ -178,13 +172,13 @@ class SDP(App):
                     if read_counter >= start_idx and read_counter <= end_idx:
 
                         # Verify that the digitiser metadata still matches the scan parameters
-                        if scan.scan_model.center_freq == center_freq and scan.scan_model.feed == feed:
+                        if scan.scan_model.center_freq == center_freq:
                             match = scan
                             break
                         else:
                             logger.warning(f"SDP aborting scan:scan parameters no longer match digitiser sample metadata for scan id {scan.scan_model.scan_id}: "
-                                           f"scan(center_freq={scan.scan_model.center_freq}, feed={scan.scan_model.feed}) vs "
-                                           f"metadata(center_freq={center_freq}, feed={feed})")
+                                           f"scan(center_freq={scan.scan_model.center_freq}) vs "
+                                           f"metadata(center_freq={center_freq})")
                             abort_scans.append(scan)
 
                     # If the Digitiser read_counter is greater than the scan range by the scan duration or the digitiser has reset itself, abort the scan
@@ -207,7 +201,7 @@ class SDP(App):
                         channels=self.sdp_model.channels,
                         center_freq=center_freq if center_freq is not None else 0,
                         gain=gain if gain is not None else 0,
-                        feed=feed if feed is not None else Feed.NONE)
+                        load=load if load is not None else False)
 
                     scan = Scan(scan_model=scan_model)
                     self.scan_q.put(scan)

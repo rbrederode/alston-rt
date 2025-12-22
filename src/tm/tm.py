@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import socket
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # Import google api tools
 from google.auth.transport.requests import Request
@@ -18,20 +18,22 @@ from googleapiclient.http import HttpRequest
 # Import application modules
 from api import tm_dig, tm_sdp, tm_dm
 from env.app import App
-from env.events import ConnectEvent, DisconnectEvent, DataEvent, ConfigEvent
+from env.events import ConnectEvent, DisconnectEvent, DataEvent, ConfigEvent, ObsEvent
 from ipc.message import AppMessage, APIMessage
 from ipc.action import Action
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.app import AppModel
+from models.base import BaseModel
 from models.comms import CommunicationStatus, InterfaceType
 from models.dig import DigitiserModel
-from models.dsh import DishManagerModel, Feed
-from models.obs import Observation, ObsEvent, ObsState
+from models.dsh import DishManagerModel, Feed, CapabilityState
+from models.obs import Observation, ObsTransition, ObsState
 from models.oda import ODAModel, ObsList, ScanStore
 from models.health import HealthState
 from models.sdp import ScienceDataProcessorModel
 from models.telescope import TelescopeModel
+from models.tm import ResourceType, AllocationState
 from util import log, util
 from util.xbase import XBase, XStreamUnableToExtract
 from webhook_handler import WebhookHandler
@@ -45,7 +47,7 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 ALSTON_RADIO_TELESCOPE = "1r73N0VZHSQC6RjRv94gzY50pTgRvaQWfctGGOMZVpzc"
 
 TM_UI_API = "TM_UI_API!"            # Range for UI-TM API data
-TM_UI_POLL_INTERVAL_S = 5           # Poll interval in seconds
+TM_UI_UPDATE_INTERVAL_S = 10           # Update interval in seconds
 
 ODT_OBS_LIST = TM_UI_API + "D2"     # Range for Observation Design Tool
 DIG001_CONFIG = TM_UI_API + "B3"    # Range for Digitiser 001 configuration
@@ -137,36 +139,7 @@ class TelescopeManager(App):
 
         if event.category == "DIG": # Digitiser Config Event
 
-            # Extract dig_id from the incoming DIG configuration event (JSON)
-            dig_id = event.new_config.get("dig_id", None)
-
-            for config_key in event.new_config.keys():
-                config_value = event.new_config[config_key]
-
-                # If key value is unchanged, skip it
-                if event.old_config and config_key in event.old_config and event.old_config[config_key] == config_value:
-                    continue
-
-                logger.info(f"Digitiser configuration update for key: {config_key}, value: {config_value}")
-
-                property = method = value = None
-
-                (method, value) = map.get_method_name_value(config_key, config_value)
-                (property, value) = map.get_property_name_value(config_key, config_value) if method is None else (None, config_value)
-
-                if method is None and property is None:
-                    logger.warning(f"Telescope Manager received unknown configuration item: {config_key}")
-                    continue
-
-                logger.info(f"Sending digitiser configuration update for method: {method}, property: {property}, value: {value}")
-            
-                dig_req = self._construct_req_to_dig(entity=dig_id, property=property, method=method, value=value, message="")
-                action.set_msg_to_remote(dig_req)
-
-                action.set_timer_action(Action.Timer(
-                    name=f"dig_req_timer:{dig_req.get_timestamp()}", 
-                    timer_action=self.telmodel.tel_mgr.app.msg_timeout_ms, 
-                    echo_data=dig_req))
+            action = self.update_dig_configuration(event.old_config, event.new_config, action)
 
         elif event.category == "ODT": # Observation Design Tool Config Event
 
@@ -177,7 +150,7 @@ class TelescopeManager(App):
             odt = ObsList.from_dict(event.new_config)
             odt_empty_obs = [obs for obs in odt.obs_list if obs.obs_state == ObsState.EMPTY]
             
-            # Create dictionary of EMPTY ODT observations for quick lookup
+            # Create dictionary of EMPTY ODT observation ids for quick lookup
             odt_empty_obs_dict = {obs.obs_id: obs for obs in odt_empty_obs}
             odt_empty_obs_ids = set(odt_empty_obs_dict.keys())
 
@@ -196,18 +169,19 @@ class TelescopeManager(App):
                         # Remove EMPTY observations from ODA that are no longer in ODT
                         logger.info(f"Removing existing EMPTY observation {existing_obs.obs_id} as it is no longer present in ODT")
                         obs = self.telmodel.oda.obs_store.obs_list.pop(i)
-                        
-                        obs.obs_state = ObsState.ABORTED
-                        obs.last_update = datetime.now(timezone.utc)
-                        obs.save_to_disk(OUTPUT_DIR)
-                           
+                                                   
             # Add new EMPTY observations from ODT to ODA
             for odt_obs in odt_empty_obs:
                 if not any(existing_obs.obs_id == odt_obs.obs_id for existing_obs in self.telmodel.oda.obs_store.obs_list):
                     logger.info(f"Adding new observation {odt_obs.obs_id} from ODT to ODA")
+
+                    # START DEBUG CODE, REMOVE LATER
+                    odt_obs.scheduling_block_start = datetime.now(timezone.utc) + timedelta(seconds=10)
+                    odt_obs.scheduling_block_end = odt_obs.scheduling_block_start + timedelta(seconds=610)
+                    # END DEBUG CODE, REMOVE LATER
+
                     self.telmodel.oda.obs_store.obs_list.append(odt_obs)
 
-            # Start a timer to trigger on the next observation start time
             action = self.obs_start_next_timer(action)
 
         else:
@@ -215,29 +189,82 @@ class TelescopeManager(App):
 
         return action
 
-    def process_obs_event(self, event: ObsEvent, action: Action):
-        """ Processes observations in the ODA observation store.
-            Adds actions to the provided Action object as needed.
+    def process_obs_event(self, event: ObsEvent) -> Action:
+        """ Processes a workflow transition on an observation.
+            Returns an Action object with actions to be performed.
         """
-        logger.debug(f"Telescope Manager processing observations in ODA store")
+        logger.info(f"Telescope Manager processing an Observation event: {event}")
 
-        now = datetime.now(timezone.utc)
+        action = Action()
 
-        for obs in self.telmodel.oda.obs_store.obs_list:
-            if obs.obs_state == ObsState.RESOURCING:
-                self.process_resourcing_obs(obs, action)
-            elif obs.obs_state == ObsState.CONFIGURING:
-                self.process_configuring_obs(obs, action)
-            elif obs.obs_state == ObsState.IDLE:
-                self.process_idle_obs(obs, action)
-            elif obs.obs_state == ObsState.ABORTED:
-                self.process_aborted_obs(obs, action)
-            elif obs.obs_state == ObsState.FAULT:
-                self.process_fault_obs(obs, action)
-            elif obs.obs_state == ObsState.READY:
-                self.process_ready_obs(obs, action)
-            elif obs.obs_state == ObsState.SCANNING:
-                self.process_scanning_obs(obs, action)
+        # Handle observation event transitions
+        if event.transition == ObsTransition.START:
+
+            # Transition to assigning resources
+            event.obs.obs_state = ObsState.IDLE
+            action.set_obs_transition(obs=event.obs, transition=ObsTransition.ASSIGN_RESOURCES)
+
+        elif event.transition == ObsTransition.ASSIGN_RESOURCES:
+
+            event.obs.obs_state = ObsState.IDLE
+            
+            # Grant resources for this observation if possible, otherwise request resources i.e. get in the queue
+            # Resource availability will be checked each time this method is called, resources will only be requested once 
+            # Returns true if all resources were granted, false if any resource had to be requested
+            if self.obs_assign_resources(event.obs, action):
+                action.set_obs_transition(obs=event.obs, transition=ObsTransition.CONFIGURE_RESOURCES)
+            else:
+                logger.info(f"Observation {event.obs.obs_id} blocked waiting for resources.")
+
+        elif event.transition == ObsTransition.RELEASE_RESOURCES:
+
+            event.obs.obs_state = ObsState.IDLE
+
+            # Release resources for this observation
+            # Returns true if at least one active resource was released, false otherwise
+            if self.obs_release_resources(event.obs, action):
+
+                now = datetime.now(timezone.utc)
+                # Find observations with ObsState = IDLE that should be observing now
+                waiting_obs = [obs for obs in self.telmodel.oda.obs_store.obs_list if obs.obs_state == ObsState.IDLE and obs.scheduling_block_start <= now and obs.scheduling_block_end > now]
+
+                # Check if there are other observations waiting for the resources just released so that they can be assigned
+                for obs in waiting_obs:
+                    if obs.obs_id != event.obs.obs_id and obs.dish_id == event.obs.dish_id and obs.dig_id == event.obs.dig_id:
+                        action.set_obs_transition(obs=obs, transition=ObsTransition.ASSIGN_RESOURCES)
+
+        elif event.transition == ObsTransition.CONFIGURE_RESOURCES:
+
+            event.obs.obs_state = ObsState.CONFIGURING
+
+            # Determine outstanding configuration actions for this observation
+            # Returns true if all resources are already configured, false if any resource still requires configuration
+            if self.obs_configure_resources(event.obs, action):
+                action.set_obs_transition(obs=event.obs, transition=ObsTransition.READY)
+        
+        elif event.transition == ObsTransition.READY:
+            event.obs.obs_state = ObsState.READY
+
+        elif event.transition == ObsTransition.SCAN_STARTED:
+            event.obs.obs_state = ObsState.SCANNING
+
+        elif event.transition == ObsTransition.SCAN_COMPLETED:
+            event.obs.obs_state = ObsState.READY
+
+        elif event.transition == ObsTransition.SCAN_ENDED:
+            event.obs.obs_state = ObsState.READY
+
+        elif event.transition == ObsTransition.ABORT:
+            event.obs.obs_state = ObsState.ABORTED
+
+        elif event.transition == ObsTransition.FAULT_OCCURRED:
+            event.obs.obs_state = ObsState.FAULT
+
+        elif event.transition == ObsTransition.RESET:
+            event.obs.obs_state = ObsState.IDLE
+
+        else:
+            logger.warning(f"Telescope Manager received unknown observation event transition: {event.transition}")
         
         return action
 
@@ -280,11 +307,10 @@ class TelescopeManager(App):
         self.telmodel.dsh_mgr.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
         return action
 
-    def get_dig_entity_id(self, event) -> str:
-        """ Determines the digitiser entity ID based on the remote address of the connection.
+    def get_dig_entity(self, event) -> (str, BaseModel):
+        """ Determines the digitiser entity ID based on the remote address of a ConnectEvent, DisconnectEvent, or DataEvent.
+            Returns a tuple of the entity ID and entity if found, else None, None.
         """
-        dig_entity_id = None
-        
         logger.debug(f"Finding digitiser entity ID for remote address: {event.remote_addr[0]}")
 
         for digitiser in self.telmodel.dig_str.dig_list:
@@ -292,31 +318,30 @@ class TelescopeManager(App):
             if isinstance(digitiser.app.arguments, dict) and "local_host" in digitiser.app.arguments:
 
                 if digitiser.app.arguments["local_host"] == event.remote_addr[0]:
-                    dig_entity_id = digitiser.dig_id
-                    logger.info(f"Found digitiser entity ID: {dig_entity_id} for remote address: {event.remote_addr}")
-                    break
+                    logger.info(f"Found digitiser entity ID: {digitiser.dig_id} for remote address: {event.remote_addr}")
+                    return digitiser.dig_id, digitiser
             else:
                 logger.warning(f"Digitiser {digitiser.dig_id} is not configured with a valid local_host argument to match against remote address: {event.remote_addr[0]}")
 
-        return dig_entity_id
+        return None, None
 
-    def process_dig_connected(self, event) -> Action:
+    def process_dig_entity_connected(self, event, entity) -> Action:
         """ Processes Digitiser connected events.
-            Call get_dig_entity_id(event) to determine which digitiser connected if necessary.
         """
-        logger.info(f"Telescope Manager connected to Digitiser entity: {event.remote_addr}")
+        logger.info(f"Telescope Manager connected to Digitiser entity on {event.remote_addr}\n{entity}")
 
-    def process_dig_disconnected(self, event) -> Action:
+    def process_dig_entity_disconnected(self, event, entity) -> Action:
         """ Processes Digitiser disconnected events.
-            Call get_dig_entity_id(event) to determine which digitiser disconnected if necessary.
         """
-        logger.info(f"Telescope Manager disconnected from Digitiser entity: {event.remote_addr}")
+        logger.info(f"Telescope Manager disconnected from Digitiser entity on {event.remote_addr}\n{entity}")
 
-    def process_dig_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
+    def process_dig_entity_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray, entity: BaseModel) -> Action:
         """ Processes api messages received on the Digitiser service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
         logger.info(f"Telescope Manager received digitiser {api_call['msg_type']} msg with action code: {api_call['action_code']} on entity: {api_msg['entity']}")
+
+        digitiser: DigitiserModel = entity
 
         action = Action()
 
@@ -325,21 +350,11 @@ class TelescopeManager(App):
 
         if api_call.get('status','') != tm_dig.STATUS_ERROR:
 
-            # Retrieve the digitiser index and entity from the Digitiser Manager Model
-            result = next(
-                ((i, dig) for i, dig in enumerate(self.telmodel.dig_str.dig_list) if dig.dig_id == api_msg['entity']),
-                (None, None)
-            )
-            index, digitiser = result
-
-            # If the digitiser is not configured in the Digitiser Manager store, log a warning and throw the message away
-            if digitiser is None:
-                logger.warning(f"Telescope Manager received Digitiser message for unknown Digitiser: {api_msg}")
-                return action
-
             if api_call.get('property','') == tm_dig.PROPERTY_STATUS:
-                digitiser = DigitiserModel.from_dict(api_call['value'])
-                self.telmodel.dig_str.dig_list[index] = digitiser
+
+                # Copy all key value pairs from the api_call status msg into the digitiser model
+                digitiser.update_from_model(DigitiserModel.from_dict(api_call['value']))
+
             elif api_call.get('property','') == tm_dig.PROPERTY_FEED:
                 digitiser.feed = Feed(api_call['value'])
             elif api_call.get('property','') == tm_dig.PROPERTY_STREAMING:
@@ -361,10 +376,32 @@ class TelescopeManager(App):
             self.telmodel.dig_str.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
             digitiser.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
 
-        # If the api call is a rsp message, stop the corresponding timer
-        if api_call['msg_type'] == tm_dig.MSG_TYPE_RSP and dt is not None:
-            action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
+        # If the api call is a rsp message
+        if api_call['msg_type'] == tm_dig.MSG_TYPE_RSP:
+            if dt is not None:
+                # Stop the corresponding timer
+                action.set_timer_action(Action.Timer(name=f"dig_req_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
+            
+            # Check if the configuration request was a result of a configuration update event (echo data present)
+            echo = api_msg.get("echo_data")
+            if echo is not None and isinstance(echo, dict):
+                new_config = echo["echo_data"] if "echo_data" in echo else echo
 
+                obs_id = new_config["obs_id"] if "obs_id" in new_config else None
+                if obs_id is not None:
+
+                    config_mismatched = False
+
+                    # Check for remaining mismatches between desired and current configuration
+                    for config_key, new_value in new_config.items():
+                        if config_key in digitiser.schema.schema:
+                            current_value = getattr(digitiser, config_key, None)
+                            if current_value != new_value:
+                                config_mismatched = True
+
+                    if not config_mismatched:
+                        logger.info(f"Telescope Manager digitiser configuration request for observation {obs_id} has been applied successfully.")
+                        action.set_obs_transition(obs=self.telmodel.oda.obs_store.get_obs_by_id(obs_id), transition=ObsTransition.CONFIGURE_RESOURCES)
         return action
 
     def process_sdp_connected(self, event) -> Action:
@@ -417,12 +454,17 @@ class TelescopeManager(App):
             
             logger.warning(f"Telescope Manager timed out waiting for acknowledgement from Digitiser for request {event}")
 
-        elif event.name.startswith("observation_start_timer"):
+            # Resend the Digitiser API request if the timer user_ref is set (i.e. the original request message)
+            if event.user_ref is not None:
+                dig_req: APIMessage = event.user_ref
+                action.set_msg_to_remote(dig_req)
+
+        elif event.name.startswith("obs_start_timer"):
             logger.info(f"Telescope Manager observation timer event: {event}")
 
             now = datetime.now(timezone.utc)
 
-            # Transition observations that are scheduled for the current scheduling block from ObsState = EMPTY to ObsState = RESOURCING
+            # Transition observations that are scheduled for the current scheduling block from ObsState = EMPTY to ObsState = IDLE
             # It is possible that multiple observations are scheduled for the current scheduling block and that some cannot be resourced
             # Example: A dish has become UNAVAILABLE, so only some observations can be resourced
             for obs in self.telmodel.oda.obs_store.obs_list:
@@ -430,12 +472,11 @@ class TelescopeManager(App):
                 # Calculate difference between now and the observation scheduling block start time in seconds
                 start_offset = abs((obs.scheduling_block_start - now).total_seconds())
   
-                # Start resourcing observations scheduled to start now (within 60 seconds)
+                # Transition observations scheduled to start within 60 seconds
                 if obs.obs_state == ObsState.EMPTY and start_offset <= 60:
-                    obs.obs_state = ObsState.IDLE
-                    obs.last_update = datetime.now(timezone.utc)
-                    logger.info(f"Telescope Manager resourcing observation {obs.obs_id} scheduled for {obs.scheduling_block_start}")
-            
+                    action.set_obs_transition(obs=obs, transition=ObsTransition.START)
+                    logger.info(f"Telescope Manager starting observation {obs.obs_id} scheduled to start at {obs.scheduling_block_start}")
+
             # Start a timer to trigger on the next observation start time
             action = self.obs_start_next_timer(action)
 
@@ -452,48 +493,233 @@ class TelescopeManager(App):
             time_until_start_ms = int((next_obs.scheduling_block_start - datetime.now(timezone.utc)).total_seconds() * 1000)
             
             action.set_timer_action(Action.Timer(
-                name=f"observation_start_timer", 
+                name=f"obs_start_timer", 
                 timer_action=time_until_start_ms,
                 echo_data=next_obs))
             logger.info(f"Telescope Manager next observation {next_obs.obs_id} starting at {next_obs.scheduling_block_start} in {time_until_start_ms} ms")
 
         return action
 
-    def obs_resource_alloc(self, obs: Observation, action: Action) -> Action:
+    def obs_assign_resources(self, obs: Observation, action: Action) -> bool:
         """ Process an observation resource allocation request.
+            Grants an allocation request if the resource is available.
+            Requests an allocation if the resource is busy.
+            Will not create new allocation request if an existing request is pending.
+            Returns True if resources were successfully granted, False otherwise.
         """
-        logger.info(f"Telescope Manager processing RESOURCE ALLOCATION for observation {obs.obs_id}")
+        # Lookup the dish using the observation's dish_id
+        dish = next((dsh for dsh in self.telmodel.dsh_mgr.dish_store.dish_list if dsh.dsh_id == obs.dish_id), None)
 
-        # Extract required resources from observation
-        dish_id = obs.dish_id
-        dig_id = obs.dig_id
+        if dish is None:
+            logger.error(
+                f"Telescope Manager could not find Dish {obs.dish_id} in Dish Manager model. "
+                f"Cannot assign dish for observation {obs.obs_id}. Aborting observation.")
+            action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
+            return False
 
-        # Check for resource contention with existing observations
-        contending_obs = [existing_obs for existing_obs in self.telmodel.oda.obs_store.obs_list if existing_obs.dish_id == obs.dish_id and existing_obs.obs_id != obs.obs_id]
+        elif dish.capability_state not in [CapabilityState.OPERATE_FULL, CapabilityState.OPERATE_DEGRADED]:
+            logger.error(
+                f"Telescope Manager found Dish {obs.dish_id}, but it is not currently operational. Capability state {dish.capability_state.name}. "
+                f"Cannot assign dish for observation {obs.obs_id}. Aborting observation.")
+            action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
+            return False
 
-        # Handle each observation that is contending for resources
-        for existing_obs in contending_obs:
-                
-            if existing_obs.obs_state in [ObsState.CONFIGURING, ObsState.READY, ObsState.SCANNING, ObsState.ABORTED, ObsState.FAULT]:    
-                logger.error(f"Telescope Manager resource contention between observation {obs.obs_id} and {existing_obs.obs_id} for Dish {obs.dish_id}")
-                action = self.obs_abort(existing_obs, action)
-                action = self.obs_resource_dealloc(obs, action)
-            elif existing_obs.obs_state == ObsState.IDLE:
-                logger.info(f"Telescope Manager deallocating resource from observation {existing_obs.obs_id} to assign to observation {obs.obs_id}")
-                action = self.obs_resource_dealloc(existing_obs, action)
+        # Lookup the digitiser using the dig_id associated with the dish
+        digitiser = next((dig for dig in self.telmodel.dig_str.dig_list if dig.dig_id == dish.dig_id), None)
 
-        # Check for resource contention with existing observations AGAIN
-        contending_obs = [existing_obs for existing_obs in self.telmodel.oda.obs_store.obs_list if existing_obs.dish_id == obs.dish_id and existing_obs.obs_id != obs.obs_id]
+        if digitiser is None:
+            logger.error(
+                f"Telescope Manager found Dish {obs.dish_id}, but it is not associated with a Digitiser. "
+                f"Cannot assign digitiser to observation {obs.obs_id}. Aborting observation.")
+            action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
+            return False
 
-        if len(contending_obs) > 0:
-            logger.error(f"Telescope Manager unable to allocate resources for observation {obs.obs_id} due to existing resource contention")
-            obs.obs_state = ObsState.FAULT
-            obs.last_update = datetime.now(timezone.utc)
+        elif digitiser.app.health not in [HealthState.OK, HealthState.DEGRADED]:
+            logger.error(
+                f"Telescope Manager found Digitiser {digitiser.dig_id}, but it is not currently healthy. Health state {digitiser.app.health.name}. "
+                f"Cannot assign digitiser to observation {obs.obs_id}. Aborting observation.")
+            action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
+            return False
+
+        # Request new resource allocation for dish resources i.e. get in the queue
+        dish_req = self.telmodel.tel_mgr.allocations.request_allocation(
+            resource_type=ResourceType.DISH.value, 
+            resource_id=dish.dsh_id, 
+            allocated_type=ResourceType.OBS.value, 
+            allocated_id=obs.obs_id,
+            expires=obs.scheduling_block_end)
+
+        # Request new resource allocation for digitiser resources i.e. get in the queue
+        dig_req = self.telmodel.tel_mgr.allocations.request_allocation(
+            resource_type=ResourceType.DIGITISER.value, 
+            resource_id=digitiser.dig_id, 
+            allocated_type=ResourceType.OBS.value, 
+            allocated_id=obs.obs_id,
+            expires=obs.scheduling_block_end)
+
+        # Get current active allocation for dish resources 
+        dish_alloc = self.telmodel.tel_mgr.allocations.get_active_allocation(
+            resource_type=ResourceType.DISH.value, 
+            resource_id=dish.dsh_id)
+
+        # Get current active allocation for digitiser resources 
+        dig_alloc = self.telmodel.tel_mgr.allocations.get_active_allocation(
+            resource_type=ResourceType.DIGITISER.value, 
+            resource_id=digitiser.dig_id)
+
+        resources = [
+            {
+                "type": ResourceType.DISH.value,
+                "id": dish.dsh_id,
+                "req": dish_req,
+                "alloc": dish_alloc,
+            },
+            {
+                "type": ResourceType.DIGITISER.value,
+                "id": digitiser.dig_id,
+                "req": dig_req,
+                "alloc": dig_alloc,
+            },
+        ]
+
+        granted_all_resources = True   
+
+        # Grants or requests resource allocations as needed
+        for res in resources:
+            
+            if not self._handle_resource_allocation(
+                resource_type=res["type"],
+                resource_id=res["id"],
+                resource_req=res["req"],
+                resource_alloc=res["alloc"]
+            ):
+                granted_all_resources = False
+
+        return granted_all_resources
+
+    def obs_release_resources(self, obs: Observation, action: Action) -> bool:
+        """ Process an observation resource release request.
+            Returns true if at least one active resource was released, false otherwise.
+        """
+        released_active_resources = False
+        
+        # Find resource allocations for this observation
+        obs_allocs = self.telmodel.tel_mgr.allocations.get_allocations(allocated_type=ResourceType.OBS.value, allocated_id=obs.obs_id)
+        
+        # Release each allocation
+        for alloc in obs_allocs:
+
+            if alloc.state == AllocationState.ACTIVE:
+                released_active_resources = True
+
+            logger.info(
+                f"Telescope Manager releasing resource {alloc.resource_type} {alloc.resource_id} "
+                f"allocated to {alloc.allocated_type} {alloc.allocated_id} in state {alloc.state.name} "
+                f"with expiry {alloc.expires}")
+
+            self.telmodel.tel_mgr.allocations.release_allocation(alloc)
+            
+        return released_active_resources
+
+    def obs_configure_resources(self, obs: Observation,  action: Action) -> bool:
+        """ Process an observation resource configuration request.
+            Returns true if all resources are already configured, false if any resource still requires configuration.
+        """
+        logger.info(f"Telescope Manager processing Configure Resources for observation {obs.obs_id} scheduled to start at {obs.scheduling_block_start}")
+
+        already_configured = True
+
+        # Lookup the next target config for the observation
+        target_config = next((tgt_cfg for tgt_cfg in obs.target_configs if tgt_cfg.index == obs.next_tgt_index), None)
+
+        if target_config is None:
+            logger.error(f"Telescope Manager could not find next target config {obs.next_tgt_index} to execute for observation {obs.obs_id}. Nothing to configure.")
+            return already_configured
+
+        # Lookup the digitiser and dish model for this observation
+        dish = next((dsh for dsh in self.telmodel.dsh_mgr.dish_store.dish_list if dsh.dsh_id == obs.dish_id), None)
+
+        if dish is None:
+            logger.error(f"Telescope Manager could not find Dish {obs.dish_id} in Dish Manager model. Cannot configure dish for observation {obs.obs_id}.")
+            return already_configured
         else:
-            logger.info(f"Telescope Manager successfully allocated {obs.dish_id} for observation {obs.obs_id}")
-            obs.obs_state = ObsState.CONFIGURING
-            obs.last_update = datetime.now(timezone.utc)
+            # TBD: Add dish configuration logic here
+            pass
 
+        digitiser = next((dig for dig in self.telmodel.dig_str.dig_list if dig.dig_id == dish.dig_id), None)
+
+        # If we found a valid digitiser, check if it needs to be configured
+        if digitiser is not None:
+
+            old_dig_config = {}
+            new_dig_config = {}
+
+            # Check if target config parameters on the digitiser need to be adjusted
+            if digitiser.center_freq != target_config.center_freq:
+                old_dig_config['center_freq'] = digitiser.center_freq
+                new_dig_config['center_freq'] = target_config.center_freq
+            if digitiser.bandwidth != target_config.bandwidth:
+                old_dig_config['bandwidth'] = digitiser.bandwidth
+                new_dig_config['bandwidth'] = target_config.bandwidth
+            if digitiser.sample_rate != target_config.sample_rate:
+                old_dig_config['sample_rate'] = digitiser.sample_rate
+                new_dig_config['sample_rate'] = target_config.sample_rate
+            if digitiser.gain != target_config.gain:
+                old_dig_config['gain'] = digitiser.gain
+                new_dig_config['gain'] = target_config.gain
+
+            if len(new_dig_config) > 0:
+
+                already_configured = False
+
+                old_dig_config['dig_id'] = digitiser.dig_id
+                new_dig_config['dig_id'] = digitiser.dig_id
+                new_dig_config['obs_id'] = obs.obs_id
+
+                # Send configuration requests to the Digitiser
+                logger.info(f"Telescope Manager sending Digitiser configuration requests for observation {obs.obs_id} target config index {obs.next_tgt_index}")
+                action = self.update_dig_configuration(old_dig_config, new_dig_config, action)
+                
+            else:
+
+                logger.info(f"Telescope Manager found Digitiser already configured for observation {obs.obs_id} target config index {obs.next_tgt_index}")
+
+        return already_configured
+
+    def update_dig_configuration(self, old_config, new_config, action):
+
+        # Extract dig_id from the incoming DIG configuration event (JSON)
+        dig_id = new_config.get("dig_id", None)
+
+        for config_key in new_config.keys():
+            config_value = new_config[config_key]
+
+            # If key value is unchanged, skip it
+            if old_config and config_key in old_config and old_config[config_key] == config_value:
+                continue
+
+            logger.info(f"Digitiser configuration update for key: {config_key}, value: {config_value}")
+
+            property = method = value = None
+
+            (method, value) = map.get_method_name_value(config_key, config_value)
+            (property, value) = map.get_property_name_value(config_key, config_value) if method is None else (None, config_value)
+
+            if method is None and property is None:
+                logger.warning(f"Telescope Manager ignoring digitiser configuration item: {config_key}")
+                continue
+
+            logger.info(f"Sending digitiser configuration update for method: {method}, property: {property}, value: {value}")
+        
+            dig_req = self._construct_req_to_dig(entity=dig_id, property=property, method=method, value=value, message="")
+            dig_req.set_echo_data(new_config)
+            action.set_msg_to_remote(dig_req)
+
+            action.set_timer_action(Action.Timer(
+                name=f"dig_req_timer:{dig_req.get_timestamp()}", 
+                timer_action=self.telmodel.tel_mgr.app.msg_timeout_ms, 
+                echo_data=dig_req))
+                
         return action
 
     def get_health_state(self) -> HealthState:
@@ -603,6 +829,50 @@ class TelescopeManager(App):
             })
 
         return dig_req
+
+    def _handle_resource_allocation(self, *, resource_type, resource_id, resource_req, resource_alloc) -> bool:
+        """
+        Generic resource allocation handler.
+        Attempts to grant the resource allocation request if the resource is available.
+        Logs the result of the allocation attempt.
+        Returns True if the resource is granted, False otherwise.
+        """
+
+        # Resource is available
+        if resource_alloc is None:
+            try:
+                self.telmodel.tel_mgr.allocations.grant_allocation(resource_req)
+                logger.info(
+                    f"Telescope Manager successfully granted resource "
+                    f"{resource_type} {resource_id} to {resource_req.allocated_type} {resource_req.allocated_id}, "
+                    f"expiring at {resource_req.expires}"
+                )
+                return True
+            except XInvalidTransition as e:
+                logger.error(
+                    f"Telescope Manager failed to grant allocation for "
+                    f"{resource_type} {resource_id} to {resource_req.allocated_type} {resource_req.allocated_id}, "
+                    f"due to exception {e}"
+                )
+
+        # Already allocated 
+        elif resource_alloc.allocated_id == resource_req.allocated_id:
+            logger.info(
+                f"Telescope Manager already granted resource "
+                f"{resource_type} {resource_id} to {resource_alloc.allocated_type} {resource_alloc.allocated_id}, "
+                f"expiring at {resource_alloc.expires}"
+            )
+            return True
+
+        # Allocated to another observation
+        else:
+            logger.info(
+                f"Telescope Manager failed to grant allocation for "
+                f"{resource_type} {resource_id} to {resource_req.resource_type} {resource_req.resource_id}, "
+                f"because it is already allocated to {resource_alloc.resource_type} {resource_alloc.resource_id},"
+                f"expiring at {resource_alloc.expires}"
+            )
+        return False
 
 # Retry decorator for handling transient network errors
 def retry_on_timeout(max_retries=3, delay=5):
@@ -837,7 +1107,7 @@ def main():
                 last_tm_model_push = tm_latest_update
 
             # TM to UI Poll interval
-            time.sleep(TM_UI_POLL_INTERVAL_S) 
+            time.sleep(TM_UI_UPDATE_INTERVAL_S) 
     except KeyboardInterrupt:
         pass
     finally:

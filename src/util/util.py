@@ -2,9 +2,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from models.dsh import Feed
-
 import logging
 logger = logging.getLogger(__name__)
 
@@ -48,7 +45,7 @@ def dict_diff(old_dict, new_dict):
 
 def gen_file_prefix(
     dt:datetime,
-    feed:Feed,
+    load:bool,
     gain:float,
     duration:int,
     sample_rate:float,
@@ -59,7 +56,7 @@ def gen_file_prefix(
 
     """ Generate a filename prefix based on metadata parameters.
         :param dt: The datetime object representing the entity start time
-        :param feed: The feed type e.g. Feed.F1420_H3T
+        :param load: The load flag e.g. True or False
         :param gain: The gain setting e.g. 39.6 dB
         :param duration: The duration in seconds
         :param sample_rate: The sample rate e.g. 2.4e6 Hz
@@ -71,7 +68,7 @@ def gen_file_prefix(
     """
 
     return dt.strftime("%Y-%m-%dT%H%M%S") + \
-        "-f" + str(feed) + \
+        "-l" + str(load) + \
         "-g" + str(gain) + \
         "-du" + str(duration) + \
         "-bw" + str(round(sample_rate/1e6,2)) + \

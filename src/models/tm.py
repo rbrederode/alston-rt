@@ -17,6 +17,11 @@ class AllocationState(enum.IntEnum):
     ACTIVE = 2
     RELEASED = 3
 
+class ResourceType(enum.Enum):
+    DISH = "dish"
+    DIGITISER = "digitiser"
+    OBS = "observation"
+
 class Allocation(BaseModel):
     """A class representing a single resource allocation."""
 
@@ -146,7 +151,7 @@ class ResourceAllocations(BaseModel):
         """
         allocations = self.get_allocations(resource_type=resource_type, resource_id=resource_id, state=AllocationState.ACTIVE, include_expired=False)
         if len(allocations) > 1:
-            raise XSoftwareFailure(f"Resource Allocations found multiple active allocations for {resource_type}:{resource_id}")
+            raise XSoftwareFailure(f"Resource Allocations found multiple active allocations for {resource_type}:{resource_id}. There should be at most one active allocation per resource.")
         return allocations[0] if len(allocations)==1 else None
  
     def is_active_allocation(self, resource_type: str, resource_id: str) -> bool:
@@ -245,7 +250,7 @@ class TelescopeManagerModel(BaseModel):
         "_type": And(str, lambda v: v == "TelescopeManagerModel"),
         "id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
-        "resource_allocations": And(ResourceAllocations, lambda v: isinstance(v, ResourceAllocations)),
+        "allocations": And(ResourceAllocations, lambda v: isinstance(v, ResourceAllocations)),
         "sdp_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "dig_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "dm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
@@ -270,7 +275,7 @@ class TelescopeManagerModel(BaseModel):
                 last_update=datetime.now(timezone.utc),
             ),
             "id": "<undefined>",
-            "resource_allocations": ResourceAllocations(),
+            "allocations": ResourceAllocations(),
             "sdp_connected": CommunicationStatus.NOT_ESTABLISHED,
             "dig_connected": CommunicationStatus.NOT_ESTABLISHED,
             "dm_connected": CommunicationStatus.NOT_ESTABLISHED,

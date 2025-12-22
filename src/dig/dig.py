@@ -75,7 +75,7 @@ class Digitiser(App):
         arg_parser.add_argument("--sdp_port", type=int, required=False, help="TCP server port to connect to for downstream Science Data Processor transport", default=60000)
 
         arg_parser.add_argument("--local_host", type=str, required=True, help="Localhost (ip4 address) on which the digitiser is running e.g. 192.168.0.1", default="0.0.0.0")
-
+    
     def process_init(self) -> Action:
         """ Processes initialisation events.
         """
@@ -116,6 +116,18 @@ class Digitiser(App):
         """
         logger.debug(f"Digitiser received Telescope Manager message:\n{event}")
 
+        action = Action()
+
+         # If api call is a rsp msg, check whether it was successful
+        if api_call['msg_type'] == 'rsp':
+            # Stop the corresponding timer if applicable
+            dt = api_msg.get("timestamp")
+            if dt:
+                action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{dt}", timer_action=Action.Timer.TIMER_STOP, echo_data=api_msg))
+            if api_call.get('status') == 'error':
+                logger.error(f"Digitiser received negative acknowledgement from TM for api call\n{json.dumps(api_call, indent=2)}")
+            return Action()
+
         # Dispatch the API Call to a handler method
         dispatch = {
             "set": self.handle_field_set,
@@ -127,14 +139,13 @@ class Digitiser(App):
         result = dispatch.get(api_call['action_code'], lambda x: None)(api_call)
         status, message, value, payload = self._unpack_result(result)
 
-        action = Action()
-
         # If api call was a request that was successfully handled, prepare resultant actions 
         if api_call['msg_type'] == 'req' and status == tm_dig.STATUS_SUCCESS:
 
             # Check if the API call is a "set" action for the sample "streaming" property
             if api_call['action_code'] == tm_dig.ACTION_CODE_SET and api_call.get('property') == tm_dig.PROPERTY_STREAMING:
 
+                # Timer action 0 to start reading samples immediately, TIMER_STOP to stop reading samples
                 timer_action = 0 if self.dig_model.streaming else Action.Timer.TIMER_STOP
                     
                 # Start reading samples immediately (timer_action=0) else stop timers (timer_action=TIMER_STOP)

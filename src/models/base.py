@@ -134,6 +134,16 @@ class BaseModel:
 
         return {k: BaseModel._serialise(v) for k, v in self._data.items()}
 
+    def update_from_model(self, other: "BaseModel"):
+        """
+        Update all attributes of this instance from another BaseModel instance.
+        """
+        if not isinstance(other, self.__class__):
+            raise TypeError(f"BaseModel update_from_model expects an instance of {self.__class__.__name__}, got {type(other).__name__}")
+
+        for key, value in vars(other).items():
+            setattr(self, key, value)
+
     def save_to_disk(self, output_dir: str=None, filename: str=None):
         """ Save the model to a JSON file on disk. """
         import json
@@ -251,7 +261,7 @@ class BaseModel:
         from models.app import AppModel
         from models.comms import CommunicationStatus, InterfaceType
         from models.dig import DigitiserList, DigitiserModel
-        from models.dsh import DishMode, DishModel, DishList, DishManagerModel, Feed, PointingState, CapabilityStates
+        from models.dsh import DishMode, DishModel, DishList, DishManagerModel, Feed, PointingState, CapabilityState
         from models.health import HealthState
         from models.obs import ObsState, Observation
         from models.oda import ObsList, ScanStore, ODAModel
@@ -303,7 +313,7 @@ class BaseModel:
                 # Map class name to actual enum class
                 enum_class = {
                     "AllocationState": AllocationState,
-                    "CapabilityStates": CapabilityStates,
+                    "CapabilityState": CapabilityState,
                     "CommunicationStatus": CommunicationStatus,
                     "DishMode": DishMode,
                     "Feed": Feed,

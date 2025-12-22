@@ -58,20 +58,21 @@ class ObsState(enum.IntEnum):
     FAULT = 9
     """The observation has encountered an error."""
 
-class ObsEvent (enum.IntEnum):
-    """Python enumerated type for observation events."""
+class ObsTransition (enum.IntEnum):
+    """Python enumerated type for observation workflow transitions."""
 
-    CREATE = 1
-    RESOURCE_ALLOC = 2
-    RESOURCE_DEALLOC = 3
-    CONFIG_UPDATE = 4
-    READY = 5
-    SCAN_STARTED = 6
-    SCAN_COMPLETED = 7
-    ERROR = 8
-    RESET = 9
+    START = 1
+    ASSIGN_RESOURCES = 2
+    RELEASE_RESOURCES = 3
+    CONFIGURE_RESOURCES = 4
+    CONFIGURE_ABORTED = 5
+    READY = 6
+    SCAN_STARTED = 7
+    SCAN_COMPLETED = 8
+    SCAN_ENDED = 9
     ABORT = 10
-
+    FAULT_OCCURRED = 11
+    RESET = 12
 
 class Observation(BaseModel):
     """A class representing a model of an observation"""
@@ -84,6 +85,7 @@ class Observation(BaseModel):
         "obs_state": And(ObsState, lambda v: isinstance(v, ObsState)),
 
         "target_configs": And(list, lambda v: isinstance(v, list)),             # List of targets and associated configurations
+        "next_tgt_index": And(int, lambda v: isinstance(v, int)),               # Index of the next target config to be observed (1-based)
 
         "dish_id": And(Or(None, str), lambda v: v is None or isinstance(v, str)),# Dish identifier e.g. "dish001"
         "capabilities": And(str, lambda v: isinstance(v, str)),                 # Dish capabilities e.g. "Drift Scan over Zenith"
@@ -128,9 +130,9 @@ class Observation(BaseModel):
     allowed_transitions = {
         "obs_state": {
             ObsState.EMPTY: {ObsState.EMPTY, ObsState.IDLE, ObsState.FAULT, ObsState.ABORTED},
-            ObsState.IDLE: {ObsState.CONFIGURING, ObsState.FAULT, ObsState.ABORTED},
-            ObsState.CONFIGURING: {ObsState.READY, ObsState.FAULT, ObsState.ABORTED},
-            ObsState.READY: {ObsState.SCANNING, ObsState.IDLE, ObsState.FAULT, ObsState.ABORTED},
+            ObsState.IDLE: {ObsState.IDLE,ObsState.CONFIGURING, ObsState.FAULT, ObsState.ABORTED},
+            ObsState.CONFIGURING: {ObsState.CONFIGURING,ObsState.READY, ObsState.FAULT, ObsState.ABORTED},
+            ObsState.READY: {ObsState.READY, ObsState.SCANNING, ObsState.IDLE, ObsState.FAULT, ObsState.ABORTED},
             ObsState.SCANNING: {ObsState.READY, ObsState.FAULT, ObsState.ABORTED},
             ObsState.ABORTED: {ObsState.IDLE},
         }
@@ -146,6 +148,7 @@ class Observation(BaseModel):
             "description": "",
             "obs_state": ObsState.EMPTY,
             "target_configs": [],
+            "next_tgt_index": 1,
             "dish_id": None,
             "capabilities": "",
             "diameter": 0.0,
@@ -190,15 +193,18 @@ class Observation(BaseModel):
             :param output_dir: Directory where the file will be saved
             :returns: True if the data was saved successfully, False otherwise
         """
-        filename = f"{output_dir}/{self.obs_id}-obs.json"
+        filename = f"{self.obs_id}-obs.json"
 
         try:
-            super().save_to_disk(filename)
+            super().save_to_disk(output_dir, filename)
             return True
         except XAPIValidationFailed as e:
             raise XSoftwareFailure(f"Failed to save Observation {self.obs_id} to disk due to validation error: {e}")
         except Exception as e:
             raise XSoftwareFailure(f"Failed to save Observation {self.obs_id} to disk due to unexpected error: {e}")
+
+    def __str__(self):
+        return f"Observation(obs_id={self.obs_id}, obs_state={self.obs_state.name})"
 
                 
 if __name__ == "__main__":

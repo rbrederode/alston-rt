@@ -56,7 +56,7 @@ STATUS = (
 
 # Meta data properties 
 PROPERTY_DIG_ID          = 'dig_id'           # Digitiser Id
-PROPERTY_FEED            = 'feed'             # Feed type
+PROPERTY_LOAD            = 'load'             # Load flag
 PROPERTY_CENTER_FREQ     = 'center_freq'      # Center frequency in Hz
 PROPERTY_SAMPLE_RATE     = 'sample_rate'      # Sample rate in samples per second
 PROPERTY_BANDWIDTH       = 'bandwidth'        # Bandwidth in Hz
@@ -67,7 +67,7 @@ PROPERTY_READ_END        = 'read_end'         # Epoch seconds corresponding to e
 
 PROPERTIES = (
     PROPERTY_DIG_ID,
-    PROPERTY_FEED,
+    PROPERTY_LOAD,
     PROPERTY_CENTER_FREQ,
     PROPERTY_SAMPLE_RATE,
     PROPERTY_BANDWIDTH,

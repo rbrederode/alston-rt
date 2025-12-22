@@ -6,7 +6,6 @@ import json
 import os
 from datetime import datetime, timezone
 
-from models.dsh import Feed
 from models.scan import ScanModel, ScanState
 from util import gen_file_prefix
 from util.xbase import XSoftwareFailure
@@ -30,7 +29,7 @@ class Scan:
                 channels: Number of channels (FFT size) for the analysis
                 center_freq: Center frequency of the samples in Hz (optional)
                 gain: Gain in dB (optional)
-                feed: Feed Id (optional)
+                load: Load flag (optional)
         """
 
         with Scan._id_lock:
@@ -207,10 +206,6 @@ class Scan:
             :param include_iq: Whether to flush the IQ data or not (default is False)
             :returns: True if the data was saved successfully, False otherwise
         """
-        
-        if self.scan_model.feed is None:
-            logger.warning(f"Scan {self} - Feed Id is not set. Cannot save scan to disk.")
-            return False
 
         if self.scan_model.status != ScanState.COMPLETE:
             logger.warning(f"Scan - Saving an incomplete scan: {self}.")
@@ -222,7 +217,7 @@ class Scan:
         os.makedirs(output_dir, exist_ok=True)
 
         prefix = gen_file_prefix(
-            dt=self.scan_model.read_start, feed=self.scan_model.feed, gain=self.scan_model.gain, 
+            dt=self.scan_model.read_start, load=self.scan_model.load, gain=self.scan_model.gain, 
             duration=self.scan_model.duration, sample_rate=self.scan_model.sample_rate, center_freq=self.scan_model.center_freq, 
             channels=self.scan_model.channels, entity_id=self.scan_model.scan_id
         )
@@ -237,7 +232,7 @@ class Scan:
             with open(f"{output_dir}/{filename}", 'w') as f:
                 json.dump(self.get_scan_meta(), f, indent=4)  
 
-            filename = prefix + "-load" + ".csv" if self.scan_model.feed == Feed.LOAD else prefix + "-spr" + ".csv"
+            filename = prefix + "-load" + ".csv" if self.scan_model.load else prefix + "-spr" + ".csv"
             with open(f"{output_dir}/{filename}", 'w') as f:
                 np.savetxt(f, self.spr, delimiter=",", fmt="%.6f")
         
@@ -295,7 +290,7 @@ class Scan:
         try:
             self.init_data_arrays()
 
-            prefix = gen_file_prefix(dt=self.scan_model.read_start, feed=self.scan_model.feed, gain=self.scan_model.gain, 
+            prefix = gen_file_prefix(dt=self.scan_model.read_start, load=self.scan_model.load, gain=self.scan_model.gain, 
                 duration=self.scan_model.duration, sample_rate=self.scan_model.sample_rate, center_freq=self.scan_model.center_freq, 
                 channels=self.scan_model.channels, entity_id=self.scan_model.scan_id)
 
@@ -323,7 +318,7 @@ class Scan:
                 self.loaded_secs = [True] * self.scan_model.duration
             else:
                 # Load summed power spectrum only
-                filename = prefix + "-load" + ".csv" if self.scan_model.feed == Feed.NONE else prefix + "-spr" + ".csv"
+                filename = prefix + "-load" + ".csv" if self.scan_model.load else prefix + "-spr" + ".csv"
                 with open(f"{input_dir}/{filename}", 'r') as f:
                     self.spr = np.loadtxt(f, delimiter=",")
                     self.spr = self.spr.reshape(-1, self.scan_model.channels)
@@ -404,7 +399,7 @@ if __name__ == "__main__":
         channels=1024,
         center_freq=1420400000,
         gain=12,
-        feed=Feed.H3T_1420,
+        load=False,
         status="WIP",
         load_failures=0,
         last_update=datetime.now(timezone.utc)

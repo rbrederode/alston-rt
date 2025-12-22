@@ -32,7 +32,7 @@ class DishMode(enum.IntEnum):
     OPERATE = 7
     UNKNOWN = 8
 
-class CapabilityStates(enum.IntEnum):
+class CapabilityState(enum.IntEnum):
     UNAVAILABLE = 0
     STANDBY = 1
     CONFIGURING = 2
@@ -60,10 +60,11 @@ class DishModel(BaseModel):
         "longitude": And(Or(int, float), lambda v: -180.0 <= v <= 180.0),                       # Dish longitude (degrees)
         "height": And(Or(int, float), lambda v: v >= 0.0),                                      # Dish height (meters) above sea level
         "feed": And(Feed, lambda v: isinstance(v, Feed)),                                       # Current feed installed on the dish
+        "dig_id": Or(None, And(str, lambda v: isinstance(v, str))),                             # Current digitiser id assigned to the dish
         "mode": And(DishMode, lambda v: isinstance(v, DishMode)),
         "pointing_state": And(PointingState, lambda v: isinstance(v, PointingState)),
         "altaz": Or(None, And(AltAz, lambda v: isinstance(v, AltAz))),                          # Current alt-az pointing direction
-        "capability_state": And(CapabilityStates, lambda v: isinstance(v, CapabilityStates)),
+        "capability_state": And(CapabilityState, lambda v: isinstance(v, CapabilityState)),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -98,7 +99,7 @@ class DishModel(BaseModel):
             "mode": DishMode.UNKNOWN,
             "pointing_state": PointingState.UNKNOWN,
             "altaz": None,
-            "capability_state": CapabilityStates.UNKNOWN,
+            "capability_state": CapabilityState.UNKNOWN,
             "last_update": datetime.now(timezone.utc),
         }
 
@@ -131,7 +132,8 @@ class DishList(BaseModel):
             mode=DishMode.STARTUP,
             pointing_state=PointingState.UNKNOWN,
             feed=Feed.H3T_1420,
-            capability_state=CapabilityStates.OPERATE_FULL,
+            dig_id="dig001",
+            capability_state=CapabilityState.OPERATE_FULL,
             last_update=datetime.now(timezone.utc)
         )
 
@@ -144,7 +146,8 @@ class DishList(BaseModel):
             mode=DishMode.STARTUP,
             pointing_state=PointingState.UNKNOWN,
             feed=Feed.NONE,
-            capability_state=CapabilityStates.OPERATE_FULL,
+            dig_id="dig002",
+            capability_state=CapabilityState.OPERATE_FULL,
             last_update=datetime.now(timezone.utc)
         )
 
@@ -213,7 +216,7 @@ if __name__ == "__main__":
         mode=DishMode.STARTUP,
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
-        capability_state=CapabilityStates.UNKNOWN,
+        capability_state=CapabilityState.UNKNOWN,
         last_update=datetime.now(timezone.utc)
     )
 
@@ -260,7 +263,7 @@ if __name__ == "__main__":
                     mode=DishMode.STARTUP,
                     pointing_state=PointingState.UNKNOWN,
                     feed=Feed.NONE,
-                    capability_state=CapabilityStates.UNKNOWN,
+                    capability_state=CapabilityState.UNKNOWN,
                     last_update=datetime.now(timezone.utc)
                 )
             ],
@@ -290,7 +293,7 @@ if __name__ == "__main__":
         mode=DishMode.STARTUP,
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
-        capability_state=CapabilityStates.UNKNOWN,
+        capability_state=CapabilityState.UNKNOWN,
         last_update=datetime.now(timezone.utc)
     )
     dsh_mgr.dish_store.dish_list.append(new_dish)
