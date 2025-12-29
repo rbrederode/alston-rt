@@ -23,6 +23,7 @@ class DigitiserModel(BaseModel):
         "_type": And(str, lambda v: v == "DigitiserModel"),
         "dig_id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
+        "load": And(bool, lambda v: isinstance(v, bool)),
         "gain": And(float, lambda v: 0 <= v <= 100.0),
         "sample_rate": And(float, lambda v: v >= 0.0),
         "bandwidth": And(float, lambda v: v >= 0.0),
@@ -54,6 +55,7 @@ class DigitiserModel(BaseModel):
                 health=HealthState.UNKNOWN,
                 last_update=datetime.now(timezone.utc),
             ),
+            "load": False,
             "gain": 0.0,
             "sample_rate": 0.0,
             "bandwidth": 0.0,
@@ -117,6 +119,7 @@ if __name__ == "__main__":
             health=HealthState.UNKNOWN,
             last_update=datetime.now()
         ),
+        load=False,
         gain=0.0,
         sample_rate=0.0,
         bandwidth=0.0,

@@ -285,7 +285,7 @@ class APIMessage(AppMessage):
         if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
             raise XStreamUnableToEncode("APIMessage: dt must be timezone-aware and in UTC timezone.")
 
-        self.json_api_header_dict["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        self.json_api_header_dict["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
     def set_from(self, from_system: str):
         """

@@ -28,8 +28,8 @@ class TelescopeModel:
         self.oda = ODAModel(id="oda001")                            # Observation Data Archive model
         self.tel_mgr = TelescopeManagerModel(id="telmgr001")        # Telescope Manager (App) model
         self.dsh_mgr = DishManagerModel(id="dshmgr001")             # Dish Manager (App) model
-        self.dig_str = DigitiserList(list_id="diglist001")          # Digitiser store (just a list of digitisers)
-        self.sdp = ScienceDataProcessorModel(id="sdp001")           # Science Data Processor (App) model
+        self.dig_store = DigitiserList(list_id="diglist001")        # Digitiser store (just a list of digitisers)
+        self.sdp = ScienceDataProcessorModel(sdp_id="sdp001")       # Science Data Processor (App) model
     
     def save_to_disk(self):
         # Implement disk saving logic here
@@ -44,7 +44,7 @@ class TelescopeModel:
             "oda": self.oda.to_dict(),
             "tel_mgr": self.tel_mgr.to_dict(),
             "dsh_mgr": self.dsh_mgr.to_dict(),
-            "dig_str": self.dig_str.to_dict(),
+            "dig_store": self.dig_store.to_dict(),
             "sdp": self.sdp.to_dict()
         }
 

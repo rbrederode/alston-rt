@@ -85,7 +85,8 @@ class Observation(BaseModel):
         "obs_state": And(ObsState, lambda v: isinstance(v, ObsState)),
 
         "target_configs": And(list, lambda v: isinstance(v, list)),             # List of targets and associated configurations
-        "next_tgt_index": And(int, lambda v: isinstance(v, int)),               # Index of the next target config to be observed (1-based)
+        "next_tgt_index": And(int, lambda v: isinstance(v, int)),               # Index of the next target config to be observed (0-based)
+        "next_tgt_scan": And(int, lambda v: isinstance(v, int)),                # Index of the next scan (in the target config) to be observed (0-based)
 
         "dish_id": And(Or(None, str), lambda v: v is None or isinstance(v, str)),# Dish identifier e.g. "dish001"
         "capabilities": And(str, lambda v: isinstance(v, str)),                 # Dish capabilities e.g. "Drift Scan over Zenith"
@@ -102,16 +103,6 @@ class Observation(BaseModel):
 
         "created": And(Or(None, datetime), lambda v: v is None or isinstance(v, datetime)),  # Creation datetime (UTC)
         "user_email": And(str, lambda v: isinstance(v, str)),                   # User email that created the observation
-
-        "freq_min": And(Or(None, float), lambda v: v is None or v >= 0.0),      # Start of frequency scanning (Hz)
-        "freq_max": And(Or(None, float), lambda v: v is None or v >= 0.0),      # End of frequency scanning (Hz)
-        "freq_scans": And(Or(None, int), lambda v: v is None or v >= 0),        # Number of frequency scans
-        "freq_overlap": And(Or(None, float), lambda v: v is None or v >= 0.0),  # Overlap between frequency scans (Hz)
-        "freq_duration": And(Or(None, float), lambda v: v is None or v >= 0.0), # Duration of each frequency scan (seconds)
-        "scan_iterations": And(Or(None, int), lambda v: v is None or v >= 0),   # Number of scan iterations (within a frequency scan)
-        "scan_duration": And(Or(None, float), lambda v: v is None or v >= 0.0), # Duration of each scan (seconds)
-
-        "scans": And(list, lambda v: isinstance(v, list)),                      # List of scans to be performed for this observation
 
         "start_dt": And(datetime, lambda v: isinstance(v, datetime)),           # Start datetime (UTC) of the observation 
         "end_dt": And(datetime, lambda v: isinstance(v, datetime)),             # End datetime (UTC) of the observation
@@ -132,9 +123,9 @@ class Observation(BaseModel):
             ObsState.EMPTY: {ObsState.EMPTY, ObsState.IDLE, ObsState.FAULT, ObsState.ABORTED},
             ObsState.IDLE: {ObsState.IDLE,ObsState.CONFIGURING, ObsState.FAULT, ObsState.ABORTED},
             ObsState.CONFIGURING: {ObsState.CONFIGURING,ObsState.READY, ObsState.FAULT, ObsState.ABORTED},
-            ObsState.READY: {ObsState.READY, ObsState.SCANNING, ObsState.IDLE, ObsState.FAULT, ObsState.ABORTED},
+            ObsState.READY: {ObsState.CONFIGURING, ObsState.READY, ObsState.SCANNING, ObsState.IDLE, ObsState.FAULT, ObsState.ABORTED},
             ObsState.SCANNING: {ObsState.READY, ObsState.FAULT, ObsState.ABORTED},
-            ObsState.ABORTED: {ObsState.IDLE},
+            ObsState.ABORTED: {ObsState.ABORTED, ObsState.IDLE},
         }
     }
 
@@ -148,7 +139,8 @@ class Observation(BaseModel):
             "description": "",
             "obs_state": ObsState.EMPTY,
             "target_configs": [],
-            "next_tgt_index": 1,
+            "next_tgt_index": 0,
+            "next_tgt_scan": 0,
             "dish_id": None,
             "capabilities": "",
             "diameter": 0.0,
@@ -163,14 +155,6 @@ class Observation(BaseModel):
             "created": None,
             "user_email": "",
 
-            "freq_min": None,
-            "freq_max": None,
-            "freq_scans": None,
-            "freq_overlap": None,
-            "freq_duration": None,
-            "scan_iterations": None,
-            "scan_duration": None,
-            "scans": [],
             "start_dt": datetime.now(timezone.utc),
             "end_dt": datetime.now(timezone.utc),
             "tsys_calibrators": [],

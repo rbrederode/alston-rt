@@ -70,11 +70,14 @@ class DishModel(BaseModel):
 
     allowed_transitions = {
         "mode": {
-            DishMode.UNKNOWN: {DishMode.STARTUP},
-            DishMode.STARTUP: {DishMode.STANDBY_LP, DishMode.STANDBY_FP},
-            DishMode.STANDBY_LP: {DishMode.CONFIG, DishMode.SHUTDOWN},
-            DishMode.CONFIG: {DishMode.OPERATE, DishMode.MAINTENANCE},
-            DishMode.OPERATE: {DishMode.STANDBY_FP, DishMode.STOW},
+            DishMode.UNKNOWN: {DishMode.STARTUP, DishMode.SHUTDOWN},
+            DishMode.STARTUP: {DishMode.STANDBY_LP, DishMode.STANDBY_FP, DishMode.STOW, DishMode.SHUTDOWN},
+            DishMode.STANDBY_LP: {DishMode.STANDBY_FP, DishMode.CONFIG, DishMode.STOW, DishMode.SHUTDOWN},
+            DishMode.STANDBY_FP: {DishMode.STANDBY_LP, DishMode.CONFIG, DishMode.STOW, DishMode.SHUTDOWN},
+            DishMode.CONFIG: {DishMode.OPERATE, DishMode.MAINTENANCE, DishMode.STOW, DishMode.SHUTDOWN},
+            DishMode.STOW: {DishMode.STANDBY_LP, DishMode.STANDBY_FP, DishMode.CONFIG, DishMode.MAINTENANCE, DishMode.SHUTDOWN},
+            DishMode.MAINTENANCE: {DishMode.STOW, DishMode.SHUTDOWN},
+            DishMode.OPERATE: {DishMode.STANDBY_FP, DishMode.STANDBY_LP, DishMode.CONFIG, DishMode.STOW, DishMode.SHUTDOWN},
         },
         "pointing_state": {
             PointingState.UNKNOWN: {PointingState.READY},
@@ -96,6 +99,7 @@ class DishModel(BaseModel):
             "longitude": 0.0,
             "height": 0.0,
             "feed": Feed.NONE,
+            "dig_id": None,
             "mode": DishMode.UNKNOWN,
             "pointing_state": PointingState.UNKNOWN,
             "altaz": None,
@@ -129,7 +133,7 @@ class DishList(BaseModel):
             diameter=0.7,
             fd_ratio=0.37,
             latitude=53.187052, longitude=-2.256079, height=94.0,
-            mode=DishMode.STARTUP,
+            mode=DishMode.STANDBY_FP,
             pointing_state=PointingState.UNKNOWN,
             feed=Feed.H3T_1420,
             dig_id="dig001",
@@ -143,7 +147,7 @@ class DishList(BaseModel):
             diameter=3.0,
             fd_ratio=0.43,
             latitude=53.2421, longitude=-2.3067, height=80.0,
-            mode=DishMode.STARTUP,
+            mode=DishMode.STANDBY_FP,
             pointing_state=PointingState.UNKNOWN,
             feed=Feed.NONE,
             dig_id="dig002",
@@ -216,6 +220,7 @@ if __name__ == "__main__":
         mode=DishMode.STARTUP,
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
+        dig_id="dig001",
         capability_state=CapabilityState.UNKNOWN,
         last_update=datetime.now(timezone.utc)
     )
@@ -293,6 +298,7 @@ if __name__ == "__main__":
         mode=DishMode.STARTUP,
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
+        dig_id="dig002",
         capability_state=CapabilityState.UNKNOWN,
         last_update=datetime.now(timezone.utc)
     )

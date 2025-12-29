@@ -13,13 +13,14 @@ from ipc.action import Action
 from ipc.message import AppMessage
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
+from models.base import BaseModel
 from models.comms import CommunicationStatus, InterfaceType
 from models.health import HealthState
 from models.scan import ScanModel, ScanState
 from models.sdp import ScienceDataProcessorModel
 from obs.scan import Scan
 from signal_display import SignalDisplay
-from util import log
+from util import log, util
 from util.xbase import XBase, XStreamUnableToExtract
 
 #OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 class SDP(App):
 
-    sdp_model = ScienceDataProcessorModel(id="sdp001")
+    sdp_model = ScienceDataProcessorModel(sdp_id="sdp001")
 
     def __init__(self, app_name: str = "sdp"):
 
@@ -54,15 +55,14 @@ class SDP(App):
         self.dig_endpoint.start()
         # Register Digitiser interface with the App
         self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint, InterfaceType.ENTITY_DRIVER)
-        # Set initial Digitiser connection status
-        self.sdp_model.dig_connected = CommunicationStatus.NOT_ESTABLISHED
+        # Entity drivers maintain comms status per entity, so no need to initialise comms status here
 
         # Queue to hold scans to be processed
         self.scan_q = Queue()            # Queue of scans to load and process
         self._rlock = threading.RLock()  # Lock for thread-safe access to shared resources
         self.capture = True              # Flag to enable/disable sample capture
 
-        self.signal_display = SignalDisplay()  # Signal display object (optional, for interactive display)
+        self.signal_displays = {}        # Dictionary to hold SignalDisplay objects for each digitiser
 
     def add_args(self, arg_parser): 
         """ Specifies the science data processors command line arguments.
@@ -82,46 +82,68 @@ class SDP(App):
         """
         logger.debug(f"SDP initialisation event")
 
+        # Load Digitiser configuration from disk
+        # Config file is located in ./config/<profile>/<model>.json
+        # Config file defines initial list of digitisers to be processed by the SDP
+        input_dir = f"./config/{self.get_args().profile}"
+        dig_store = self.sdp_model.dig_store.load_from_disk(input_dir=input_dir, filename="DigitiserList.json")
+
+        if dig_store is not None:
+            self.sdp_model.dig_store = dig_store
+            logger.info(f"Science Data Processor loaded Digitiser configuration from {input_dir}")
+        else:
+            logger.warning(f"Science Data Processor could not load Digitiser configuration from {input_dir}")
+
         action = Action()
         return action
 
-    def process_dig_connected(self, event) -> Action:
+    def get_dig_entity(self, event) -> (str, BaseModel):
+        """ Determines the digitiser entity ID based on the remote address of a ConnectEvent, DisconnectEvent, or DataEvent.
+            Returns a tuple of the entity ID and entity if found, else None, None.
+        """
+        logger.debug(f"Finding digitiser entity ID for remote address: {event.remote_addr[0]}")
+
+        for digitiser in self.sdp_model.dig_store.dig_list:
+
+            if isinstance(digitiser.app.arguments, dict) and "local_host" in digitiser.app.arguments:
+
+                if digitiser.app.arguments["local_host"] == event.remote_addr[0]:
+                    logger.info(f"Found digitiser entity ID: {digitiser.dig_id} for remote address: {event.remote_addr}")
+                    return digitiser.dig_id, digitiser
+            else:
+                logger.warning(f"Digitiser {digitiser.dig_id} is not configured with a valid local_host argument to match against remote address: {event.remote_addr[0]}")
+
+        return None, None
+
+    def process_dig_entity_connected(self, event, entity) -> Action:
         """ Processes Digitiser connected events.
         """
-        logger.info(f"Science Data Processor connected to Digitiser: {event.remote_addr}")
-
-        self.sdp_model.dig_connected = CommunicationStatus.ESTABLISHED
+        logger.info(f"Science Data Processor connected to Digitiser entity on {event.remote_addr}\n{entity}")
+        
+        digitiser: DigitiserModel = entity
+        digitiser.sdp_connected = CommunicationStatus.ESTABLISHED
 
         action = Action()
-
-        if self.sdp_model.tm_connected == CommunicationStatus.ESTABLISHED:
-            # Send status advice message to Telescope Manager
-            tm_adv = self._construct_status_adv_to_tm()
-            action.set_msg_to_remote(tm_adv)
-
         return action
 
-    def process_dig_disconnected(self, event) -> Action:
+    def process_dig_entity_disconnected(self, event, entity) -> Action:
         """ Processes Digitiser disconnected events.
         """
-        logger.info(f"Science Data Processor disconnected from Digitiser: {event.remote_addr}")
+        logger.info(f"Science Data Processor disconnected from Digitiser entity on {event.remote_addr}\n{entity}")
 
-        self.sdp_model.dig_connected = CommunicationStatus.NOT_ESTABLISHED
+        digitiser: DigitiserModel = entity
+        digitiser.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
 
         action = Action()
-
-        if self.sdp_model.tm_connected == CommunicationStatus.ESTABLISHED:
-            # Send status advice message to Telescope Manager
-            tm_adv = self._construct_status_adv_to_tm()
-            action.set_msg_to_remote(tm_adv)
-
         return action
         
-    def process_dig_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
+    def process_dig_entity_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray, entity: BaseModel) -> Action:
         """ Processes api messages received on the Digitiser service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
-        logger.info(f"Science Data Processor received digitiser {api_call['msg_type']} message with action code: {api_call['action_code']}")
+        logger.info(f"Science Data Processor received digitiser {api_call['msg_type']} msg with action code: {api_call['action_code']} on entity: {api_msg['entity']}")
+
+        digitiser: DigitiserModel = entity
 
         status, message = sdp_dig.STATUS_SUCCESS, "Acknowledged"
 
@@ -172,7 +194,9 @@ class SDP(App):
                     if read_counter >= start_idx and read_counter <= end_idx:
 
                         # Verify that the digitiser metadata still matches the scan parameters
-                        if scan.scan_model.center_freq == center_freq:
+                        if scan.scan_model.center_freq == center_freq and scan.scan_model.sample_rate == sample_rate and \
+                            scan.scan_model.load == load and scan.scan_model.channels == self.sdp_model.channels and \
+                            scan.scan_model.duration == self.sdp_model.scan_duration:
                             match = scan
                             break
                         else:
@@ -278,6 +302,44 @@ class SDP(App):
         logger.info(f"Science Data Processor received Telescope Manager {api_call['msg_type']} message with action code: {api_call['action_code']}")
 
         action = Action()
+
+         # If api call is a rsp msg, check whether it was successful
+        if api_call['msg_type'] == 'rsp':
+            # Stop the corresponding timer if applicable
+            dt = api_msg.get("timestamp")
+            if dt:
+                action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{dt}", timer_action=Action.Timer.TIMER_STOP, echo_data=api_msg))
+            if api_call.get('status') == 'error':
+                logger.error(f"Science Data Processor received negative acknowledgement from TM for api call\n{json.dumps(api_call, indent=2)}")
+            return Action()
+
+        # Dispatch the API Call to a handler method
+        dispatch = {
+            "set": self.handle_field_set,
+            "get": self.handle_field_get,
+        }
+
+        # Invoke handler method to process the api call
+        result = dispatch.get(api_call['action_code'], lambda x: None)(api_call)
+        status, message, value, payload = util.unpack_result(result)
+              
+        # Prepare rsp msg to tm containing result of initial api call
+        tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
+        tm_rsp.switch_from_to()
+        tm_rsp_api_call = {
+            "msg_type": "rsp", 
+            "action_code": api_call['action_code'], 
+            "status": status, 
+        }
+        if api_call.get('property') is not None:
+            tm_rsp_api_call["property"] = api_call['property']
+        if value is not None:
+            tm_rsp_api_call["value"] = value 
+        if message is not None:
+            tm_rsp_api_call["message"] = message
+
+        tm_rsp.set_api_call(tm_rsp_api_call)       
+        action.set_msg_to_remote(tm_rsp)
         return action
 
     def process_timer_event(self, event) -> Action:
@@ -305,12 +367,53 @@ class SDP(App):
     def get_health_state(self) -> HealthState:
         """ Returns the current health state of this application.
         """
-        if self.sdp_model.dig_connected != CommunicationStatus.ESTABLISHED:
-            return HealthState.DEGRADED
-        elif self.sdp_model.tm_connected != CommunicationStatus.ESTABLISHED:
+        if self.sdp_model.tm_connected != CommunicationStatus.ESTABLISHED:
+            return HealthState.FAILED
+        elif any(dig.tm_connected != CommunicationStatus.ESTABLISHED for dig in self.sdp_model.dig_store.dig_list):
             return HealthState.DEGRADED
         else:
             return HealthState.OK
+
+    def handle_field_get(self, api_call):
+        """ Handles field get api calls.
+                : returns: (status, message, value, payload)
+        """
+        prop_name = api_call['property']
+
+        try:
+            if prop_name in self.sdp_model.schema.schema:
+                value = getattr(self.sdp_model, prop_name)
+                logger.info(f"Science Data Processor {prop_name} get to {value}")
+            else:
+                logger.error(f"Science Data Processor unknown property {prop_name} get request")
+                return tm_sdp.STATUS_ERROR, f"Science Data Processor unknown property {prop_name}", None, None
+        
+        except XSoftwareFailure as e:
+            logger.exception(f"Science Data Processor failed to get property {prop_name}: {e}")
+            return tm_sdp.STATUS_ERROR, f"Science Data Processor failed to get property {prop_name}: {e}", None, None
+
+        return tm_sdp.STATUS_SUCCESS, f"Science Data Processor get property {prop_name} value {value}", value, None
+
+    def handle_field_set(self, api_call):
+        """ Handles field set api calls.
+                : returns: (status, message, value, payload)
+        """
+        prop_name = api_call['property']
+        prop_value = api_call['value']
+
+        try:
+            if prop_name in self.sdp_model.schema.schema:
+                setattr(self.sdp_model, prop_name, prop_value)
+                logger.info(f"Science Data Processor {prop_name} set to {prop_value}")
+            else:
+                logger.error(f"Science Data Processor unknown property {prop_name} with value {prop_value}")
+                return tm_sdp.STATUS_ERROR, f"Science Data Processor unknown property {prop_name}", None, None
+        
+        except XSoftwareFailure as e:
+            logger.exception(f"Science Data Processor failed to set property {prop_name} to {prop_value}: {e}")
+            return tm_sdp.STATUS_ERROR, f"Science Data Processor failed to set property {prop_name} to {prop_value}: {e}", None, None
+
+        return tm_sdp.STATUS_SUCCESS, f"Science Data Processor set property {prop_name} to {prop_value}", prop_value, None
 
     def _construct_status_adv_to_tm(self) -> APIMessage:
         """ Constructs a status advice message for the Telescope Manager.
@@ -378,18 +481,23 @@ def main():
                 time.sleep(0.1)
                 continue
 
-            sdp.signal_display.set_scan(scan)
+            # If there is no signal display for this digitiser, create one
+            dig_id = scan.scan_model.dig_id
+            if dig_id not in sdp.signal_displays:
+                sdp.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
+
+            sdp.signal_displays[dig_id].set_scan(scan)
 
             # Call display while the scan is being loaded 
             # Scan will transition to "Complete" or "Aborted" when done
             # This allows for interactive display of the scan as samples are loaded
             while scan.get_status() == ScanState.WIP:
-                sdp.signal_display.display()
+                sdp.signal_displays[dig_id].display()
                 time.sleep(1)  # Update display every second
             
             # Final display call to ensure complete rendering
-            sdp.signal_display.display()
-            sdp.signal_display.save_scan_figure(output_dir=sdp.get_args().output_dir)
+            sdp.signal_displays[dig_id].display()
+            sdp.signal_displays[dig_id].save_scan_figure(output_dir=sdp.get_args().output_dir)
                 
     except KeyboardInterrupt:
         pass

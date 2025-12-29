@@ -291,7 +291,7 @@ class AppProcessor(Processor):
                     handler_parameters = (event, entity)
                     
                 else:
-                    handler_method = "process_" + event.local_sap.description + "_connected"
+                    handler_method = "process_" + event.local_sap.description + "_disconnected"
                     handler_parameters = (event,)
 
                 if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):

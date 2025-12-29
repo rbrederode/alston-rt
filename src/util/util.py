@@ -5,6 +5,22 @@ from typing import TYPE_CHECKING
 import logging
 logger = logging.getLogger(__name__)
 
+def unpack_result(result) -> tuple:
+        """ Unpacks a tuple result containing status, message, value, and payload.
+        """
+        if isinstance(result, tuple) and len(result) == 4:
+            status, message, value, payload = result
+        elif isinstance(result, tuple) and len(result) == 3:
+            status, message, value, payload = result, None
+        elif isinstance(result, tuple) and len(result) == 2:
+            status, message, value, payload = result, None, None
+        elif isinstance(result, tuple) and len(result) == 1:
+            status, message, value, payload = result, None, None, None
+        else:
+            status, message, value, payload = "error", "Invalid result format", None, None
+
+        return status, message, value, payload
+
 def dict_diff(old_dict, new_dict):
     """
     Compare two dictionaries and determine which keys are:

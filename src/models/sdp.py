@@ -7,6 +7,7 @@ from schema import Schema, And, Or, Use, SchemaError
 from models.app import AppModel
 from models.base import BaseModel
 from models.comms import CommunicationStatus
+from models.dig import DigitiserList
 from models.health import HealthState
 from models.scan import ScanModel, ScanState
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
@@ -16,8 +17,9 @@ class ScienceDataProcessorModel(BaseModel):
 
     schema = Schema({
         "_type": And(str, lambda v: v == "ScienceDataProcessorModel"),
-        "id": And(str, lambda v: isinstance(v, str)),
+        "sdp_id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
+        "dig_store": And(DigitiserList, lambda v: isinstance(v, DigitiserList)),
         "channels": And(int, lambda v: v >= 0),
         "scan_duration": And(int, lambda v: v >= 0),
         "scans_created": And(int, lambda v: v >= 0),
@@ -25,7 +27,6 @@ class ScienceDataProcessorModel(BaseModel):
         "scans_aborted": And(int, lambda v: v >= 0),
         "processing_scans": And(list, lambda v: all(isinstance(item, ScanModel) for item in v)),
         "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
-        "dig_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -36,6 +37,7 @@ class ScienceDataProcessorModel(BaseModel):
         # Default values
         defaults = {
             "_type": "ScienceDataProcessorModel",
+            "sdp_id": "<undefined>",
             "app": AppModel(
                 app_name="sdp",
                 app_running=False,
@@ -46,6 +48,7 @@ class ScienceDataProcessorModel(BaseModel):
                 health=HealthState.UNKNOWN,
                 last_update=datetime.now(timezone.utc),
             ),
+            "dig_store": DigitiserList(list_id="sdplist001"),
             "channels": 1024,
             "scan_duration": 60,
             "scans_created": 0,
@@ -121,7 +124,7 @@ if __name__ == "__main__":
     )
     
     sdp001 = ScienceDataProcessorModel(
-        id="sdp001",
+        sdp_id="sdp001",
         app=AppModel(
             app_name="sdp",
             app_running=True,

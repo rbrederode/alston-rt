@@ -20,10 +20,11 @@ FIG_SIZE = (14, 7)  # Default figure size for plots
 
 class SignalDisplay:
 
-    def __init__(self):
+    def __init__(self, dig_id: str):
 
         #mpl.use('TkAgg')        # Use TkAgg backend for interactive display
 
+        self.dig_id = dig_id    # Current digitiser being displayed
         self.scan = None        # Current scan being displayed
         self.sec = None         # Current second being displayed
 
@@ -39,12 +40,20 @@ class SignalDisplay:
         """ # Initialize the figure and axes of the signal displays for a given scan
             :param scan: The Scan object containing the data to display
         """
+        if scan is None:
+            logger.warning(f"Signal display for {self.dig_id} cannot set_scan when scan is None")
+            return
+
+        if not scan.scan_model.dig_id == self.dig_id:
+            logger.warning(f"Signal display for {self.dig_id} cannot set_scan for scan with different dig_id {scan.scan_model.dig_id}")
+            return
+        
         self.scan = scan
         self.sec = None
         
-        plt.close(scan.scan_model.scan_id)  # Close any existing figure with the same scan number
+        plt.close(f"Digitiser {self.dig_id}")  # Close any existing figure with the same digitiser ID
 
-        self.fig = plt.figure(num=scan.scan_model.scan_id, figsize=FIG_SIZE)
+        self.fig = plt.figure(num=f"Digitiser {self.dig_id}", figsize=FIG_SIZE)
         self.sig = [None] * 5  # Initialize axes for the subplots
 
         self.sig[0] = self.fig.add_subplot(self.gs0[0]) # Power spectrum summed per second
@@ -55,7 +64,7 @@ class SignalDisplay:
         self.sig[4] = self.fig.add_subplot(self.gs1[1]) # Total power timeline
 
         self.fig.subplots_adjust(top=0.78)
-        self.fig.suptitle(f"Feed: {scan.scan_model.feed.name} Scan: {scan.scan_model.scan_id} Center Freq: {scan.scan_model.center_freq/1e6:.2f} MHz, Gain: {scan.scan_model.gain} dB, Sample Rate: {scan.scan_model.sample_rate/1e6:.2f} MHz, Channels: {scan.scan_model.channels}", fontsize=12, y=0.96)
+        self.fig.suptitle(f"Scan: {scan.scan_model.scan_id} Center Freq: {scan.scan_model.center_freq/1e6:.2f} MHz, Gain: {scan.scan_model.gain} dB, Sample Rate: {scan.scan_model.sample_rate/1e6:.2f} MHz, Channels: {scan.scan_model.channels} Load: {scan.scan_model.load}", fontsize=12, y=0.96)
 
         self.extent = [(scan.scan_model.center_freq + scan.scan_model.sample_rate / -2) / 1e6, (scan.scan_model.center_freq + scan.scan_model.sample_rate / 2) / 1e6, scan.scan_model.duration, 0]
 
@@ -168,7 +177,7 @@ class SignalDisplay:
         if output_dir is None or output_dir == "":
             output_dir = "."
 
-        prefix = gen_file_prefix(dt=self.scan.scan_model.read_start, feed=self.scan.scan_model.feed, gain=self.scan.scan_model.gain, 
+        prefix = gen_file_prefix(dt=self.scan.scan_model.read_start, load=self.scan.scan_model.load, gain=self.scan.scan_model.gain, 
             duration=self.scan.scan_model.duration, sample_rate=self.scan.scan_model.sample_rate, center_freq=self.scan.scan_model.center_freq, 
             channels=self.scan.scan_model.channels, entity_id=self.scan.scan_model.scan_id, filetype="sigfig")
 

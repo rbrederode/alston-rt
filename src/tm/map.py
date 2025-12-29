@@ -1,20 +1,22 @@
 import logging
 from typing import Any
 
-from api import tm_dig
+from api import tm_dig, tm_sdp
 from models import dsh
 
 logger = logging.getLogger(__name__)
 
 # Map Configuration items to attribute names
 _config_to_property = {
-    "feed": tm_dig.PROPERTY_FEED,
-    "sample_rate": tm_dig.PROPERTY_SAMPLE_RATE,
-    "center_freq": tm_dig.PROPERTY_CENTER_FREQ,
-    "bandwidth": tm_dig.PROPERTY_BANDWIDTH,
-    "freq_correction": tm_dig.PROPERTY_FREQ_CORRECTION,
-    "gain": tm_dig.PROPERTY_GAIN,
-    "streaming": tm_dig.PROPERTY_STREAMING,
+    "load":             tm_dig.PROPERTY_LOAD,
+    "sample_rate":      tm_dig.PROPERTY_SAMPLE_RATE,
+    "center_freq":      tm_dig.PROPERTY_CENTER_FREQ,
+    "bandwidth":        tm_dig.PROPERTY_BANDWIDTH,
+    "freq_correction":  tm_dig.PROPERTY_FREQ_CORRECTION,
+    "gain":             tm_dig.PROPERTY_GAIN,
+    "streaming":        tm_dig.PROPERTY_STREAMING,
+    "channels":         tm_sdp.PROPERTY_CHANNELS,
+    "scan_duration":    tm_sdp.PROPERTY_SCAN_DURATION,
 }
 
 def get_property_name_value(config_item: str, value) -> (str, Any):
@@ -24,28 +26,17 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
 
     # If property is found, map the value accordingly
     if property:
-        if property == tm_dig.PROPERTY_FEED:
+        if property == tm_dig.PROPERTY_LOAD:
 
-            if isinstance(value, dsh.Feed):
+            if isinstance(value, bool):
                 return property, value
-            elif isinstance(value, dict):
-                try:
-                    feed_name = value.get("value", None)
-                    for feed in dsh.Feed:
-                        if feed.name == feed_name:
-                            return property, feed
-                except Exception as e:
-                    logger.error(f"Telescope Manager map: invalid FEED dict value {value} for property {property}: {e}")
-                    return property, None
-
-            # Try to match by Feed enum name
-            for feed in dsh.Feed:
-                if feed.name == value:
-                    return property, feed
-            
-            # If no match found, log error
-            logger.error(f"Telescope Manager map: invalid FEED value {value} for property {property}")
-            return property, None
+            elif str(value).upper() in ["TRUE", "1", "YES", "ON"]:
+                return property, True
+            elif str(value).upper() in ["FALSE", "0", "NO", "OFF"]:
+                return property, False
+            else:
+                logger.error(f"Telescope Manager map: invalid LOAD value {value} for property {property}")
+                return property, None
 
         elif property == tm_dig.PROPERTY_GAIN:
             if str(value).upper() == "AUTO":
@@ -73,10 +64,11 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
             tm_dig.PROPERTY_CENTER_FREQ,
             tm_dig.PROPERTY_BANDWIDTH,
             tm_dig.PROPERTY_FREQ_CORRECTION,
+            tm_sdp.PROPERTY_CHANNELS,
         ]:
             try:
                 # These properties expect numeric values
-                if property == tm_dig.PROPERTY_FREQ_CORRECTION:
+                if property in [tm_dig.PROPERTY_FREQ_CORRECTION, tm_sdp.PROPERTY_CHANNELS]:
                     return property, int(value)
                 else:
                     return property, float(value)
@@ -100,7 +92,7 @@ def get_method_name_value(config_item: str, value) -> (str, Any):
 if __name__ == "__main__":
     # Test the mapping
     test_items = [
-        "Feed",
+        "Load",
         "Sample Rate",
         "Center Frequency",
         "Bandwidth",

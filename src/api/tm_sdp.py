@@ -50,10 +50,14 @@ TO = (
 # Allowable properties to get or set on the system
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 PROPERTY_STATUS         = 'status'           # Get system status
+PROPERTY_CHANNELS       = 'channels'         # Number of channels
+PROPERTY_SCAN_DURATION  = 'scan_duration'    # Scan duration in seconds
 
 PROPERTIES = (
     PROPERTY_DEBUG,
-    PROPERTY_STATUS
+    PROPERTY_STATUS,
+    PROPERTY_CHANNELS,
+    PROPERTY_SCAN_DURATION
 )
 
 # Allowable status codes for responses

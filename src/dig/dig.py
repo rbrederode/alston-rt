@@ -16,10 +16,9 @@ from ipc.tcp_server import TCPServer
 from models.app import AppModel
 from models.comms import CommunicationStatus, InterfaceType
 from models.dig import DigitiserModel
-from models.dsh import Feed
 from models.health import HealthState
 from sdr.sdr import SDR
-from util import log
+from util import log, util
 from util.xbase import XBase, XStreamUnableToExtract, XSoftwareFailure, XAPIValidationFailed
 
 logger = logging.getLogger(__name__)
@@ -118,7 +117,7 @@ class Digitiser(App):
 
         action = Action()
 
-         # If api call is a rsp msg, check whether it was successful
+        # If api call is a rsp msg, check whether it was successful
         if api_call['msg_type'] == 'rsp':
             # Stop the corresponding timer if applicable
             dt = api_msg.get("timestamp")
@@ -137,7 +136,7 @@ class Digitiser(App):
 
         # Invoke handler method to process the api call
         result = dispatch.get(api_call['action_code'], lambda x: None)(api_call)
-        status, message, value, payload = self._unpack_result(result)
+        status, message, value, payload = util.unpack_result(result)
 
         # If api call was a request that was successfully handled, prepare resultant actions 
         if api_call['msg_type'] == 'req' and status == tm_dig.STATUS_SUCCESS:
@@ -172,7 +171,7 @@ class Digitiser(App):
                 elif payload is None:
                     # Wait for stream_samples timer to trigger again
                     logger.warning("Digitiser cannot send samples to Science Data Processor, no payload.")
-                
+       
         # Prepare rsp msg to tm containing result of initial api call
         tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
         tm_rsp.switch_from_to()
@@ -195,7 +194,7 @@ class Digitiser(App):
     def process_sdp_connected(self, event) -> Action:
         """ Processes Science Data Processor connected events.
         """
-        logger.debug(f"Digitiser connected to Science Data Processor: {event.remote_addr}")
+        logger.info(f"Digitiser connected to Science Data Processor: {event.remote_addr}")
 
         self.dig_model.sdp_connected = CommunicationStatus.ESTABLISHED
 
@@ -212,7 +211,7 @@ class Digitiser(App):
     def process_sdp_disconnected(self, event) -> Action:
         """ Processes Science Data Processor disconnected events.
         """
-        logger.debug(f"Digitiser disconnected from Science Data Processor: {event.remote_addr}")
+        logger.info(f"Digitiser disconnected from Science Data Processor: {event.remote_addr}")
 
         self.dig_model.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
 
@@ -254,7 +253,7 @@ class Digitiser(App):
 
         if event.name.startswith("stream_samples"):
             result = self.handle_method_call({"method": "read_samples", "params": {}})
-            status, message, value, payload = self._unpack_result(result)
+            status, message, value, payload = util.unpack_result(result)
 
             # If the digitiser is set to stream samples
             if self.dig_model.streaming:
@@ -325,11 +324,16 @@ class Digitiser(App):
         else:
             return HealthState.OK
 
-    def set_feed(self, feed_id: int):
-        """ Sets the current feed ID.
+    def set_load(self, load: bool):
+        """ Sets the current load flag.
         """
-        self.dig_model.feed = Feed(feed_id)
-        logger.info(f"Digitiser feed set to {self.dig_model.feed.name}")
+        self.dig_model.load = True if load else False
+        logger.info(f"Digitiser load set to {self.dig_model.load}")
+
+    def get_load(self) -> bool:
+        """ Gets the current load flag.
+        """
+        return self.dig_model.load
 
     def set_streaming(self, streaming: bool):
         
@@ -418,7 +422,7 @@ class Digitiser(App):
             logger.error(f"Digitiser failed to get property {prop_name}: {e}")
             return tm_dig.STATUS_ERROR, f"Digitiser failed to get property {prop_name}: {e}", None, None
 
-        return tm_dig.STATUS_SUCCESS, f"Digitiser {prop_name} value {value}", value, None
+        return tm_dig.STATUS_SUCCESS, f"Digitiser get {prop_name} value {value}", value, None
   
     def handle_method_call(self, api_call):
         """ Handles method api calls.
@@ -503,8 +507,8 @@ class Digitiser(App):
         
         # Construct metadata using the digitiser model and sample read info
         metadata = [   
-            {"property": "dig_id", "value": self.dig_model.dig_id},                 # Digitiser Id
-            {"property": "feed", "value": self.dig_model.feed.name},            # Feed name
+            {"property": "dig_id", "value": self.dig_model.dig_id},             # Digitiser Id
+            {"property": "load", "value": self.dig_model.load},                 # Bool
             {"property": "center_freq", "value": self.dig_model.center_freq},   # Hz    
             {"property": "sample_rate", "value": self.dig_model.sample_rate},   # Hz
             {"property": "bandwidth", "value": self.dig_model.bandwidth},       # MHz
@@ -523,22 +527,6 @@ class Digitiser(App):
         })
 
         return sdp_adv
-
-    def _unpack_result(self, result):
-        """ Unpacks the result of a method call.
-        """
-        if isinstance(result, tuple) and len(result) == 4:
-            status, message, value, payload = result
-        elif isinstance(result, tuple) and len(result) == 3:
-            status, message, value, payload = result, None
-        elif isinstance(result, tuple) and len(result) == 2:
-            status, message, value, payload = result, None, None
-        elif isinstance(result, tuple) and len(result) == 1:
-            status, message, value, payload = result, None, None, None
-        else:
-            status, message, value, payload = tm_dig.STATUS_ERROR, "Invalid result format", None, None
-
-        return status, message, value, payload
 
 def main():
     digitiser = Digitiser()

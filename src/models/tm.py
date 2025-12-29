@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import enum
+import logging
 from pathlib import Path
 from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
@@ -10,7 +11,10 @@ from models.comms import CommunicationStatus
 from models.base import BaseModel
 from models.health import HealthState
 from models.proc import ProcessorModel
+from util import log, util
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
+
+logger = logging.getLogger(__name__)
 
 class AllocationState(enum.IntEnum):
     REQUESTED = 1
@@ -242,6 +246,50 @@ class ResourceAllocations(BaseModel):
         allocation.state = AllocationState.RELEASED
         allocation.last_update = datetime.now(timezone.utc)
         self.last_update = datetime.now(timezone.utc)
+
+    def handle_resource_allocation(self, resource_type, resource_id, resource_req, resource_alloc) -> bool:
+        """
+        Generic resource allocation handler.
+        Attempts to grant the resource allocation request if the resource is available.
+        Logs the result of the allocation attempt.
+        Returns True if the resource is granted, False otherwise.
+        """
+
+        # Resource is available
+        if resource_alloc is None:
+            try:
+                self.grant_allocation(resource_req)
+                logger.info(
+                    f"Resource Allocation successfully granted "
+                    f"{resource_type} {resource_id} to {resource_req.allocated_type} {resource_req.allocated_id}, "
+                    f"expiring at {resource_req.expires}"
+                )
+                return True
+            except XInvalidTransition as e:
+                logger.error(
+                    f"Resource Allocation failed to grant "
+                    f"{resource_type} {resource_id} to {resource_req.allocated_type} {resource_req.allocated_id}, "
+                    f"due to exception {e}"
+                )
+
+        # Already allocated 
+        elif resource_alloc.allocated_id == resource_req.allocated_id:
+            logger.info(
+                f"Resource Allocation already granted "
+                f"{resource_type} {resource_id} to {resource_alloc.allocated_type} {resource_alloc.allocated_id}, "
+                f"expiring at {resource_alloc.expires}"
+            )
+            return True
+
+        # Allocated to another observation
+        else:
+            logger.info(
+                f"Resource Allocation failed to grant "
+                f"{resource_type} {resource_id} to {resource_req.allocated_type} {resource_req.allocated_id}, "
+                f"because it is already allocated to {resource_alloc.allocated_type} {resource_alloc.allocated_id},"
+                f"expiring at {resource_alloc.expires}"
+            )
+        return False
 
 class TelescopeManagerModel(BaseModel):
     """A class representing the telescope manager model."""

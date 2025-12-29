@@ -50,7 +50,7 @@ TO = (
 )
 
 # Allowable properties to get or set
-PROPERTY_FEED           = 'feed'             # Feed identifier
+PROPERTY_LOAD           = 'load'             # Load True or False
 PROPERTY_CENTER_FREQ    = 'center_freq'      # Center frequency in Hz
 PROPERTY_SAMPLE_RATE    = 'sample_rate'      # Sample rate in samples per second
 PROPERTY_BANDWIDTH      = 'bandwidth'        # Bandwidth in Hz
@@ -62,7 +62,7 @@ PROPERTY_SDP_COMMS      = 'sdp_comms'        # SDP communication status (establi
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 
 PROPERTIES = (
-    PROPERTY_FEED,
+    PROPERTY_LOAD,
     PROPERTY_CENTER_FREQ,
     PROPERTY_SAMPLE_RATE,
     PROPERTY_BANDWIDTH,
@@ -116,7 +116,7 @@ MSG_FIELDS = {
     "msg_type":     {"enum": MSG_TYPES},                            # Message type (one of MSG_TYPES)
     "action_code":  {"enum": ACTION_CODES},                         # Action to be taken (one of ACTION_CODES)
     "property":     {"enum": PROPERTIES},                           # Property name (one of PROPERTIES)
-    "value":        {"type": "(int, float, str, dict)"},            # Value to set or value returned
+    "value":        {"type": "(int, float, str, dict, bool)"},      # Value to set or value returned
     "method":       {"enum": METHODS},                              # Method name (one of METHODS)
     "params":       {"type": "dict"},                               # Key Value pairs in a dictionary e.g. {"num_samples": 1024}
     "status":       {"enum": STATUS},                               # Status of response (e.g. success, error)
