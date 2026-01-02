@@ -177,9 +177,9 @@ class SignalDisplay:
         if output_dir is None or output_dir == "":
             output_dir = "."
 
-        prefix = gen_file_prefix(dt=self.scan.scan_model.read_start, load=self.scan.scan_model.load, gain=self.scan.scan_model.gain, 
+        prefix = gen_file_prefix(dt=self.scan.scan_model.read_start, entity_id=self.scan.scan_model.dig_id, gain=self.scan.scan_model.gain, 
             duration=self.scan.scan_model.duration, sample_rate=self.scan.scan_model.sample_rate, center_freq=self.scan.scan_model.center_freq, 
-            channels=self.scan.scan_model.channels, entity_id=self.scan.scan_model.scan_id, filetype="sigfig")
+            channels=self.scan.scan_model.channels, instance_id=self.scan.scan_model.scan_id, filetype="sigfig")
 
         filename = f"{output_dir}/" + prefix + ".png"
 

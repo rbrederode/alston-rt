@@ -17,7 +17,8 @@ from util import log
 
 logger = logging.getLogger(__name__)
 
-USABLE_BANDWIDTH = 0.65  # Percentage of usable bandwidth for a scan
+USABLE_BANDWIDTH = 0.65     # Percentage of usable bandwidth for a scan
+MAX_SCAN_DURATION_SEC = 60  # Maximum duration of a single scan in seconds
 
 #=======================================
 # Models comprising a Target (TARGET)
@@ -122,22 +123,18 @@ class TargetConfig(BaseModel):
 
         super().__init__(**kwargs)
 
-    def determine_scans(self):
+    def determine_scans(self, obs=None):
         """
         Calculate the number of frequency scans needed to cover the frequency range from start_freq to end_freq
         and the overlap in the frequency domain. NOTE: The overlap is different to the non-usable bandwidth !!
         
-        Calculate the number of scan iterations and scan duration to 
-        keep the scan duration within 0-60 seconds i.e. manageable from a performance perspective.
+        Calculate the number of scan iterations and scan duration to keep the scan duration within MAX_SCAN_DURATION_SEC
+        i.e. manageable from a performance perspective.
 
         E.g. We may need 10 scans of 1 minute each to cover the frequency range from start_freq to end_freq,
         where each scan is iterated 5 times to cover the duration of 5 minutes per frequency scan.
 
-        :param start_freq: Start frequency in Hz
-        :param end_freq: End frequency in Hz
-        :param sample_rate: Sample rate in Hz
-        :param duration: Duration of the observation in seconds
-        :return: freq_scans, freq_overlap, scan_iterations, scan_duration
+        :param obs: Observation object
         """
 
         self.freq_min = self.center_freq - self.bandwidth / 2 - self.sample_rate * (1-USABLE_BANDWIDTH)/2  # Start of frequency scanning
@@ -148,7 +145,7 @@ class TargetConfig(BaseModel):
         # Calculate the number of frequency scans to cover the bandwidth (ceiling of bandwidth/sample_rate)
         self.freq_scans = int(-((self.freq_max-self.freq_min)) // -(self.sample_rate * USABLE_BANDWIDTH))  # Ceiling division
         self.freq_overlap = round((self.sample_rate * self.freq_scans - (self.freq_max-self.freq_min))/(self.freq_scans-1) if self.freq_scans > 1 else 0,4) # Overlap in the frequency domain (Hz) rounded to 4 decimals
-        self.scan_iterations = int(np.ceil(self.integration_time / 60))  # Number of iterations of a frequency scan, # e.g. 5 minutes of data will be 5 scans of 1 minute each
+        self.scan_iterations = int(np.ceil(self.integration_time / MAX_SCAN_DURATION_SEC))  # Number of iterations of a frequency scan, # e.g. 5 minutes of data will be 5 scans of 1 minute each
         self.scan_duration = math.ceil(self.integration_time / self.scan_iterations) if self.scan_iterations > 1 else self.integration_time  # Duration of each scan in seconds
 
         logger.info(f"Frequency Scans-Iterations: {self.freq_scans}-{self.scan_iterations} each of Scan Duration: {self.scan_duration} sec(s)")
@@ -166,9 +163,10 @@ class TargetConfig(BaseModel):
             scan_center_freq = scan_start_freq + self.sample_rate / 2
 
             scan = ScanModel(
-                scan_id=f"{freq_scan:03d}-{scan_iter:03d}",
-                tgt_idx=self.index,
-                obs_id=None,
+                tgt_index=self.index,
+                freq_scan=freq_scan,
+                scan_iter=scan_iter,
+                obs_id=obs.obs_id if obs is not None else None,
                 dig_id=None,
                 duration=self.scan_duration,
                 sample_rate=self.sample_rate,

@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
 
 from models.base import BaseModel
-from models.target import TargetModel, PointingType
+from models.scan import ScanModel, ScanState
+from models.target import TargetModel, PointingType, MAX_SCAN_DURATION_SEC
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
 
 # A scheduling block is the minimum time allocation of resources to an observation
@@ -103,6 +104,8 @@ class Observation(BaseModel):
 
         "created": And(Or(None, datetime), lambda v: v is None or isinstance(v, datetime)),  # Creation datetime (UTC)
         "user_email": And(str, lambda v: isinstance(v, str)),                   # User email that created the observation
+        "scan_timeout_ms": And(int, lambda v: v > 0),                           # Scan timeout in milliseconds
+        "config_timeout_ms": And(int, lambda v: v > 0),                         # Configuration timeout in milliseconds
 
         "start_dt": And(datetime, lambda v: isinstance(v, datetime)),           # Start datetime (UTC) of the observation 
         "end_dt": And(datetime, lambda v: isinstance(v, datetime)),             # End datetime (UTC) of the observation
@@ -154,6 +157,8 @@ class Observation(BaseModel):
             "scheduling_block_end": None,
             "created": None,
             "user_email": "",
+            "scan_timeout_ms": MAX_SCAN_DURATION_SEC*2*1000,  # Scan timeout in milliseconds
+            "config_timeout_ms": 120000,                      # Configuration timeout in milliseconds (includes slew time)
 
             "start_dt": datetime.now(timezone.utc),
             "end_dt": datetime.now(timezone.utc),
@@ -170,6 +175,58 @@ class Observation(BaseModel):
                 kwargs.setdefault(key, value)
 
         super().__init__(**kwargs)
+
+    def get_scan_by_id(self, scan_id) -> ScanModel:
+        """Retrieve a scan by its identifier from the target configurations."""
+
+        if scan_id is None or not isinstance(scan_id, str):
+            return None
+
+        try:
+            # Parse scan_id: <obs_id>-<target_index>-<freq_scan>-<scan_iter>, splitting from the right
+            obs_id_part, tgt_index_str, freq_scan_str, scan_iter_str = scan_id.rsplit("-", 3)
+            tgt_index = int(tgt_index_str)
+            freq_scan = int(freq_scan_str)
+            scan_iter = int(scan_iter_str)
+
+            print(f"Parsed scan_id {scan_id}: obs_id={obs_id_part}, tgt_index={tgt_index}, freq_scan={freq_scan}, scan_iter={scan_iter}")
+
+        except Exception as e:
+            # Fallback to brute force method if parsing fails
+            for tgt_config in self.target_configs:
+                for scan in tgt_config.scans:
+                    if scan.scan_id == scan_id:
+                        return scan
+            return None
+
+        # Find the target config with the matching index
+        for tgt_config in self.target_configs:
+            if tgt_config.index == tgt_index:
+                # Find the scan with matching freq_scan and scan_iter
+                for scan in tgt_config.scans:
+
+                    print(f"Checking target {tgt_config.index} and scan: freq_scan={scan.freq_scan}, scan_iter={scan.scan_iter}")
+
+                    if (scan.freq_scan == freq_scan and scan.scan_iter == scan_iter):
+                        return scan
+        return None
+
+    def set_next_tgt_scan(self):
+        """Set the next target and scan index to the next OPEN (not aborted nor complete) scan in the observation's target configurations."""
+
+        for tgt_index in range(self.next_tgt_index, len(self.target_configs)):
+            tgt_config = self.target_configs[tgt_index]
+            for idx, scan in enumerate(tgt_config.scans):
+                if scan.status != ScanState.ABORTED and scan.status != ScanState.COMPLETE:
+                    self.next_tgt_index = tgt_index
+                    self.next_tgt_scan = idx
+                    print(f"Observation.set_next_tgt_scan: set next_tgt_index to {self.next_tgt_index}, set next_tgt_scan to {self.next_tgt_scan}")
+                    return
+
+        # If no EMPTY scan found, set to the end of the target configs
+        self.next_tgt_index = len(self.target_configs)
+        self.next_tgt_scan = 0
+        print(f"Observation.set_next_tgt_scan: set next_tgt_index to {self.next_tgt_index}, set next_tgt_scan to {self.next_tgt_scan}")
 
     def save_to_disk(self, output_dir) -> bool:
         """
@@ -212,8 +269,6 @@ if __name__ == "__main__":
     obsx.obs_state = ObsState.EMPTY
     print(f"Initial obs_state: {obsx.obs_state.name}")
     try:
-        obsx.obs_state = ObsState.RESOURCING
-        print(f"Updated obs_state: {obsx.obs_state.name}")
         obsx.obs_state = ObsState.IDLE
         print(f"Updated obs_state: {obsx.obs_state.name}")
         obsx.obs_state = ObsState.CONFIGURING

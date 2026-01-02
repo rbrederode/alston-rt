@@ -126,6 +126,7 @@ class TCPServer:
 
         if not valid_client_socket:
             logger.error(f"TCP Server {self.description} invalid client socket provided. Cannot process message.")
+            self._process_disconnect(client_socket, peername if peername else None)
             return
 
         try:

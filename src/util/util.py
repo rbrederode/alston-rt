@@ -61,36 +61,35 @@ def dict_diff(old_dict, new_dict):
 
 def gen_file_prefix(
     dt:datetime,
-    load:bool,
+    entity_id:str,
     gain:float,
     duration:int,
     sample_rate:float,
     center_freq:float,
     channels:int,
-    entity_id:int = None,
+    instance_id:str = None,
     filetype: str = None) -> str:
 
     """ Generate a filename prefix based on metadata parameters.
         :param dt: The datetime object representing the entity start time
-        :param load: The load flag e.g. True or False
+        :param entity_id: The entity identifier e.g. dig_id 
         :param gain: The gain setting e.g. 39.6 dB
         :param duration: The duration in seconds
         :param sample_rate: The sample rate e.g. 2.4e6 Hz
         :param center_freq: The center frequency e.g. 1.42e9 Hz
         :param channels: The number of channels e.g. 1024
-        :param entity_id: The entity ID 
-        :param filetype: The type of file being generated (e.g., "raw", "spr", "meta")
+        :param instance_id: The instance ID number e.g. for multiple files per entity
+        :param filetype: The type of file being generated (e.g., "raw", "spr", "load", "meta")
         :returns: A string representing the file prefix
     """
-
-    return dt.strftime("%Y-%m-%dT%H%M%S") + \
-        "-l" + str(load) + \
+    return (str(instance_id).replace(':', '') if instance_id is not None else '') + \
+        (dt.strftime("%Y-%m-%dT%H%M%S") if instance_id is None else '') + \
+        ("-" + str(entity_id) if entity_id is not None else '') + \
         "-g" + str(gain) + \
         "-du" + str(duration) + \
         "-bw" + str(round(sample_rate/1e6,2)) + \
         "-cf" + str(round(center_freq/1e6,2)) + \
         "-ch" + str(channels) + \
-        ("-id" + str(entity_id) if entity_id is not None else "") + \
         ("-" + filetype if filetype is not None else '')
 
 def find_json_object_end(data:bytes) -> int:

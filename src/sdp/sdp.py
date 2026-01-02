@@ -3,6 +3,7 @@ import json
 from queue import Queue
 import numpy as np
 from datetime import datetime, timezone
+import re
 import time
 import threading
 
@@ -152,80 +153,73 @@ class SDP(App):
         # If we are receiving samples from the digitiser, load them into the current scan
         if api_call['action_code'] == sdp_dig.ACTION_CODE_SAMPLES:
 
-            # Extract metadata from the api call
+            # Extract metadata from the api call and convert to dictionary for direct access
             metadata = api_call.get('metadata', [])
+            meta_dict = {item.get("property"): item.get("value") for item in metadata or []}
 
-            # Default values
-            center_freq = gain = sample_rate = read_counter = read_start = read_end = loaddig_id = None
-            
-            # Extract sample metadata fields
-            for item in metadata or []:
-                prop = item.get("property")
-                value = item.get("value")
-                if prop == sdp_dig.PROPERTY_CENTER_FREQ:
-                    center_freq = value
-                elif prop == sdp_dig.PROPERTY_SAMPLE_RATE:
-                    sample_rate = value
-                elif prop == sdp_dig.PROPERTY_READ_COUNTER:
-                    read_counter = value
-                elif prop == sdp_dig.PROPERTY_SDR_GAIN:
-                    gain = value
-                elif prop == sdp_dig.PROPERTY_READ_START:
-                    read_start = datetime.fromisoformat(value)
-                elif prop == sdp_dig.PROPERTY_READ_END:
-                    read_end = datetime.fromisoformat(value)
-                elif prop == sdp_dig.PROPERTY_LOAD:
-                    load = value
-                elif prop == sdp_dig.PROPERTY_DIG_ID:
-                    dig_id = value
+            center_freq   = meta_dict.get(sdp_dig.PROPERTY_CENTER_FREQ, 0.0)
+            sample_rate   = meta_dict.get(sdp_dig.PROPERTY_SAMPLE_RATE, 0.0)
+            read_counter  = meta_dict.get(sdp_dig.PROPERTY_READ_COUNTER, 0)
+            gain          = meta_dict.get(sdp_dig.PROPERTY_SDR_GAIN, 0.0)
+            read_start    = datetime.fromisoformat(meta_dict.get(sdp_dig.PROPERTY_READ_START))
+            read_end      = datetime.fromisoformat(meta_dict.get(sdp_dig.PROPERTY_READ_END))
+            load          = meta_dict.get(sdp_dig.PROPERTY_LOAD, False)
+            dig_id        = meta_dict.get(sdp_dig.PROPERTY_DIG_ID, "<undefined>")
+            channels      = meta_dict.get(sdp_dig.PROPERTY_CHANNELS,1024)               # default to 1024 channels
+            scan_duration = meta_dict.get(sdp_dig.PROPERTY_SCAN_DURATION,60)            # default to 60 seconds scan duration
+            obs_id        = meta_dict.get(sdp_dig.PROPERTY_OBS_ID, "<undefined>")       # default to "<undefined>" observation id
+            tgt_index     = meta_dict.get(sdp_dig.PROPERTY_TGT_INDEX, -1)               # default to -1 target index (within an observation)
+            freq_scan     = meta_dict.get(sdp_dig.PROPERTY_FREQ_SCAN, -1)               # default to -1 frequency scan index (within a target)
 
-            logger.info(f"SDP received digitiser samples message with metadata: digitiser={dig_id}, center_freq={center_freq}, gain={gain}, sample rate={sample_rate}, read counter={read_counter}, load={load}")
+            logger.info(f"SDP received digitiser samples message with metadata:\n{metadata}")
 
             with self._rlock:                    
-                # Loop through scans in the queue until we find one that matches the read_counter
-                # This handles situations where samples are received out of order
                 match = None
 
+                # Find pending scans for this digitiser
                 pending_scans = [s for s in list(self.scan_q.queue) if s.get_status() in [ScanState.EMPTY, ScanState.WIP] and s.get_dig_id() == dig_id]
                 abort_scans = []
 
                 for scan in pending_scans:
                     start_idx, end_idx = scan.get_start_end_idx()
-                    if read_counter >= start_idx and read_counter <= end_idx:
+                    if read_counter >= start_idx and read_counter <= end_idx + scan.scan_model.duration:
 
                         # Verify that the digitiser metadata still matches the scan parameters
-                        if scan.scan_model.center_freq == center_freq and scan.scan_model.sample_rate == sample_rate and \
-                            scan.scan_model.load == load and scan.scan_model.channels == self.sdp_model.channels and \
-                            scan.scan_model.duration == self.sdp_model.scan_duration:
+                        if scan.scan_model.center_freq == center_freq and scan.scan_model.sample_rate == sample_rate and scan.scan_model.load == load and \
+                                scan.scan_model.channels == channels and scan.scan_model.duration == scan_duration and scan.scan_model.obs_id == obs_id and \
+                                scan.scan_model.tgt_index == tgt_index and scan.scan_model.freq_scan == freq_scan:
                             match = scan
                             break
                         else:
-                            logger.warning(f"SDP aborting scan:scan parameters no longer match digitiser sample metadata for scan id {scan.scan_model.scan_id}: "
-                                           f"scan(center_freq={scan.scan_model.center_freq}) vs "
-                                           f"metadata(center_freq={center_freq})")
+                            logger.warning(f"SDP aborting scan id {scan.scan_model.scan_id}: scan parameters no longer match digitiser metadata {metadata} vs scan:\n" + \
+                                f"{scan}")
                             abort_scans.append(scan)
 
                     # If the Digitiser read_counter is greater than the scan range by the scan duration or the digitiser has reset itself, abort the scan
                     elif read_counter > end_idx + scan.scan_model.duration or read_counter < start_idx:
                         abort_scans.append(scan)  # add it to the abort list
-                        logger.warning(f"SDP aborting scan id: {scan.scan_model.scan_id}, digitiser read_counter {read_counter} has moved beyond this scan index ({end_idx})")
+                        logger.warning(f"SDP aborting scan id: {scan.scan_model.scan_id}, dig read_counter {read_counter} not consistent with scan indexes {start_idx}-{end_idx}")
 
                 # If we found scans to abort, do so
                 for scan in abort_scans:
                     self._abort_scan(scan)
 
-                # If no matching scan was found, create a new scan
+                # If no matching scan was found
                 if match is None:
 
+                    # Create a new scan model based on the digitiser metadata
                     scan_model = ScanModel(
-                        dig_id=dig_id if dig_id is not None else "<undefined>",
-                        start_idx=read_counter if read_counter is not None else 0,
-                        duration=self.sdp_model.scan_duration,
-                        sample_rate=sample_rate if sample_rate is not None else 0,
-                        channels=self.sdp_model.channels,
-                        center_freq=center_freq if center_freq is not None else 0,
-                        gain=gain if gain is not None else 0,
-                        load=load if load is not None else False)
+                        dig_id=dig_id,
+                        obs_id=obs_id,
+                        tgt_index=tgt_index,
+                        freq_scan=freq_scan,
+                        start_idx=read_counter,
+                        duration=scan_duration,
+                        sample_rate=sample_rate,
+                        channels=channels,
+                        center_freq=center_freq,
+                        gain=gain,
+                        load=load)
 
                     scan = Scan(scan_model=scan_model)
                     self.scan_q.put(scan)
@@ -259,6 +253,11 @@ class SDP(App):
                 if match.get_status() == ScanState.COMPLETE:
                     logger.info(f"SDP scan is complete: {match}")
                     self._complete_scan(match)
+
+                    # Send scan complete advice to Telescope Manager
+                    tm_adv = self._construct_scan_complete_adv_to_tm(match)
+                    action.set_msg_to_remote(tm_adv)
+                    action.set_timer_action(Action.Timer(name=f"tm_adv_timer_retry:{tm_adv.get_timestamp()}", timer_action=self.sdp_model.app.msg_timeout_ms, echo_data=tm_adv))
                     
         # Prepare rsp msg to dig acknowledging receipt of the incoming api message
         dig_rsp = APIMessage(api_msg=api_msg, api_version=self.dig_api.get_api_version())
@@ -308,10 +307,11 @@ class SDP(App):
             # Stop the corresponding timer if applicable
             dt = api_msg.get("timestamp")
             if dt:
-                action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{dt}", timer_action=Action.Timer.TIMER_STOP, echo_data=api_msg))
+                action.set_timer_action(Action.Timer(name=f"tm_adv_timer_retry:{dt}", timer_action=Action.Timer.TIMER_STOP))
+                action.set_timer_action(Action.Timer(name=f"tm_adv_timer_final:{dt}", timer_action=Action.Timer.TIMER_STOP))
             if api_call.get('status') == 'error':
                 logger.error(f"Science Data Processor received negative acknowledgement from TM for api call\n{json.dumps(api_call, indent=2)}")
-            return Action()
+            return action
 
         # Dispatch the API Call to a handler method
         dispatch = {
@@ -348,6 +348,29 @@ class SDP(App):
         logger.debug(f"SDP timer event: {event}")
 
         action = Action()
+
+        # Handle an initial request msg timer retry e.g. sdp_adv_timer_retry:<timestamp> 
+        if "adv_timer_retry" in event.name:
+            
+            logger.warning(f"Science Data Processor timed out waiting for response msg {event.name}, retrying advice msg")
+
+            # Resend the API advice if the timer user_ref is set (containing the original advice message)
+            if event.user_ref is not None:
+
+                adv_msg: APIMessage = event.user_ref
+                final_timer = re.sub(r':.*$', f':{adv_msg.get_timestamp()}', event.name.replace("retry", "final"))
+
+                action.set_msg_to_remote(adv_msg)
+                action.set_timer_action(Action.Timer(
+                    name=final_timer, 
+                    timer_action=self.sdp_model.app.msg_timeout_ms,
+                    echo_data=adv_msg))
+
+        # Handle a final request msg timer e.g. dig002_req_timer_final:<timestamp> or sdp002_req_timer_final:<timestamp>
+        elif "adv_timer_final" in event.name:
+            
+            logger.warning(f"Science Data Processor timed out waiting for response msg after final retry, aborting retries for {event.name}")
+
         return action
 
     def process_status_event(self, event) -> Action:
@@ -368,7 +391,7 @@ class SDP(App):
         """ Returns the current health state of this application.
         """
         if self.sdp_model.tm_connected != CommunicationStatus.ESTABLISHED:
-            return HealthState.FAILED
+            return HealthState.DEGRADED
         elif any(dig.tm_connected != CommunicationStatus.ESTABLISHED for dig in self.sdp_model.dig_store.dig_list):
             return HealthState.DEGRADED
         else:
@@ -430,6 +453,24 @@ class SDP(App):
                 "property": tm_sdp.PROPERTY_STATUS, 
                 "value": self.sdp_model.to_dict(), 
                 "message": "SDP status update"
+            })
+        return tm_adv
+
+    def _construct_scan_complete_adv_to_tm(self, match) -> APIMessage:
+        """ Constructs a scan complete advice message for the Telescope Manager.
+        """
+        tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
+        tm_adv.set_json_api_header(
+            api_version=self.tm_api.get_api_version(), 
+            dt=datetime.now(timezone.utc), 
+            from_system=self.sdp_model.app.app_name, 
+            to_system="tm", 
+            api_call={
+                "msg_type": "adv", 
+                "action_code": "set", 
+                "property": tm_sdp.PROPERTY_SCAN_COMPLETE, 
+                "value": match.scan_model.to_dict(), 
+                "message": "SDP scan complete"
             })
         return tm_adv
 

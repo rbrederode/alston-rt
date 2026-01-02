@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class Scan:
 
     _id_lock = threading.Lock()
-    _next_id = 1
+    _scan_iter_counter = {}
 
     def __init__(self, scan_model: ScanModel):
         """ Initialize a scan with the given parameters.
@@ -32,16 +32,25 @@ class Scan:
                 load: Load flag (optional)
         """
 
+        # Compose a key from obs_id, tgt_index, freq_scan
+        key = (scan_model.obs_id, scan_model.tgt_index, scan_model.freq_scan)
+
         with Scan._id_lock:
-            self.id = Scan._next_id                     # Unique scan identifier
-            Scan._next_id += 1                          # Increment for next scan
+           # If the key is new or changed, start at 0
+            if key not in Scan._scan_iter_counter:
+                scan_iter = 0
+            else:
+                scan_iter = Scan._scan_iter_counter[key] + 1
+
+             # Set the scan_iter in the model and update the counter
+            scan_model.scan_iter = scan_iter
+            Scan._scan_iter_counter[key] = scan_iter
 
         self._rlock = threading.RLock()  # Lock for thread-safe access to shared resources
 
         with self._rlock:
 
             self.scan_model = scan_model
-            self.scan_model.scan_id = str(self.id)
             self.scan_model.created = datetime.now(timezone.utc)     # Timestamp when the scan was created
             self.scan_model.status = ScanState.EMPTY                 # Status of the scan: EMPTY, WIP, COMPLETE
 
@@ -217,9 +226,9 @@ class Scan:
         os.makedirs(output_dir, exist_ok=True)
 
         prefix = gen_file_prefix(
-            dt=self.scan_model.read_start, load=self.scan_model.load, gain=self.scan_model.gain, 
+            dt=self.scan_model.read_start, entity_id=self.scan_model.dig_id, gain=self.scan_model.gain, 
             duration=self.scan_model.duration, sample_rate=self.scan_model.sample_rate, center_freq=self.scan_model.center_freq, 
-            channels=self.scan_model.channels, entity_id=self.scan_model.scan_id
+            channels=self.scan_model.channels, instance_id=self.scan_model.scan_id
         )
 
         try:

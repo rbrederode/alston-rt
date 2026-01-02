@@ -20,8 +20,6 @@ class ScienceDataProcessorModel(BaseModel):
         "sdp_id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
         "dig_store": And(DigitiserList, lambda v: isinstance(v, DigitiserList)),
-        "channels": And(int, lambda v: v >= 0),
-        "scan_duration": And(int, lambda v: v >= 0),
         "scans_created": And(int, lambda v: v >= 0),
         "scans_completed": And(int, lambda v: v >= 0),
         "scans_aborted": And(int, lambda v: v >= 0),
@@ -49,8 +47,6 @@ class ScienceDataProcessorModel(BaseModel):
                 last_update=datetime.now(timezone.utc),
             ),
             "dig_store": DigitiserList(list_id="sdplist001"),
-            "channels": 1024,
-            "scan_duration": 60,
             "scans_created": 0,
             "scans_completed": 0,
             "scans_aborted": 0,
@@ -77,7 +73,7 @@ class ScienceDataProcessorModel(BaseModel):
         """
 
         if not isinstance(scan, ScanModel):
-            raise XAPIValidationFailed("scan must be an instance of ScanModel")
+            raise XAPIValidationFailed("Science Data Processor Model: scan must be an instance of ScanModel")
 
         # Replace existing scan with the same digitiser id
         for i, existing_scan in enumerate(self.processing_scans):

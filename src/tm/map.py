@@ -14,9 +14,9 @@ _config_to_property = {
     "bandwidth":        tm_dig.PROPERTY_BANDWIDTH,
     "freq_correction":  tm_dig.PROPERTY_FREQ_CORRECTION,
     "gain":             tm_dig.PROPERTY_GAIN,
-    "streaming":        tm_dig.PROPERTY_STREAMING,
-    "channels":         tm_sdp.PROPERTY_CHANNELS,
-    "scan_duration":    tm_sdp.PROPERTY_SCAN_DURATION,
+    "scanning":         tm_dig.PROPERTY_SCANNING,
+    "channels":         tm_dig.PROPERTY_CHANNELS,
+    "scan_duration":    tm_dig.PROPERTY_SCAN_DURATION,
 }
 
 def get_property_name_value(config_item: str, value) -> (str, Any):
@@ -48,15 +48,17 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
                     logger.error(f"Telescope Manager map: invalid GAIN value {value} for property {property}")
                 return property, None
 
-        elif property == tm_dig.PROPERTY_STREAMING:
+        elif property == tm_dig.PROPERTY_SCANNING:
             if isinstance(value, bool):
+                return property, value
+            elif isinstance(value, dict):
                 return property, value
             elif str(value).upper() in ["TRUE", "1", "YES", "ON"]:
                 return property, True
             elif str(value).upper() in ["FALSE", "0", "NO", "OFF"]:
                 return property, False
             else:
-                logger.error(f"Telescope Manager map: invalid STREAMING value {value} for property {property}")
+                logger.error(f"Telescope Manager map: invalid SCANNING value {value} for property {property}")
                 return property, None
 
         elif property in [
@@ -64,11 +66,12 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
             tm_dig.PROPERTY_CENTER_FREQ,
             tm_dig.PROPERTY_BANDWIDTH,
             tm_dig.PROPERTY_FREQ_CORRECTION,
-            tm_sdp.PROPERTY_CHANNELS,
+            tm_dig.PROPERTY_CHANNELS,
+            tm_dig.PROPERTY_SCAN_DURATION
         ]:
             try:
                 # These properties expect numeric values
-                if property in [tm_dig.PROPERTY_FREQ_CORRECTION, tm_sdp.PROPERTY_CHANNELS]:
+                if property in [tm_dig.PROPERTY_FREQ_CORRECTION, tm_dig.PROPERTY_CHANNELS, tm_dig.PROPERTY_SCAN_DURATION]:
                     return property, int(value)
                 else:
                     return property, float(value)

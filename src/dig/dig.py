@@ -60,7 +60,7 @@ class Digitiser(App):
         self.dig_model.sdr_eeprom = self.sdr.get_eeprom_info()
         self.dig_model.sdr_connected = self.sdr.get_comms_status()
 
-        self.dig_model.streaming = False # Flag indicating if we are currently streaming samples (from the SDR)
+        self.dig_model.scanning = False # Flag indicating if we are currently scanning for samples (from the SDR)
  
     def add_args(self, arg_parser): 
         """ Specifies the digitiser's command line arguments.
@@ -141,16 +141,18 @@ class Digitiser(App):
         # If api call was a request that was successfully handled, prepare resultant actions 
         if api_call['msg_type'] == 'req' and status == tm_dig.STATUS_SUCCESS:
 
-            # Check if the API call is a "set" action for the sample "streaming" property
-            if api_call['action_code'] == tm_dig.ACTION_CODE_SET and api_call.get('property') == tm_dig.PROPERTY_STREAMING:
+            # Check if the API call is a "set" action for the sample "scanning" property
+            if api_call['action_code'] == tm_dig.ACTION_CODE_SET and api_call.get('property') == tm_dig.PROPERTY_SCANNING:
+
+                logger.info(f"Digitiser scanning state changed to: {value}")
 
                 # Timer action 0 to start reading samples immediately, TIMER_STOP to stop reading samples
-                timer_action = 0 if self.dig_model.streaming else Action.Timer.TIMER_STOP
+                timer_action = 0 if self.dig_model.scanning else Action.Timer.TIMER_STOP
                     
                 # Start reading samples immediately (timer_action=0) else stop timers (timer_action=TIMER_STOP)
                 # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
                 for i in range(1, 3):
-                    action.set_timer_action(Action.Timer(name=f"stream_samples_{i}", timer_action=timer_action))
+                    action.set_timer_action(Action.Timer(name=f"scan_samples_{i}", timer_action=timer_action))
 
             if api_call['action_code'] == tm_dig.ACTION_CODE_METHOD and api_call['method'] in ("read_samples", "read_bytes"):
 
@@ -169,7 +171,7 @@ class Digitiser(App):
                     action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=tm_adv))
 
                 elif payload is None:
-                    # Wait for stream_samples timer to trigger again
+                    # Wait for scan_samples timer to trigger again
                     logger.warning("Digitiser cannot send samples to Science Data Processor, no payload.")
        
         # Prepare rsp msg to tm containing result of initial api call
@@ -251,13 +253,13 @@ class Digitiser(App):
 
         action = Action()
 
-        if event.name.startswith("stream_samples"):
+        if event.name.startswith("scan_samples"):
             result = self.handle_method_call({"method": "read_samples", "params": {}})
             status, message, value, payload = util.unpack_result(result)
 
-            # If the digitiser is set to stream samples
-            if self.dig_model.streaming:
-                # Start the same stream_samples timer immediately if successful, else wait 1 second before retrying
+            # If the digitiser is set to scan samples
+            if self.dig_model.scanning:
+                # Start the same scan_samples timer immediately if successful, else wait 1 second before retrying
                 wait = 0 if status == tm_dig.STATUS_SUCCESS else 1000 
                 action.set_timer_action(Action.Timer(name=event.name, timer_action=wait)) 
 
@@ -268,7 +270,7 @@ class Digitiser(App):
                 action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=sdp_adv))
 
             elif payload is None:
-                # Wait for stream_samples timer to trigger again
+                # Wait for scan_samples timer to trigger again
                 logger.warning("Digitiser cannot send samples to Science Data Processor, no payload.")
             
         elif event.name.startswith("sdp_adv_timer"):
@@ -323,27 +325,6 @@ class Digitiser(App):
             return HealthState.DEGRADED
         else:
             return HealthState.OK
-
-    def set_load(self, load: bool):
-        """ Sets the current load flag.
-        """
-        self.dig_model.load = True if load else False
-        logger.info(f"Digitiser load set to {self.dig_model.load}")
-
-    def get_load(self) -> bool:
-        """ Gets the current load flag.
-        """
-        return self.dig_model.load
-
-    def set_streaming(self, streaming: bool):
-        
-        self.dig_model.streaming = True if streaming else False
-        logger.info(f"Digitiser streaming set to {streaming}")
-
-    def get_streaming(self) -> bool:
-        """ Gets the current streaming status.
-        """
-        return self.dig_model.streaming
     
     def handle_field_set(self, api_call):
         """ Handles field set api calls.
@@ -364,15 +345,18 @@ class Digitiser(App):
                 setter(prop_value)
                 # Update the property in the digitiser model for sdr properties
                 setattr(self.dig_model, prop_name[4:], prop_value)
-                logger.info(f"Digitiser {prop_name[4:]} set to {prop_value}")
 
             # Else if the property setter exists on the Digitiser
             elif hasattr(self, prop_name) and callable(getattr(self, prop_name)):
                 setter = getattr(self, prop_name)
                 setter(prop_value)
 
-            # Else if the property does not exist on either the SDR or Digitiser
-            elif not hasattr(self.sdr, prop_name) and not hasattr(self, prop_name):
+            # Else if the property exists on the Digitiser model schema
+            elif prop_name[4:] in self.dig_model.schema.schema:
+                setattr(self.dig_model, prop_name[4:], prop_value)
+
+            # Else if the property does not exist on either the SDR, Digitiser or Digitiser model
+            elif not hasattr(self.sdr, prop_name) and not hasattr(self, prop_name) and not prop_name[4:] in self.dig_model.schema.schema:
                 logger.error(f"Digitiser unknown property {prop_name} with value {prop_value}")
                 return tm_dig.STATUS_ERROR, f"Digitiser unknown property {prop_name}", None, None
 
@@ -385,6 +369,7 @@ class Digitiser(App):
             logger.exception(f"Digitiser failed to set property {prop_name} to {prop_value}: {e}")
             return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name} to {prop_value}: {e}", None, None
 
+        logger.info(f"Digitiser set property {prop_name[4:]} to {prop_value}")
         return tm_dig.STATUS_SUCCESS, f"Digitiser set property {prop_name} to {prop_value}", prop_value, None
     
     def handle_field_get(self, api_call):
@@ -406,8 +391,12 @@ class Digitiser(App):
         elif hasattr(self, prop_name) and callable(getattr(self, prop_name)):
             getter = getattr(self, prop_name)
 
-        # Else if the property does not exist on either the SDR or Digitiser
-        elif not hasattr(self.sdr, prop_name) and not hasattr(self, prop_name):
+        # Else if the property exists on the Digitiser model schema
+        elif prop_name[4:] in self.dig_model.schema.schema:
+            getter = getattr(self.dig_model, prop_name[4:])
+
+        # Else if the property does not exist on either the SDR, Digitiser or Digitiser model
+        elif not hasattr(self.sdr, prop_name) and not hasattr(self, prop_name) and not prop_name[4:] in self.dig_model.schema.schema:
             logger.error(f"Digitiser unknown property {prop_name}")
             return tm_dig.STATUS_ERROR, f"Digitiser unknown property {prop_name}", None, None
 
@@ -507,15 +496,20 @@ class Digitiser(App):
         
         # Construct metadata using the digitiser model and sample read info
         metadata = [   
-            {"property": "dig_id", "value": self.dig_model.dig_id},             # Digitiser Id
-            {"property": "load", "value": self.dig_model.load},                 # Bool
-            {"property": "center_freq", "value": self.dig_model.center_freq},   # Hz    
-            {"property": "sample_rate", "value": self.dig_model.sample_rate},   # Hz
-            {"property": "bandwidth", "value": self.dig_model.bandwidth},       # MHz
-            {"property": "gain", "value": self.dig_model.gain},                 # dB
+            {"property": "dig_id", "value": self.dig_model.dig_id},               # Digitiser Id
+            {"property": "load", "value": self.dig_model.load},                   # Bool
+            {"property": "center_freq", "value": self.dig_model.center_freq},     # Hz    
+            {"property": "sample_rate", "value": self.dig_model.sample_rate},     # Hz
+            {"property": "bandwidth", "value": self.dig_model.bandwidth},         # MHz
+            {"property": "gain", "value": self.dig_model.gain},                   # dB
+            {"property": "channels", "value": self.dig_model.channels},           # Number of spectral channels
+            {"property": "scan_duration", "value": self.dig_model.scan_duration}, # Scan duration in seconds
             {"property": "read_counter", "value": read_counter},
             {"property": "read_start", "value": datetime.fromtimestamp(read_start, timezone.utc).isoformat()},
             {"property": "read_end", "value": datetime.fromtimestamp(read_end, timezone.utc).isoformat()},
+            {"property": "obs_id", "value": self.dig_model.scanning.get('obs_id', '<undefined>') if isinstance(self.dig_model.scanning, dict) else '<undefined>'},  
+            {"property": "tgt_index", "value": self.dig_model.scanning.get('tgt_index', -1) if isinstance(self.dig_model.scanning, dict) else -1},
+            {"property": "freq_scan", "value": self.dig_model.scanning.get('freq_scan', -1) if isinstance(self.dig_model.scanning, dict) else -1}
          ]   
 
         sdp_adv.set_api_call({
