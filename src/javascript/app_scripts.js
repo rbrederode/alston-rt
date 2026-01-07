@@ -5,9 +5,9 @@
 * Useful for debugging without manually editing the sheet.
 */
 function testOnEdit() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("OBS STORE");;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("OBS DESIGN");;
   const e = {
-    range: sheet.getRange("J4"),
+    range: sheet.getRange("B34"),
     value: "TRUE"
   };
   onEditHandler(e);
@@ -427,7 +427,7 @@ function consolidateRows(sheet) {
  *
  * This function handles multiple edit events across different sheets:
  *
- * DIG001 sheet:
+ * DIG00X sheet:
  *   - If columns D:E (5) rows 4-10 are edited:
  *     → Generates a JSON string representing the Digitiser configuration.
  *     → Writes JSON to TM_UI_API sheet cell B3.
@@ -471,8 +471,8 @@ function onEditHandler(e) {
   const apiSheet = ss.getSheetByName("TM_UI_API");
   const obsSheet = ss.getSheetByName("DB OBS LIST")
 
-  // ---------- DIG001 sheet: Digitiser config ----------
-  if (sheetName === "DIG001" && col === 5 && row >= 4 && row <= 10) {
+  // ---------- DIG00X sheet: Digitiser config ----------
+  if (sheetName === "DIG00X" && col === 5 && row >= 4 && row <= 10) {
     const jsonStr = generateJSON(sheet, ["A3:B3","D4:E10"]);
 
     apiSheet.getRange("B3").setValue(jsonStr);
@@ -538,6 +538,7 @@ function onEditHandler(e) {
     const lastTargetRow = targetSheet.getLastRow();
     Logger.log("Last Target Row"+lastTargetRow)
     const target_configs = [];
+    const targets = [];
 
     if (lastTargetRow >= 2) { // skip header
       const targetValues = targetSheet.getRange(2, 1, lastTargetRow - 1, 1).getValues();
@@ -550,18 +551,25 @@ function onEditHandler(e) {
         if (!targetJsonText) return;
 
         try {
-          const targetObj = JSON.parse(targetJsonText);
-          // Add an id based on the row order (1-based)
-          targetObj.target_id = index + 1;
+          const obj = JSON.parse(targetJsonText);
+
+          // Extract the target and target_config from the object
+          const target = obj.target
+          const target_config = obj.target_config
+
+          // Add an index based on the row order (0-based)
+          target.tgt_idx = index;
+          target_config.tgt_idx = index
 
           // Scale specific keys
           keysToScale.forEach(key => {
-            if (targetObj.hasOwnProperty(key)) {
-              targetObj[key] = Number(targetObj[key]) * 1e6;
+            if (target_config.hasOwnProperty(key)) {
+              target_config[key] = Number(target_config[key]) * 1e6;
             }
           });
 
-          target_configs.push(targetObj);
+          target_configs.push(target_config);
+          targets.push(target)
         } catch (err) {
           Logger.log(`Skipping invalid target JSON: ${err}`);
         }
@@ -606,6 +614,7 @@ function onEditHandler(e) {
     // Add targets and meta data to the observation
     obsJsonObj["_type"] = "Observation"
     obsJsonObj["target_configs"] = target_configs
+    obsJsonObj["targets"] = targets
     obsJsonObj["user_email"] = userEmail
     obsJsonObj["created"] = {
       "_type": "datetime",
@@ -650,13 +659,18 @@ function onEditHandler(e) {
   Logger.log("Add Target checkbox ticked. Processing JSON...");
   addTargetCell.setValue(false); // reset immediately
 
-  const targetRanges = ["A14:B18", "A25:B25", "A29:B32", "D25:E26"];
-  const targetJsonStr = generateJSON(sheet, targetRanges, false, false, "TargetConfig");
+  const targetRanges = ["A25:B25", "A29:B32"];
+  const targetObj = generateJSON(sheet, targetRanges, true, false);
+
+  const targetConfigRanges = ["A14:B18", "D25:E26"];
+  const targetConfigObj = generateJSON(sheet, targetConfigRanges, true, false, "TargetConfig")
+
+  targetObj["target_config"] = targetConfigObj
 
   // Write JSON to DB TARGET LIST
   const lastTargetRow = targetSheet.getLastRow();
   const writeRow = lastTargetRow < 2 ? 2 : lastTargetRow + 1;
-  targetSheet.getRange("A" + writeRow).setValue(targetJsonStr);
+  targetSheet.getRange("A" + writeRow).setValue(JSON.stringify(targetObj, null, 2));
   Logger.log(`Target JSON written to DB TARGET LIST row: ${writeRow}`);
 
   // Clear input fields
@@ -959,7 +973,7 @@ function generateJSON(sheet, cellRanges, returnObject = false, log = false, type
           const alt = match[1];
           const az = match[2];
 
-          key = "target"
+          key = "target";
           value = {
             "_type": "TargetModel",
             "altaz": {
@@ -976,7 +990,7 @@ function generateJSON(sheet, cellRanges, returnObject = false, log = false, type
 
       } else if (key === "solar_system") {
 
-        key = "target"
+        key = "target";
         value = {
           "_type": "TargetModel",
           "id": value,
@@ -997,7 +1011,7 @@ function generateJSON(sheet, cellRanges, returnObject = false, log = false, type
           const ra = parseRAtoDeg(match[1]);
           const dec = parseDECtoDeg(match[2]);
 
-          key = "target"
+          key = "target";
           value = {
             "_type": "TargetModel",
             "sky_coord": {
@@ -1022,7 +1036,7 @@ function generateJSON(sheet, cellRanges, returnObject = false, log = false, type
             const l = parseFloat(match[1]);
             const b = parseFloat(match[2]);
 
-            key = "target"
+            key = "target";
             value = {
               "_type": "TargetModel",
               "sky_coord": {
@@ -1536,41 +1550,61 @@ function parseJSON(jsonText, keyPath) {
   try {
     if (!jsonText) return "";
 
-    // Parse JSON safely
     const obj = JSON.parse(jsonText);
+
     if (!keyPath) {
-      // Return list of top-level keys
       if (typeof obj !== 'object' || obj === null) return obj;
       return Object.keys(obj).join(', ');
     }
 
-    // Split keyPath into parts: supports dot and bracket notation
+    // Tokenize keyPath (dot + bracket notation)
     const parts = [];
     keyPath.split('.').forEach(part => {
-      const matches = part.match(/([^[\]]+)|(\[\d+\])/g);
+      const matches = part.match(/([^[\]]+)|(\[[^\]]+\])/g);
       if (matches) {
         matches.forEach(m => {
-          if (m.startsWith('[') && m.endsWith(']'))
-            parts.push(parseInt(m.slice(1, -1), 10));
-          else
-            parts.push(m);
+          if (m.startsWith('[') && m.endsWith(']')) {
+            const inner = m.slice(1, -1);
+
+            // Numeric index: [0]
+            if (/^\d+$/.test(inner)) {
+              parts.push({ type: 'index', value: parseInt(inner, 10) });
+            }
+            // Property filter: [id=DIG02]
+            else if (inner.includes('=')) {
+              const [prop, val] = inner.split('=');
+              parts.push({ type: 'filter', prop, value: val });
+            }
+          } else {
+            parts.push({ type: 'key', value: m });
+          }
         });
       }
     });
 
-    // Traverse JSON structure
+    // Traverse JSON
     let val = obj;
-    for (const key of parts) {
-      if (val === undefined || val === null) return "Not found";
-      val = val[key];
+    for (const part of parts) {
+      if (val === undefined || val === null) return "null";
+
+      if (part.type === 'key') {
+        val = val[part.value];
+      }
+      else if (part.type === 'index') {
+        if (!Array.isArray(val)) return "";
+        val = val[part.value];
+      }
+      else if (part.type === 'filter') {
+        if (!Array.isArray(val)) return "";
+        val = val.find(e => e && e[part.prop] == part.value);
+      }
     }
 
-    // Return prettified JSON if value is an object/array
+    // Return value
     if (typeof val === 'object') {
       return JSON.stringify(val, null, 2);
-    } else {
-      return val;
     }
+    return val;
 
   } catch (err) {
     return "Invalid JSON";

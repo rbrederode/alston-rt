@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from datetime import datetime
+import os
 
 from models.app import AppModel
 from models.comms import CommunicationStatus
@@ -38,6 +39,16 @@ class TelescopeModel:
     def load_from_disk(self):
         # Implement disk loading logic here
         pass
+
+    def get_scan_store_dir(self) -> str:
+        # Determine the scan storage directory from SDP arguments
+
+        if self.sdp.app.arguments and 'output_dir' in self.sdp.app.arguments:
+
+            scan_store_dir = self.sdp.app.arguments.get('output_dir','~/') if self.sdp.app.arguments is not None else '~/'
+            return os.path.expanduser(scan_store_dir)
+        
+        return os.path.expanduser('~/')
 
     def to_dict(self):
         return {

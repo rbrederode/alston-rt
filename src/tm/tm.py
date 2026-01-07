@@ -57,8 +57,6 @@ TM_UI_UPDATE_INTERVAL_S = 10           # Update interval in seconds
 ODT_OBS_LIST = TM_UI_API + "D2"     # Range for Observation Design Tool
 DIG001_CONFIG = TM_UI_API + "B3"    # Range for Digitiser 001 configuration
 
-OUTPUT_DIR = '/Users/r.brederode/samples'  # Directory to store observations
-
 class TelescopeManager(App):
 
     telmodel = TelescopeModel()
@@ -327,8 +325,8 @@ class TelescopeManager(App):
 
             if echo is not None and isinstance(echo, dict):
                 new_config = echo["echo_data"] if "echo_data" in echo else echo
-
                 obs_id = new_config["obs_id"] if "obs_id" in new_config else None
+
                 if obs_id is not None:
 
                     config_mismatched = False
@@ -391,7 +389,7 @@ class TelescopeManager(App):
                 scan_id = completed_scan.scan_id
 
                 obs=self.telmodel.oda.obs_store.get_obs_by_id(obs_id) if obs_id is not None else None
-                scan = obs.get_scan_by_id(scan_id) if obs is not None else None
+                scan = obs.get_target_scan_by_id(scan_id) if obs is not None else None
 
                 # If we identified the observation that the scan belongs to, transition its workflow accordingly
                 if obs is not None:
@@ -412,7 +410,7 @@ class TelescopeManager(App):
                             instance_id=scan.scan_id, 
                             filetype="meta") + ".json"
 
-                        scan.save_to_disk(output_dir=OUTPUT_DIR, filename=filename)
+                        scan.save_to_disk(output_dir=self.telmodel.get_scan_store_dir(), filename=filename)
 
                     status, message = tm_sdp.STATUS_SUCCESS, f"Telescope Manager processed SCAN_COMPLETE for observation {obs_id} scan {scan_id}"
                     logger.info(message)
@@ -420,22 +418,8 @@ class TelescopeManager(App):
                 else:
                     status, message = tm_sdp.STATUS_ERROR, f"Telescope Manager received SCAN_COMPLETE for unknown or non-scanning observation {obs_id} scan {scan_id}"
                     logger.warning(message)
-                    
-                # Prepare rsp msg to sdp containing result of the api call
-                sdp_rsp = APIMessage(api_msg=api_msg, api_version=self.sdp_api.get_api_version())
-                sdp_rsp.switch_from_to()
-                sdp_rsp_api_call = {
-                    "msg_type": "rsp", 
-                    "action_code": api_call['action_code'], 
-                    "status": status, 
-                }
-                if api_call.get('property') is not None:
-                    sdp_rsp_api_call["property"] = api_call['property']
-                if api_call.get('value') is not None:
-                    sdp_rsp_api_call["value"] = api_call['value']
-                if message is not None:
-                    sdp_rsp_api_call["message"] = message
-                sdp_rsp.set_api_call(sdp_rsp_api_call)       
+
+                sdp_rsp = self._construct_rsp_to_sdp(status, message, api_msg, api_call)
                 action.set_msg_to_remote(sdp_rsp)
 
             # Else update an individual property if it exists in the Science Data Processor model
@@ -465,8 +449,8 @@ class TelescopeManager(App):
 
             if echo is not None and isinstance(echo, dict):
                 new_config = echo["echo_data"] if "echo_data" in echo else echo
-
                 obs_id = new_config["obs_id"] if "obs_id" in new_config else None
+                
                 if obs_id is not None:
 
                     config_mismatched = False
@@ -719,6 +703,7 @@ class TelescopeManager(App):
             self.telmodel.oda.scan_store.tsys_files = []
             self.telmodel.oda.scan_store.gain_files = []
             self.telmodel.oda.scan_store.meta_files = []
+
             for scan_file in scan_files:
                 if scan_file.name.endswith("spr.csv"):
                     self.telmodel.oda.scan_store.spr_files.append(scan_file.name)
@@ -794,6 +779,29 @@ class TelescopeManager(App):
             })
 
         return sdp_req
+
+    def _construct_rsp_to_sdp(self, status, message, api_msg: dict, api_call: dict) -> APIMessage:
+        """ Constructs a response message to the Science Data Processor.
+        """
+        # Prepare rsp msg to sdp containing result of an api call
+        sdp_rsp = APIMessage(api_msg=api_msg, api_version=self.sdp_api.get_api_version())
+        sdp_rsp.switch_from_to()
+        sdp_rsp_api_call = {
+            "msg_type": "rsp", 
+            "action_code": api_call['action_code'], 
+            "status": status, 
+        }
+        if api_call.get('property') is not None:
+            sdp_rsp_api_call["property"] = api_call['property']
+
+        if api_call.get('value') is not None:
+            sdp_rsp_api_call["value"] = api_call['value']
+
+        if message is not None:
+            sdp_rsp_api_call["message"] = message
+
+        sdp_rsp.set_api_call(sdp_rsp_api_call)  
+        return sdp_rsp
 
 # Retry decorator for handling transient network errors
 def retry_on_timeout(max_retries=3, delay=5):

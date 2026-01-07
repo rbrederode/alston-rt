@@ -4,7 +4,7 @@ from schema import Schema, And, Or, Use, SchemaError
 
 from models.base import BaseModel
 from models.scan import ScanModel, ScanState
-from models.target import TargetModel, PointingType, MAX_SCAN_DURATION_SEC
+from models.target import TargetModel, TargetConfig, TargetScanSet, PointingType, MAX_SCAN_DURATION_SEC
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
 
 # A scheduling block is the minimum time allocation of resources to an observation
@@ -85,9 +85,12 @@ class Observation(BaseModel):
         "description": And(str, lambda v: isinstance(v, str)),                  # Description (no strict upper limit)
         "obs_state": And(ObsState, lambda v: isinstance(v, ObsState)),
 
-        "target_configs": And(list, lambda v: isinstance(v, list)),             # List of targets and associated configurations
-        "next_tgt_index": And(int, lambda v: isinstance(v, int)),               # Index of the next target config to be observed (0-based)
-        "next_tgt_scan": And(int, lambda v: isinstance(v, int)),                # Index of the next scan (in the target config) to be observed (0-based)
+        "targets": And(list, lambda v: isinstance(v, list)),                    # List of targets (TargetModel)
+        "target_configs": And(list, lambda v: isinstance(v, list)),             # List of target configurations (TargetConfig)
+        "target_scans": And(list, lambda v: isinstance(v, list)),               # List of target scan sets (TargetScanSet)
+
+        "tgt_index": And(int, lambda v: isinstance(v, int)),                    # Index of the next target to be observed (0-based)
+        "tgt_scan": And(int, lambda v: isinstance(v, int)),                     # Index of the next scan (for the given tgt_index) to be observed (0-based)
 
         "dish_id": And(Or(None, str), lambda v: v is None or isinstance(v, str)),# Dish identifier e.g. "dish001"
         "capabilities": And(str, lambda v: isinstance(v, str)),                 # Dish capabilities e.g. "Drift Scan over Zenith"
@@ -96,16 +99,16 @@ class Observation(BaseModel):
         "latitude": And(Or(int, float), lambda v: -90.0 <= v <= 90.0),          # Dish latitude (degrees)
         "longitude": And(Or(int, float), lambda v: -180.0 <= v <= 180.0),       # Dish longitude (degrees)
 
-        "total_integration_time": And(Or(int, float), lambda v: v >= 0.0),      # Total integration time (seconds)
-        "estimated_slewing_time": And(Or(int, float), lambda v: v >= 0.0),      # Estimated slewing time (seconds)
+        "total_integration_time": And(Or(int, float), lambda v: v >= 0.0),          # Total integration time (seconds)
+        "estimated_slewing_time": And(Or(int, float), lambda v: v >= 0.0),          # Estimated slewing time (seconds)
         "estimated_observation_duration": And(str, lambda v: isinstance(v, str)),   # Estimated observation duration (HH:MM:SS)
         "scheduling_block_start": And(Or(None, datetime), lambda v: v is None or isinstance(v, datetime)), # Scheduling block start datetime (UTC)
         "scheduling_block_end": And(Or(None, datetime), lambda v: v is None or isinstance(v, datetime)),   # Scheduling block end datetime (UTC)
 
         "created": And(Or(None, datetime), lambda v: v is None or isinstance(v, datetime)),  # Creation datetime (UTC)
         "user_email": And(str, lambda v: isinstance(v, str)),                   # User email that created the observation
-        "scan_timeout_ms": And(int, lambda v: v > 0),                           # Scan timeout in milliseconds
-        "config_timeout_ms": And(int, lambda v: v > 0),                         # Configuration timeout in milliseconds
+        "timeout_ms_scan": And(int, lambda v: v > 0),                           # Scan timeout in milliseconds
+        "timeout_ms_config": And(int, lambda v: v > 0),                         # Configuration timeout in milliseconds
 
         "start_dt": And(datetime, lambda v: isinstance(v, datetime)),           # Start datetime (UTC) of the observation 
         "end_dt": And(datetime, lambda v: isinstance(v, datetime)),             # End datetime (UTC) of the observation
@@ -141,9 +144,11 @@ class Observation(BaseModel):
             "title": "",
             "description": "",
             "obs_state": ObsState.EMPTY,
+            "targets": [],
             "target_configs": [],
-            "next_tgt_index": 0,
-            "next_tgt_scan": 0,
+            "target_scans": [],
+            "tgt_index": 0,
+            "tgt_scan": 0,
             "dish_id": None,
             "capabilities": "",
             "diameter": 0.0,
@@ -157,8 +162,8 @@ class Observation(BaseModel):
             "scheduling_block_end": None,
             "created": None,
             "user_email": "",
-            "scan_timeout_ms": MAX_SCAN_DURATION_SEC*2*1000,  # Scan timeout in milliseconds
-            "config_timeout_ms": 120000,                      # Configuration timeout in milliseconds (includes slew time)
+            "timeout_ms_scan": MAX_SCAN_DURATION_SEC*2*1000,  # Scan timeout in milliseconds
+            "timeout_ms_config": 120000,                      # Configuration timeout in milliseconds (includes slew time)
 
             "start_dt": datetime.now(timezone.utc),
             "end_dt": datetime.now(timezone.utc),
@@ -176,57 +181,103 @@ class Observation(BaseModel):
 
         super().__init__(**kwargs)
 
-    def get_scan_by_id(self, scan_id) -> ScanModel:
-        """Retrieve a scan by its identifier from the target configurations."""
+    def get_target_config_by_index(self, tgt_index:int) -> TargetConfig:
+        """Retrieve a target configuration by its index from the target configurations list."""
 
+        if tgt_index is None or not isinstance(tgt_index, int):
+            return None
+
+        return self.target_configs[tgt_index] if 0 <= tgt_index < len(self.target_configs) else None
+
+    def get_target_scan_by_index(self, tgt_index:int, freq_scan:int, scan_iter:int) -> ScanModel:
+        """Retrieve a target scan by its indices from the target scans list."""
+
+        if tgt_index is None or freq_scan is None or scan_iter is None:
+            return None
+
+        target_scans = self.target_scans[tgt_index] if 0 <= tgt_index < len(self.target_scans) else None
+        return target_scans.get_scan_by_index(freq_scan, scan_iter) if target_scans else None
+
+    def get_target_scan_by_id(self, scan_id) -> ScanModel:
+        """Retrieve a target scan by its identifier from the target scans list."""
+        # Scan_id should be in the form: <obs_id>-<target_index>-<freq_scan>-<scan_iter>
         if scan_id is None or not isinstance(scan_id, str):
             return None
 
+        # Split the scan_id to extract target, freq_scan and scan_iter indices
         try:
-            # Parse scan_id: <obs_id>-<target_index>-<freq_scan>-<scan_iter>, splitting from the right
-            obs_id_part, tgt_index_str, freq_scan_str, scan_iter_str = scan_id.rsplit("-", 3)
-            tgt_index = int(tgt_index_str)
-            freq_scan = int(freq_scan_str)
-            scan_iter = int(scan_iter_str)
+            tgt_index = int(scan_id.split("-")[-3])
+            freq_scan = int(scan_id.split("-")[-2])
+            scan_iter = int(scan_id.split("-")[-1])
 
-            print(f"Parsed scan_id {scan_id}: obs_id={obs_id_part}, tgt_index={tgt_index}, freq_scan={freq_scan}, scan_iter={scan_iter}")
-
+            return self.get_target_scan_by_index(tgt_index, freq_scan, scan_iter)
         except Exception as e:
-            # Fallback to brute force method if parsing fails
-            for tgt_config in self.target_configs:
-                for scan in tgt_config.scans:
+            # Use brute force method if parsing scan_id fails
+            for tgt_index in range(len(self.target_scans)):
+                target_scans = self.target_scans[tgt_index]
+                for scan in target_scans.scans:
                     if scan.scan_id == scan_id:
-                        return scan
-            return None
-
-        # Find the target config with the matching index
-        for tgt_config in self.target_configs:
-            if tgt_config.index == tgt_index:
-                # Find the scan with matching freq_scan and scan_iter
-                for scan in tgt_config.scans:
-
-                    print(f"Checking target {tgt_config.index} and scan: freq_scan={scan.freq_scan}, scan_iter={scan.scan_iter}")
-
-                    if (scan.freq_scan == freq_scan and scan.scan_iter == scan_iter):
-                        return scan
+                        return scan  
         return None
 
-    def set_next_tgt_scan(self):
-        """Set the next target and scan index to the next OPEN (not aborted nor complete) scan in the observation's target configurations."""
+    def determine_scans(self):
+        """Determine the set of scans for each target configuration in the observation."""
 
-        for tgt_index in range(self.next_tgt_index, len(self.target_configs)):
-            tgt_config = self.target_configs[tgt_index]
-            for idx, scan in enumerate(tgt_config.scans):
-                if scan.status != ScanState.ABORTED and scan.status != ScanState.COMPLETE:
-                    self.next_tgt_index = tgt_index
-                    self.next_tgt_scan = idx
-                    print(f"Observation.set_next_tgt_scan: set next_tgt_index to {self.next_tgt_index}, set next_tgt_scan to {self.next_tgt_scan}")
+        # Initialise the target scans list
+        self.target_scans = []
+
+        # Iterate through each target configuration
+        for tgt_idx, tgt_config in enumerate(self.target_configs):
+
+            # Determine the set of scans for the given target configuration
+            target_scans = TargetScanSet(tgt_idx=tgt_idx)
+            target_scans.determine_scans(obs_id=self.obs_id, tgt_config=tgt_config)
+            self.target_scans.append(target_scans)
+
+    def get_current_tgt_scan_set(self) -> TargetScanSet:
+        """Get the current target scan set to be observed based on the current tgt_index."""
+
+        target_scan_set = self.target_scans[self.tgt_index] if 0 <= self.tgt_index < len(self.target_scans) else None
+        if target_scan_set is None or target_scan_set.scans is None or len(target_scan_set.scans) == 0:
+            return None
+
+        return target_scan_set
+
+    def get_current_tgt_scan(self) -> ScanModel:
+        """Get the current target scan to be observed based on the current tgt_index and tgt_scan."""
+
+        target_scan_set = self.target_scans[self.tgt_index] if 0 <= self.tgt_index < len(self.target_scans) else None
+        if target_scan_set is None or target_scan_set.scans is None or len(target_scan_set.scans) == 0:
+            return None
+
+        scan_iterations = target_scan_set.scan_iterations
+        if scan_iterations <= 0:
+            return None
+
+        return self.get_target_scan_by_index(self.tgt_index, self.tgt_scan // scan_iterations, self.tgt_scan % scan_iterations)
+ 
+    def set_next_tgt_scan(self):
+        """Set the next target and scan index to the next EMPTY OR WIP scan (i.e. open scan) in the observation's set of scans."""
+
+        # Iterate through targets starting from the current target index
+        for tgt_index in range(self.tgt_index, len(self.targets)):
+
+            # Get the target scans for the given target index
+            target_scan_set = self.target_scans[tgt_index] if 0 <= tgt_index < len(self.target_scans) else None
+            if target_scan_set is None:
+                continue
+            
+            for idx, scan in enumerate(target_scan_set.scans):
+                if scan.status == ScanState.EMPTY or scan.status == ScanState.WIP:
+                    self.tgt_index = tgt_index
+                    self.tgt_scan = idx
+                    print(f"Observation.set_next_tgt_scan: set tgt_index to {self.tgt_index}, set tgt_scan to {self.tgt_scan}")
                     return
 
-        # If no EMPTY scan found, set to the end of the target configs
-        self.next_tgt_index = len(self.target_configs)
-        self.next_tgt_scan = 0
-        print(f"Observation.set_next_tgt_scan: set next_tgt_index to {self.next_tgt_index}, set next_tgt_scan to {self.next_tgt_scan}")
+        # If no EMPTY scan found, set to the end of the targets
+        self.tgt_index = len(self.targets)
+        self.tgt_scan = 0
+        print(f"Observation.set_next_tgt_scan: set tgt_index to {self.tgt_index}, set tgt_scan to {self.tgt_scan}")
 
     def save_to_disk(self, output_dir) -> bool:
         """
@@ -234,15 +285,15 @@ class Observation(BaseModel):
             :param output_dir: Directory where the file will be saved
             :returns: True if the data was saved successfully, False otherwise
         """
-        filename = f"{self.obs_id}-obs.json"
+        filename = f"{self.obs_id.replace(':', '')}-obs.json"
 
         try:
             super().save_to_disk(output_dir, filename)
             return True
         except XAPIValidationFailed as e:
-            raise XSoftwareFailure(f"Failed to save Observation {self.obs_id} to disk due to validation error: {e}")
+            raise XSoftwareFailure(f"Observation {self.obs_id} failed to save to disk due to validation error: {e}")
         except Exception as e:
-            raise XSoftwareFailure(f"Failed to save Observation {self.obs_id} to disk due to unexpected error: {e}")
+            raise XSoftwareFailure(f"Observation {self.obs_id} failed to save to disk due to unexpected error: {e}")
 
     def __str__(self):
         return f"Observation(obs_id={self.obs_id}, obs_state={self.obs_state.name})"
@@ -254,7 +305,7 @@ if __name__ == "__main__":
     import astropy.units as u
     import pprint
 
-    obs_dict = {'_type': 'Observation', 'dish_id': 'Dish002', 'capabilities': 'Drift Scan over Zenith', 'diameter': 3, 'f/d_ratio': 1.3, 'latitude': 53.2421, 'longitude': -2.3067, 'total_integration_time': 60, 'estimated_slewing_time': 30, 'estimated_observation_duration': '00:01:30', 'scheduling_block_start': {'_type': 'datetime', 'value': '2025-12-07T19:00:00.000Z'}, 'scheduling_block_end': {'_type': 'datetime', 'value': '2025-12-07T20:00:00.000Z'}, 'obs_id': '2025-12-07T19:00Z-Dish002', 'obs_state': {'_type': 'enum.IntEnum', 'instance': 'ObsState', 'value': 'EMPTY'}, 'target_configs': [{'_type': 'TargetConfig', 'feed': {'_type': 'enum.IntEnum', 'instance': 'Feed', 'value': 'H3T_1420'}, 'gain': 12, 'center_freq': 1420400000, 'bandwidth': 1000000, 'sample_rate': 2400000, 'target': {'_type': 'TargetModel', 'sky_coord': {'_type': 'SkyCoord', 'frame': 'icrs', 'ra': 204.2538, 'dec': -29.8658}, 'id': 'M83', 'type': {'_type': 'enum.IntEnum', 'instance': 'PointingType', 'value': 'SIDEREAL_TRACK'}}, 'integration_time': 60, 'spectral_resolution': 128, 'target_id': 1}], 'user_email': 'ray.brederode@skao.int', 'created': {'_type': 'datetime', 'value': '2025-12-07T18:19:37.503Z'}}
+    obs_dict = {'_type': 'Observation', 'dish_id': 'Dish002', 'capabilities': 'Drift Scan over Zenith', 'diameter': 3, 'f/d_ratio': 1.3, 'latitude': 53.2421, 'longitude': -2.3067, 'total_integration_time': 60, 'estimated_slewing_time': 30, 'estimated_observation_duration': '00:01:30', 'scheduling_block_start': {'_type': 'datetime', 'value': '2025-12-07T19:00:00.000Z'}, 'scheduling_block_end': {'_type': 'datetime', 'value': '2025-12-07T20:00:00.000Z'}, 'obs_id': '2025-12-07T19:00Z-Dish002', 'obs_state': {'_type': 'enum.IntEnum', 'instance': 'ObsState', 'value': 'EMPTY'}, 'targets': [{'_type': 'TargetModel', 'sky_coord': {'_type': 'SkyCoord', 'frame': 'icrs', 'ra': 204.2538, 'dec': -29.8658}, 'id': 'M83', 'type': {'_type': 'enum.IntEnum', 'instance': 'PointingType', 'value': 'SIDEREAL_TRACK'}}],'target_configs': [{'_type': 'TargetConfig', 'tgt_idx': 0, 'feed': {'_type': 'enum.IntEnum', 'instance': 'Feed', 'value': 'H3T_1420'}, 'gain': 12, 'center_freq': 1420400000, 'bandwidth': 1000000, 'sample_rate': 2400000, 'integration_time': 60, 'spectral_resolution': 128, 'target_id': 1}], 'user_email': 'ray.brederode@skao.int', 'created': {'_type': 'datetime', 'value': '2025-12-07T18:19:37.503Z'}}
     obs000 = Observation().from_dict(obs_dict)
     print("="*40)
     print("Observation Model from Dict Test")
@@ -303,5 +354,11 @@ if __name__ == "__main__":
     print("Observation Model Test")
     print("="*40)
     pprint.pprint(obs001.to_dict())
+
+    print("="*40)
+    print("Observation Determine Scans Test")
+    print("="*40)
+    obs000.determine_scans()
+    pprint.pprint(obs000.to_dict())
 
   

@@ -269,7 +269,7 @@ class BaseModel:
         from models.proc import ProcessorModel
         from models.scan import ScanModel, ScanState
         from models.sdp import ScienceDataProcessorModel
-        from models.target import TargetModel, PointingType, TargetConfig
+        from models.target import TargetModel, PointingType, TargetConfig, TargetScanSet
         from models.tm import TelescopeManagerModel, ResourceAllocations, Allocation, AllocationState
         
         if isinstance(v, dict) and "_type" in v:
@@ -394,6 +394,9 @@ class BaseModel:
             elif model_type == "TargetModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return TargetModel(**deserialized_fields)
+            elif model_type == "TargetScanSet":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return TargetScanSet(**deserialized_fields)
             elif model_type == "TelescopeManagerModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return TelescopeManagerModel(**deserialized_fields)

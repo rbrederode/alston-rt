@@ -69,6 +69,7 @@ PROPERTY_READ_END        = 'read_end'         # Epoch seconds corresponding to e
 PROPERTY_OBS_ID          = 'obs_id'           # Observation Id
 PROPERTY_TGT_INDEX       = 'tgt_index'        # Target index
 PROPERTY_FREQ_SCAN       = 'freq_scan'        # Frequency scan index
+PROPERTY_SCAN_ITER       = 'scan_iter'        # Scan iteration index
 
 PROPERTIES = (
     PROPERTY_DIG_ID,
@@ -85,6 +86,7 @@ PROPERTIES = (
     PROPERTY_OBS_ID,
     PROPERTY_TGT_INDEX,
     PROPERTY_FREQ_SCAN,
+    PROPERTY_SCAN_ITER,
 )
 
 # Allowable msg fields and types defining their format     

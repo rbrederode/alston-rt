@@ -91,7 +91,7 @@ class Scan:
             :param sample_rate: Sample rate in Hz
             :param duration: Duration of the scan in seconds
             :param channels: Number of channels (FFT size) for the analysis
-        """    
+        """
         with self._rlock:
 
             # Calculate the number of rows in the spectrogram based on duration and sample rate
@@ -176,16 +176,16 @@ class Scan:
         remove_dc_spike(self.scan_model.channels, spr)  # Remove DC spike if present
 
         # Store the raw, power and summed spectrum data in the appropriate rows of the scan data arrays
-        #with self._rlock:
-        self.raw[row_start:row_start + iq.shape[0],:] = iq
-        self.pwr[row_start:row_start + iq.shape[0],:] = pwr
-        self.spr[sec - 1,:] = spr  # sec is 1-based index, so adjust for 0-based array index
-        self.loaded_secs[sec - 1] = True  # Mark this second as loaded
+        with self._rlock:
+            self.raw[row_start:row_start + iq.shape[0],:] = iq
+            self.pwr[row_start:row_start + iq.shape[0],:] = pwr
+            self.spr[sec - 1,:] = spr  # sec is 1-based index, so adjust for 0-based array index
+            self.loaded_secs[sec - 1] = True  # Mark this second as loaded
 
-        indices = np.linspace(row_start, row_end - 1, int(self.raw.shape[0]*0.01), dtype=int)
+            indices = np.linspace(row_start, row_end - 1, int(self.raw.shape[0]*0.01), dtype=int)
 
-        self.mean_real = np.mean(np.abs(self.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
-        self.mean_imag = np.mean(np.abs(self.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
+            self.mean_real = np.mean(np.abs(self.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
+            self.mean_imag = np.mean(np.abs(self.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
 
         # Count how many rows have self.loaded_secs marked as True
         actual_rows = np.count_nonzero(self.loaded_secs)
@@ -230,6 +230,9 @@ class Scan:
             duration=self.scan_model.duration, sample_rate=self.scan_model.sample_rate, center_freq=self.scan_model.center_freq, 
             channels=self.scan_model.channels, instance_id=self.scan_model.scan_id
         )
+
+        self.scan_model.files_prefix = prefix
+        self.scan_model.files_directory = output_dir
 
         try:
             if include_iq:

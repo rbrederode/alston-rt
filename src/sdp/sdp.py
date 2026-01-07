@@ -102,21 +102,21 @@ class SDP(App):
         """ Determines the digitiser entity ID based on the remote address of a ConnectEvent, DisconnectEvent, or DataEvent.
             Returns a tuple of the entity ID and entity if found, else None, None.
         """
-        logger.debug(f"Finding digitiser entity ID for remote address: {event.remote_addr[0]}")
+        logger.debug(f"Science Data Processor finding digitiser entity ID for remote address: {event.remote_addr[0]}")
 
         for digitiser in self.sdp_model.dig_store.dig_list:
 
             if isinstance(digitiser.app.arguments, dict) and "local_host" in digitiser.app.arguments:
 
                 if digitiser.app.arguments["local_host"] == event.remote_addr[0]:
-                    logger.info(f"Found digitiser entity ID: {digitiser.dig_id} for remote address: {event.remote_addr}")
+                    logger.info(f"Science Data Processor found digitiser entity ID: {digitiser.dig_id} for remote address: {event.remote_addr}")
                     return digitiser.dig_id, digitiser
             else:
-                logger.warning(f"Digitiser {digitiser.dig_id} is not configured with a valid local_host argument to match against remote address: {event.remote_addr[0]}")
+                logger.warning(f"SDP found {digitiser.dig_id} not configured with valid local_host argument matching against remote address: {event.remote_addr[0]}")
 
         return None, None
 
-    def process_dig_entity_connected(self, event, entity) -> Action:
+    def process_dig_entity_connected(self, event, entity:BaseModel) -> Action:
         """ Processes Digitiser connected events.
         """
         logger.info(f"Science Data Processor connected to Digitiser entity on {event.remote_addr}\n{entity}")
@@ -127,7 +127,7 @@ class SDP(App):
         action = Action()
         return action
 
-    def process_dig_entity_disconnected(self, event, entity) -> Action:
+    def process_dig_entity_disconnected(self, event, entity: BaseModel) -> Action:
         """ Processes Digitiser disconnected events.
         """
         logger.info(f"Science Data Processor disconnected from Digitiser entity on {event.remote_addr}\n{entity}")
@@ -170,6 +170,7 @@ class SDP(App):
             obs_id        = meta_dict.get(sdp_dig.PROPERTY_OBS_ID, "<undefined>")       # default to "<undefined>" observation id
             tgt_index     = meta_dict.get(sdp_dig.PROPERTY_TGT_INDEX, -1)               # default to -1 target index (within an observation)
             freq_scan     = meta_dict.get(sdp_dig.PROPERTY_FREQ_SCAN, -1)               # default to -1 frequency scan index (within a target)
+            scan_iter     = meta_dict.get(sdp_dig.PROPERTY_SCAN_ITER, -1)               # default to -1 scan iteration index
 
             logger.info(f"SDP received digitiser samples message with metadata:\n{metadata}")
 
@@ -182,12 +183,12 @@ class SDP(App):
 
                 for scan in pending_scans:
                     start_idx, end_idx = scan.get_start_end_idx()
-                    if read_counter >= start_idx and read_counter <= end_idx + scan.scan_model.duration:
+                    if read_counter >= start_idx and read_counter <= end_idx:
 
                         # Verify that the digitiser metadata still matches the scan parameters
                         if scan.scan_model.center_freq == center_freq and scan.scan_model.sample_rate == sample_rate and scan.scan_model.load == load and \
                                 scan.scan_model.channels == channels and scan.scan_model.duration == scan_duration and scan.scan_model.obs_id == obs_id and \
-                                scan.scan_model.tgt_index == tgt_index and scan.scan_model.freq_scan == freq_scan:
+                                scan.scan_model.tgt_index == tgt_index and scan.scan_model.freq_scan == freq_scan and scan.scan_model.scan_iter == scan_iter:
                             match = scan
                             break
                         else:
@@ -213,6 +214,7 @@ class SDP(App):
                         obs_id=obs_id,
                         tgt_index=tgt_index,
                         freq_scan=freq_scan,
+                        scan_iter=scan_iter,
                         start_idx=read_counter,
                         duration=scan_duration,
                         sample_rate=sample_rate,
@@ -254,21 +256,14 @@ class SDP(App):
                     logger.info(f"SDP scan is complete: {match}")
                     self._complete_scan(match)
 
-                    # Send scan complete advice to Telescope Manager
-                    tm_adv = self._construct_scan_complete_adv_to_tm(match)
-                    action.set_msg_to_remote(tm_adv)
-                    action.set_timer_action(Action.Timer(name=f"tm_adv_timer_retry:{tm_adv.get_timestamp()}", timer_action=self.sdp_model.app.msg_timeout_ms, echo_data=tm_adv))
-                    
-        # Prepare rsp msg to dig acknowledging receipt of the incoming api message
-        dig_rsp = APIMessage(api_msg=api_msg, api_version=self.dig_api.get_api_version())
-        dig_rsp.switch_from_to()
-        dig_rsp.set_api_call({
-            "msg_type": "rsp", 
-            "action_code": api_call['action_code'], 
-            "status": status, 
-            "message": message,
-        })
+                    if self.sdp_model.tm_connected == CommunicationStatus.ESTABLISHED:
 
+                        # Send scan complete advice to Telescope Manager
+                        tm_adv = self._construct_scan_complete_adv_to_tm(match)
+                        action.set_msg_to_remote(tm_adv)
+                        action.set_timer_action(Action.Timer(name=f"tm_adv_timer_retry:{tm_adv.get_timestamp()}", timer_action=self.sdp_model.app.msg_timeout_ms, echo_data=tm_adv))
+                    
+        dig_rsp = self._construct_rsp_to_dig(status, message, api_msg, api_call)
         action.set_msg_to_remote(dig_rsp)
 
         return action
@@ -302,44 +297,36 @@ class SDP(App):
 
         action = Action()
 
-         # If api call is a rsp msg, check whether it was successful
+         # If api call is a rsp msg from the TM
         if api_call['msg_type'] == 'rsp':
-            # Stop the corresponding timer if applicable
+
+            # Stop the corresponding adv timer if applicable
             dt = api_msg.get("timestamp")
             if dt:
                 action.set_timer_action(Action.Timer(name=f"tm_adv_timer_retry:{dt}", timer_action=Action.Timer.TIMER_STOP))
                 action.set_timer_action(Action.Timer(name=f"tm_adv_timer_final:{dt}", timer_action=Action.Timer.TIMER_STOP))
-            if api_call.get('status') == 'error':
+            
+            if api_call.get('status') == tm_sdp.STATUS_ERROR:
                 logger.error(f"Science Data Processor received negative acknowledgement from TM for api call\n{json.dumps(api_call, indent=2)}")
+
             return action
 
-        # Dispatch the API Call to a handler method
-        dispatch = {
-            "set": self.handle_field_set,
-            "get": self.handle_field_get,
-        }
+        # Else if api call is a req or adv msg from the TM
+        elif api_call['msg_type'] in ['req', 'adv']:
 
-        # Invoke handler method to process the api call
-        result = dispatch.get(api_call['action_code'], lambda x: None)(api_call)
-        status, message, value, payload = util.unpack_result(result)
+            # Dispatch the API Call to a handler method
+            dispatch = {
+                "set": self.handle_field_set,
+                "get": self.handle_field_get,
+            }
+
+            # Invoke set or get handler to process the api call
+            result = dispatch.get(api_call['action_code'], lambda x: None)(api_call)
+            status, message, value, payload = util.unpack_result(result)
               
-        # Prepare rsp msg to tm containing result of initial api call
-        tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
-        tm_rsp.switch_from_to()
-        tm_rsp_api_call = {
-            "msg_type": "rsp", 
-            "action_code": api_call['action_code'], 
-            "status": status, 
-        }
-        if api_call.get('property') is not None:
-            tm_rsp_api_call["property"] = api_call['property']
-        if value is not None:
-            tm_rsp_api_call["value"] = value 
-        if message is not None:
-            tm_rsp_api_call["message"] = message
-
-        tm_rsp.set_api_call(tm_rsp_api_call)       
+        tm_rsp = self._construct_rsp_to_tm(status, message, value, api_msg, api_call)
         action.set_msg_to_remote(tm_rsp)
+
         return action
 
     def process_timer_event(self, event) -> Action:
@@ -397,6 +384,26 @@ class SDP(App):
         else:
             return HealthState.OK
 
+    def set_signal_display(self, value:dict) -> bool:
+        """ Sets the signal display state for a digitiser.
+            value is a dictionary with keys 'dig_id' and 'active' (boolean)
+        """
+        dig_id = value.get('dig_id')
+        active = value.get('active', False)
+
+        if dig_id is None:
+            logger.error(f"Science Data Processor signal display request missing dig_id in value: {value}")
+            return False
+
+        if dig_id not in self.signal_displays:
+            self.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
+
+        signal_display = self.signal_displays[dig_id]
+        signal_display.set_is_active(active)
+        logger.info(f"Science Data Processor set signal display for digitiser {dig_id} to active={active}")
+
+        return True
+
     def handle_field_get(self, api_call):
         """ Handles field get api calls.
                 : returns: (status, message, value, payload)
@@ -428,6 +435,14 @@ class SDP(App):
             if prop_name in self.sdp_model.schema.schema:
                 setattr(self.sdp_model, prop_name, prop_value)
                 logger.info(f"Science Data Processor {prop_name} set to {prop_value}")
+            # Else if the SDP has a callable attribute matching the property name
+            elif hasattr(self, "set_" + prop_name) and callable(getattr(self, "set_" + prop_name)):
+                method = getattr(self, "set_" + prop_name)
+                result = method(prop_value) if prop_value is not None else method()
+                if result is True:
+                    return tm_sdp.STATUS_SUCCESS, f"Science Data Processor set property {prop_name} to {prop_value}", prop_value, None
+                else:
+                    return tm_sdp.STATUS_ERROR, f"Science Data Processor failed to set property {prop_name} to {prop_value}", None, None
             else:
                 logger.error(f"Science Data Processor unknown property {prop_name} with value {prop_value}")
                 return tm_sdp.STATUS_ERROR, f"Science Data Processor unknown property {prop_name}", None, None
@@ -474,11 +489,48 @@ class SDP(App):
             })
         return tm_adv
 
+    def _construct_rsp_to_dig(self, status: int, message: str, api_msg: dict, api_call: dict) -> APIMessage:
+        """ Constructs a Digitiser response APIMessage.
+        """
+        # Prepare rsp msg to dig acknowledging receipt of the incoming api message
+        dig_rsp = APIMessage(api_msg=api_msg, api_version=self.dig_api.get_api_version())
+        dig_rsp.switch_from_to()
+        dig_rsp.set_api_call({
+            "msg_type": "rsp", 
+            "action_code": api_call['action_code'], 
+            "status": status, 
+            "message": message,
+        })       
+        return dig_rsp
+
+    def _construct_rsp_to_tm(self, status: int, message: str, value: any, api_msg: dict, api_call: dict) -> APIMessage:
+        """ Constructs a Telescope Manager response APIMessage.
+        """
+        tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
+        tm_rsp.switch_from_to()
+
+        tm_rsp_api_call = {
+            "msg_type": "rsp", 
+            "action_code": api_call['action_code'], 
+            "status": status, 
+        }
+        
+        if api_call.get('property') is not None:
+            tm_rsp_api_call["property"] = api_call['property']
+
+        if value is not None:
+            tm_rsp_api_call["value"] = value
+
+        if message is not None:
+            tm_rsp_api_call["message"] = message
+
+        tm_rsp.set_api_call(tm_rsp_api_call)       
+        return tm_rsp
+
     def _abort_scan(self, scan: Scan):
         """ Aborts a scan and performs necessary cleanup.
         """
         scan.set_status(ScanState.ABORTED)
-        scan.save_to_disk(output_dir=self.get_args().output_dir, include_iq=False)
         scan.del_iq()
 
         self.sdp_model.scans_aborted += 1
@@ -489,7 +541,7 @@ class SDP(App):
             # Balance the unfinished task count for the removed item
             self.scan_q.task_done()
         except ValueError:
-            logger.warning(f"Attempted to remove scan {scan} from queue but it was not found")
+            logger.warning(f"Science Data Processor while aborting attempted to remove scan {scan} from queue but it was not found")
 
     def _complete_scan(self, scan: Scan):
         """ Completes a scan and performs necessary cleanup.
@@ -505,7 +557,7 @@ class SDP(App):
             # Balance the unfinished task count for the removed item
             self.scan_q.task_done()
         except ValueError:
-            logger.warning(f"Attempted to remove scan {scan} from queue but it was not found")
+            logger.warning(f"Science Data Processor while completing attempted to remove scan {scan} from queue but it was not found")
 
 def main():
     sdp = SDP()
@@ -513,32 +565,51 @@ def main():
 
     try:
         while True:
-            # If there is a scan in the queue, process it, else sleep & continue 
-            try:
-                scan = sdp.scan_q.queue[0]
-                if scan.get_status() == ScanState.EMPTY:
-                    raise IndexError  # No samples loaded yet, skip processing
-            except IndexError:
+
+            # If there are no scans to process, sleep and continue
+            if sdp.scan_q.qsize() == 0:
                 time.sleep(0.1)
                 continue
 
-            # If there is no signal display for this digitiser, create one
-            dig_id = scan.scan_model.dig_id
-            if dig_id not in sdp.signal_displays:
-                sdp.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
+            # For each scan in the queue, update its signal display if applicable
+            for i in range(sdp.scan_q.qsize()):
 
-            sdp.signal_displays[dig_id].set_scan(scan)
+                try:
+                    scan = sdp.scan_q.queue[i]
+                except IndexError:
+                    continue  # Scan index not valid, continue to next scan
 
-            # Call display while the scan is being loaded 
-            # Scan will transition to "Complete" or "Aborted" when done
-            # This allows for interactive display of the scan as samples are loaded
-            while scan.get_status() == ScanState.WIP:
+                if scan.get_status() == ScanState.EMPTY:
+                    continue  # Scan is empty, nothing to display, continue to next scan
+
+                dig_id = scan.get_dig_id()
+
+                if scan.scan_model.scan_iter == 1:
+                    sdp.set_signal_display({'dig_id': 'dig001', 'active': False})
+
+                # If there is no signal display for this digitiser, create one
+                if dig_id not in sdp.signal_displays:
+                    sdp.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
+
+                if sdp.signal_displays[dig_id] is None or sdp.signal_displays[dig_id].is_active is False:
+                    continue  # No signal display or not active, continue to next scan
+                
+                # If the signal display is not set to the current scan
+                if sdp.signal_displays[dig_id].get_scan() != scan:
+
+                    current_scan = sdp.signal_displays[dig_id].get_scan()
+
+                    # If the previously displayed scan completed, display and save its figure for posterities sake
+                    if current_scan and current_scan.get_status() == ScanState.COMPLETE:
+                        sdp.signal_displays[dig_id].display()
+                        sdp.signal_displays[dig_id].save_scan_figure(output_dir=sdp.get_args().output_dir)
+
+                    sdp.signal_displays[dig_id].set_scan(scan)
+                
+                # Update the signal display for this scan
                 sdp.signal_displays[dig_id].display()
-                time.sleep(1)  # Update display every second
-            
-            # Final display call to ensure complete rendering
-            sdp.signal_displays[dig_id].display()
-            sdp.signal_displays[dig_id].save_scan_figure(output_dir=sdp.get_args().output_dir)
+
+            time.sleep(1)  # Update displays every second                
                 
     except KeyboardInterrupt:
         pass

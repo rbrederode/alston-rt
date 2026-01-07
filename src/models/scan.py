@@ -41,6 +41,8 @@ class ScanModel(BaseModel):
         "load": And(bool, lambda v: isinstance(v, bool)),
         "status": And(ScanState, lambda v: isinstance(v, ScanState)),
         "load_failures": And(int, lambda v: v >= 0),
+        "files_prefix": Or(None, And(str, lambda v: isinstance(v, str))),
+        "files_directory": Or(None, And(str, lambda v: isinstance(v, str))),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -69,6 +71,8 @@ class ScanModel(BaseModel):
         "status": ScanState.EMPTY,
         "load_failures": 0,
         "loaded_secs": [],
+        "files_prefix": None,
+        "files_directory": None,
         "last_update": datetime.now(timezone.utc)
     }
 
@@ -105,6 +109,15 @@ class ScanModel(BaseModel):
                         updated = True
 
         self.last_update = datetime.now(timezone.utc) if updated else self.last_update
+
+    def __eq__(self, other):
+        if not isinstance(other, ScanModel):
+            return False
+
+        if self.scan_id != other.scan_id or self.created != other.created:
+            return False
+
+        return True
 
     def __str__(self):
         return f"ScanModel(scan_id={self.scan_id}, dig_id={self.dig_id}, status={self.status.name}, " + \
