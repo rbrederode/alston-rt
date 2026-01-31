@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import datetime
+import numpy as np
 from typing import TYPE_CHECKING
 
 import logging
@@ -115,8 +116,63 @@ def find_json_object_end(data:bytes) -> int:
         escape = (c == '\\' and not escape)
     return -1  # Not found
 
+def get_azimuth_distance(az1, az2):
+    """ This function calculates the distance needed to move in azimuth between two angles. This takes into account that the 
+    telescope may need to go 'the other way around' to reach some positions, i.e. the distance to travel can be much larger than the 
+    simple angular distance. This assumes that both azimuth positions are valid, something which can be checked first with the can_reach function."""
+    # Normalize angles to [0, 360) range
+    az1_norm = az1 % 360
+    az2_norm = az2 % 360
+    
+    # Calculate absolute difference
+    diff = np.abs(az1_norm - az2_norm)
+    
+    # Return the shorter path around the circle
+    return min(diff, 360 - diff)
 
-# --- Pytest test functions below ---
+def get_angular_distance(alt1_deg, az1_deg, alt2_deg, az2_deg) -> float:
+    """ Calculate angular distance between two altaz positions in degrees.
+        For altitude azimuth coordinates, the angular separation satisfies:
+    
+        cosθ = sin(a1) sin(a2)+cos(a1) cos(a2) cos(ΔAz)
+        where a1 and a2 are the altitudes, and ΔAz is the difference in azimuths.
+    """
+
+    alt1 = np.deg2rad(alt1_deg)
+    az1  = np.deg2rad(az1_deg)
+    alt2 = np.deg2rad(alt2_deg)
+    az2  = np.deg2rad(az2_deg)
+
+    x1 = np.cos(alt1) * np.cos(az1)
+    y1 = np.cos(alt1) * np.sin(az1)
+    z1 = np.sin(alt1)
+
+    x2 = np.cos(alt2) * np.cos(az2)
+    y2 = np.cos(alt2) * np.sin(az2)
+    z2 = np.sin(alt2)
+
+    dot = x1*x2 + y1*y2 + z1*z2
+    dot = np.clip(dot, -1.0, 1.0)  # numerically safe
+
+    return np.rad2deg(np.arccos(dot))
+
+# Runs tests using: pytest util/util.py -v
+# -v for verbose output (or -vv or -vvv for more verbosity)
+# -s to show print output
+
+def test_azimuth_distance():
+    assert get_azimuth_distance(10.0, 20.0) == 10.0
+    assert get_azimuth_distance(350.0, 10.0) == 20.0
+    assert get_azimuth_distance(180.0, 270.0) == 90.0
+    assert get_azimuth_distance(0.0, 360.0) == 0.0
+    assert get_azimuth_distance(-10.0, 360.0) == 10.0
+
+def test_angular_distance():
+    assert abs(get_angular_distance(45.0, 180.0, 45.0, 180.0) - 0.0) < 0.001
+    assert abs(get_angular_distance(45.0, 180.0, 46.0, 180.0) - 1.0) < 0.001
+    assert abs(get_angular_distance(45.0, 180.0, 45.0, 181.0) - 0.707) < 0.001
+    assert abs(get_angular_distance(0.0, 0.0, 90.0, 0.0) - 90.0) < 0.001
+    assert abs(get_angular_distance(90.0, 0.0, -90.0, 0.0) - 180.0) < 0.001  
 
 def test_find_json_object_end_simple():
     test_data = b'{"key1": "value1"}{"key2": "value2"}'

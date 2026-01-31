@@ -22,7 +22,7 @@ class ScanModel(BaseModel):
     schema = Schema({
         "_type": And(str, lambda v: v == "ScanModel"),
         "obs_id": Or(None, And(str, lambda v: isinstance(v, str))),
-        "tgt_index": Or(None, And(int, lambda v: isinstance(v, int))),
+        "tgt_idx": Or(None, And(int, lambda v: isinstance(v, int))),
         "freq_scan": Or(None, And(int, lambda v: isinstance(v, int))),
         "scan_iter": Or(None, And(int, lambda v: isinstance(v, int))),
         "dig_id": Or(None, And(str, lambda v: isinstance(v, str))),
@@ -52,7 +52,7 @@ class ScanModel(BaseModel):
     _defaults = {
         "_type": "ScanModel",
         "obs_id": datetime.now(timezone.utc).isoformat(),
-        "tgt_index": -1,
+        "tgt_idx": -1,
         "freq_scan": -1,
         "scan_iter": -1,
         "created": datetime.now(timezone.utc),
@@ -86,7 +86,7 @@ class ScanModel(BaseModel):
 
     @property
     def scan_id(self):
-        return f"{self.obs_id}-{self.tgt_index}-{self.freq_scan}-{self.scan_iter}"
+        return f"{self.obs_id}-{self.tgt_idx}-{self.freq_scan}-{self.scan_iter}"
 
     def update_from_model(self, other_scan_model):
         """Update the current scan model with values from another scan model.
@@ -130,7 +130,7 @@ if __name__ == "__main__":
     scan001 = ScanModel(
         dig_id="dig001",
         obs_id="obs001",
-        tgt_index=0,
+        tgt_idx=0,
         freq_scan=1,
         scan_iter=5,
         created=datetime.now(timezone.utc),
@@ -150,7 +150,7 @@ if __name__ == "__main__":
 
     scan002 = ScanModel(
         obs_id="obs002",
-        tgt_index=1,
+        tgt_idx=1,
         freq_scan=0,
         scan_iter=0
     )

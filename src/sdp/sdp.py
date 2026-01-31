@@ -61,6 +61,7 @@ class SDP(App):
         # Queue to hold scans to be processed
         self.scan_q = Queue()            # Queue of scans to load and process
         self._rlock = threading.RLock()  # Lock for thread-safe access to shared resources
+        self._dig_locks = {}             # Dictionary of threading locks, one per digitiser ID
         self.capture = True              # Flag to enable/disable sample capture
 
         self.signal_displays = {}        # Dictionary to hold SignalDisplay objects for each digitiser
@@ -79,7 +80,8 @@ class SDP(App):
         arg_parser.add_argument("--output_dir", type=str, required=False, help="Directory to store captured samples", default=OUTPUT_DIR)
 
     def process_init(self) -> Action:
-        """ Processes initialisation events.
+        """ Processes initialisation event on startup once all app processors are running.
+            Runs in single threaded mode and switches to multi-threading mode after this method completes.
         """
         logger.debug(f"SDP initialisation event")
 
@@ -87,16 +89,27 @@ class SDP(App):
         # Config file is located in ./config/<profile>/<model>.json
         # Config file defines initial list of digitisers to be processed by the SDP
         input_dir = f"./config/{self.get_args().profile}"
-        dig_store = self.sdp_model.dig_store.load_from_disk(input_dir=input_dir, filename="DigitiserList.json")
+        filename = "DigitiserList.json"
+
+        try:
+            dig_store = self.sdp_model.dig_store.load_from_disk(input_dir=input_dir, filename=filename)
+        except FileNotFoundError:
+            dig_store = None
 
         if dig_store is not None:
             self.sdp_model.dig_store = dig_store
-            logger.info(f"Science Data Processor loaded Digitiser configuration from {input_dir}")
+            logger.info(f"Science Data Processor loaded Digitiser configuration from directory {input_dir} file {filename}")
         else:
-            logger.warning(f"Science Data Processor could not load Digitiser configuration from {input_dir}")
+            logger.warning(f"Science Data Processor could not load Digitiser configuration from directory {input_dir} file {filename}")
 
         action = Action()
         return action
+
+    def _get_dig_lock(self, dig_id: str) -> threading.RLock:
+        """Get or create a threading lock for a specific digitiser ID."""
+        if dig_id not in self._dig_locks:
+            self._dig_locks[dig_id] = threading.RLock()
+        return self._dig_locks[dig_id]
 
     def get_dig_entity(self, event) -> (str, BaseModel):
         """ Determines the digitiser entity ID based on the remote address of a ConnectEvent, DisconnectEvent, or DataEvent.
@@ -168,13 +181,16 @@ class SDP(App):
             channels      = meta_dict.get(sdp_dig.PROPERTY_CHANNELS,1024)               # default to 1024 channels
             scan_duration = meta_dict.get(sdp_dig.PROPERTY_SCAN_DURATION,60)            # default to 60 seconds scan duration
             obs_id        = meta_dict.get(sdp_dig.PROPERTY_OBS_ID, "<undefined>")       # default to "<undefined>" observation id
-            tgt_index     = meta_dict.get(sdp_dig.PROPERTY_TGT_INDEX, -1)               # default to -1 target index (within an observation)
+            tgt_idx       = meta_dict.get(sdp_dig.PROPERTY_TGT_IDX, -1)                 # default to -1 target index (within an observation)
             freq_scan     = meta_dict.get(sdp_dig.PROPERTY_FREQ_SCAN, -1)               # default to -1 frequency scan index (within a target)
             scan_iter     = meta_dict.get(sdp_dig.PROPERTY_SCAN_ITER, -1)               # default to -1 scan iteration index
 
             logger.info(f"SDP received digitiser samples message with metadata:\n{metadata}")
 
-            with self._rlock:                    
+            # Get the threading lock specific to this digitiser
+            dig_lock = self._get_dig_lock(dig_id)
+
+            with dig_lock:                    
                 match = None
 
                 # Find pending scans for this digitiser
@@ -188,7 +204,8 @@ class SDP(App):
                         # Verify that the digitiser metadata still matches the scan parameters
                         if scan.scan_model.center_freq == center_freq and scan.scan_model.sample_rate == sample_rate and scan.scan_model.load == load and \
                                 scan.scan_model.channels == channels and scan.scan_model.duration == scan_duration and scan.scan_model.obs_id == obs_id and \
-                                scan.scan_model.tgt_index == tgt_index and scan.scan_model.freq_scan == freq_scan and scan.scan_model.scan_iter == scan_iter:
+                                scan.scan_model.tgt_idx == tgt_idx and scan.scan_model.freq_scan == freq_scan and (scan.scan_model.scan_iter == scan_iter or
+                                scan.scan_model.scan_iter == scan_iter+1):  # allow for scan_iter to increment by 1 when rolling over to a new scan iteration
                             match = scan
                             break
                         else:
@@ -209,12 +226,12 @@ class SDP(App):
                 if match is None:
 
                     # Create a new scan model based on the digitiser metadata
+                    # Metadata excludes scan_iter which is auto incremented as needed by the Scan class
                     scan_model = ScanModel(
                         dig_id=dig_id,
                         obs_id=obs_id,
-                        tgt_index=tgt_index,
+                        tgt_idx=tgt_idx,
                         freq_scan=freq_scan,
-                        scan_iter=scan_iter,
                         start_idx=read_counter,
                         duration=scan_duration,
                         sample_rate=sample_rate,
@@ -230,38 +247,39 @@ class SDP(App):
 
                     logger.debug(f"SDP created new scan: {scan}")
 
-            if match is not None:              
-                logger.debug(f"SDP loading samples into scan: {match}")
+                if match is not None:              
+                    logger.debug(f"SDP loading samples into scan: {match}")
 
-                self.sdp_model.add_scan(match.scan_model)
+                    # Ensure the scan is added to the SDP model processing scans list (maintains a single scan per digitiser)
+                    self.sdp_model.add_scan(match.scan_model)
 
-                # Convert payload to complex64 numpy array
-                iq_samples = np.frombuffer(payload, dtype=np.complex64)
-              
-                if match.load_samples(sec=(read_counter - match.get_start_end_idx()[0] + 1), 
-                        iq=iq_samples,
-                        read_start=read_start,
-                        read_end=read_end):
-                    status = sdp_dig.STATUS_SUCCESS
-                    message = f"SDP loaded samples into scan id: {match.scan_model.scan_id}"
-                else:
-                    status = sdp_dig.STATUS_ERROR
-                    message = f"SDP failed to load samples into scan id: {match.scan_model.scan_id}"
+                    # Convert payload to complex64 numpy array
+                    iq_samples = np.frombuffer(payload, dtype=np.complex64)
+                
+                    if match.load_samples(sec=(read_counter - match.get_start_end_idx()[0] + 1), 
+                            iq=iq_samples,
+                            read_start=read_start,
+                            read_end=read_end):
+                        status = sdp_dig.STATUS_SUCCESS
+                        message = f"SDP loaded samples into scan id: {match.scan_model.scan_id}"
+                    else:
+                        status = sdp_dig.STATUS_ERROR
+                        message = f"SDP failed to load samples into scan id: {match.scan_model.scan_id}"
 
-                    if match.scan_model.load_failures >= 3:
-                        logger.error(f"SDP aborting scan id: {match.scan_model.scan_id} has exceeded maximum load failures: {match.scan_model.load_failures}")
-                        self._abort_scan(match)
+                        if match.scan_model.load_failures >= 3:
+                            logger.error(f"SDP aborting scan id: {match.scan_model.scan_id} has exceeded maximum load failures: {match.scan_model.load_failures}")
+                            self._abort_scan(match)
 
-                if match.get_status() == ScanState.COMPLETE:
-                    logger.info(f"SDP scan is complete: {match}")
-                    self._complete_scan(match)
+                    if match.get_status() == ScanState.COMPLETE:
+                        logger.info(f"SDP scan is complete: {match}")
+                        self._complete_scan(match)
 
-                    if self.sdp_model.tm_connected == CommunicationStatus.ESTABLISHED:
+                        if self.sdp_model.tm_connected == CommunicationStatus.ESTABLISHED:
 
-                        # Send scan complete advice to Telescope Manager
-                        tm_adv = self._construct_scan_complete_adv_to_tm(match)
-                        action.set_msg_to_remote(tm_adv)
-                        action.set_timer_action(Action.Timer(name=f"tm_adv_timer_retry:{tm_adv.get_timestamp()}", timer_action=self.sdp_model.app.msg_timeout_ms, echo_data=tm_adv))
+                            # Send scan complete advice to Telescope Manager
+                            tm_adv = self._construct_scan_complete_adv_to_tm(match)
+                            action.set_msg_to_remote(tm_adv)
+                            action.set_timer_action(Action.Timer(name=f"tm_adv_timer_retry:{tm_adv.get_timestamp()}", timer_action=self.sdp_model.app.msg_timeout_ms, echo_data=tm_adv))
                     
         dig_rsp = self._construct_rsp_to_dig(status, message, api_msg, api_call)
         action.set_msg_to_remote(dig_rsp)
@@ -379,8 +397,8 @@ class SDP(App):
         """
         if self.sdp_model.tm_connected != CommunicationStatus.ESTABLISHED:
             return HealthState.DEGRADED
-        elif any(dig.tm_connected != CommunicationStatus.ESTABLISHED for dig in self.sdp_model.dig_store.dig_list):
-            return HealthState.DEGRADED
+        #elif any(dig.tm_connected != CommunicationStatus.ESTABLISHED for dig in self.sdp_model.dig_store.dig_list):
+        #    return HealthState.DEGRADED
         else:
             return HealthState.OK
 
@@ -388,6 +406,8 @@ class SDP(App):
         """ Sets the signal display state for a digitiser.
             value is a dictionary with keys 'dig_id' and 'active' (boolean)
         """
+        logger.info(f"Science Data Processor setting signal display with value: {value}")
+
         dig_id = value.get('dig_id')
         active = value.get('active', False)
 
@@ -399,6 +419,9 @@ class SDP(App):
             self.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
 
         signal_display = self.signal_displays[dig_id]
+
+        logger.info(f"Science Data Processor signal display {signal_display} set active={active}")
+
         signal_display.set_is_active(active)
         logger.info(f"Science Data Processor set signal display for digitiser {dig_id} to active={active}")
 
@@ -584,29 +607,39 @@ def main():
 
                 dig_id = scan.get_dig_id()
 
-                if scan.scan_model.scan_iter == 1:
-                    sdp.set_signal_display({'dig_id': 'dig001', 'active': False})
+                # DEBUG CODE TO DISABLE SIGNAL DISPLAY FOR FIRST SCAN ITERATION
+                #if scan.scan_model.scan_iter == 1:
+                #    sdp.set_signal_display({'dig_id': 'dig001', 'active': False})
+                # NOTE: There is something wrong with this code. It causes the signal display to hang shortly after this call.abs
+                # The signal display attempts to close the figure from within the main loop (below) on the next call to display or set_scan.
+                # END DEBUG CODE
 
-                # If there is no signal display for this digitiser, create one
+                # If there is no signal display for this digitiser or it is None, create a new signal display
                 if dig_id not in sdp.signal_displays:
+                    logger.info(f"Science Data Processor creating new SignalDisplay for digitiser {dig_id} because none exists")
+                    sdp.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
+                elif sdp.signal_displays[dig_id] is None:
+                    logger.info(f"Science Data Processor creating new SignalDisplay for digitiser {dig_id} because existing is None")
                     sdp.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
 
-                if sdp.signal_displays[dig_id] is None or sdp.signal_displays[dig_id].is_active is False:
-                    continue  # No signal display or not active, continue to next scan
+                # If the signal display is not active, continue to next scan
+                if not (sdp.signal_displays[dig_id]).get_is_active():
+                    continue  
+
+                sig_display_scan = sdp.signal_displays[dig_id].get_scan()
                 
                 # If the signal display is not set to the current scan
-                if sdp.signal_displays[dig_id].get_scan() != scan:
-
-                    current_scan = sdp.signal_displays[dig_id].get_scan()
+                if sig_display_scan != scan:
 
                     # If the previously displayed scan completed, display and save its figure for posterities sake
-                    if current_scan and current_scan.get_status() == ScanState.COMPLETE:
+                    if sig_display_scan and sig_display_scan.get_status() == ScanState.COMPLETE:
                         sdp.signal_displays[dig_id].display()
                         sdp.signal_displays[dig_id].save_scan_figure(output_dir=sdp.get_args().output_dir)
 
+                    # Set the signal display to the current scan
                     sdp.signal_displays[dig_id].set_scan(scan)
                 
-                # Update the signal display for this scan
+                # Update the signal display
                 sdp.signal_displays[dig_id].display()
 
             time.sleep(1)  # Update displays every second                

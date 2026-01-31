@@ -13,6 +13,7 @@ from models.health import HealthState
 from models.obs import Observation, ObsTransition, ObsState
 from models.oda import ODAModel, ObsList, ScanStore
 from models.scan import ScanModel, ScanState
+from models.target import TargetModel, PointingType
 from models.telescope import TelescopeModel
 from models.tm import ResourceType, AllocationState
 from util import log, util
@@ -139,7 +140,7 @@ class ObservationExecutionTool:
             if self.complete_scan(event.obs, action):
                 self.stop_scanning(event.obs, action)
                 action.set_obs_transition(obs=event.obs, transition=ObsTransition.RELEASE_RESOURCES)
-            # Workflow will transition to SCAN_STARTED or CONFIGURE_RESOURCES as needed within obs_complete_scan()  
+            # Workflow will transition to SCAN_STARTED or CONFIGURE_RESOURCES as needed within complete_scan()  
 
         elif event.transition == ObsTransition.SCAN_ENDED:
             event.obs.obs_state = ObsState.READY
@@ -344,29 +345,60 @@ class ObservationExecutionTool:
         already_configured = True
 
         # Get the current target config for the observation
-        target_config = obs.get_target_config_by_index(obs.tgt_index)
+        target_config = obs.get_target_config_by_index(obs.tgt_idx)
 
         if target_config is None:
-            logger.error(f"Observation Execution Tool could not find next target config {obs.tgt_index} to execute for observation {obs.obs_id}. " + \
+            logger.error(f"Observation Execution Tool could not find next target config {obs.tgt_idx} to execute for observation {obs.obs_id}. " + \
                 f"Nothing to configure.")
-            return already_configured
+            return False
 
         # Get the current target scan set and specific target scan for the observation
         target_scan_set = obs.get_current_tgt_scan_set()
         target_scan = obs.get_current_tgt_scan()
 
         if target_scan is None:
-            logger.error(f"Observation Execution Tool could not find target scan {obs.tgt_index}-{obs.tgt_scan} to execute for observation {obs.obs_id}. " + \
+            logger.error(f"Observation Execution Tool could not find target scan {obs.tgt_idx}-{obs.tgt_scan} to execute for observation {obs.obs_id}. " + \
                 f"Nothing to configure.")
-            return already_configured
+            return False
 
-        # Lookup the digitiser and dish model for this observation
+        # Lookup the current target for the observation
+        target = obs.get_target_by_index(obs.tgt_idx)
+
+        # Lookup the dish model for this observation
         dish = next((dsh for dsh in self.telmodel.dsh_mgr.dish_store.dish_list if dsh.dsh_id == obs.dish_id), None)
 
-        if dish is not None:
-             # TBD: Add dish configuration logic here
-            pass
+        if dish is not None and target is not None:
 
+            old_dsh_config = {}
+            new_dsh_config = {}
+
+            # Check if parameters of the dish need to be adjusted
+            if dish.mode != DishMode.OPERATE:
+                old_dsh_config['mode'] = dish.mode
+                new_dsh_config['mode'] = DishMode.OPERATE
+
+            if not self.is_on_target(obs, target, dish):
+                old_dsh_config['target'] = dish.pointing_altaz
+                new_dsh_config['target'] = target.to_dict()
+
+            if len(new_dsh_config) > 0:
+
+                already_configured = False
+
+                # Needed to direct the config to the correct dish and 
+                # To transition the appropriate observation state once configuration is applied
+                old_dsh_config['dsh_id'] = dish.dsh_id 
+                new_dsh_config['dsh_id'] = dish.dsh_id 
+                new_dsh_config['obs_id'] = obs.obs_id
+
+                # Send configuration requests to the Dish if we are not already waiting for previous requests to complete
+                if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{dish.dsh_id}_req_timer")):
+                    logger.info(f"Observation Execution Tool sending Dish configuration requests for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}")
+                    action = self.tm.update_dsh_configuration(old_dsh_config, new_dsh_config, action)
+            else:
+                logger.info(f"Observation Execution Tool found Dish already configured for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}")
+            
+        # Lookup the digitiser model for this observation
         digitiser = next((dig for dig in self.telmodel.dig_store.dig_list if dig.dig_id == dish.dig_id), None)
 
         # If we found a valid digitiser, check if it needs to be configured
@@ -407,10 +439,10 @@ class ObservationExecutionTool:
 
                 # Send configuration requests to the Digitiser if we are not already waiting for previous requests to complete
                 if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{digitiser.dig_id}_req_timer")):
-                    logger.info(f"Observation Execution Tool sending Digitiser configuration requests for observation {obs.obs_id} with index {obs.tgt_index}-{obs.tgt_scan}")
+                    logger.info(f"Observation Execution Tool sending Digitiser configuration requests for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}")
                     action = self.tm.update_dig_configuration(old_dig_config, new_dig_config, action)
             else:
-                logger.info(f"Observation Execution Tool found Digitiser already configured for observation {obs.obs_id} with index {obs.tgt_index}-{obs.tgt_scan}")
+                logger.info(f"Observation Execution Tool found Digitiser already configured for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}")
   
         sdp = self.telmodel.sdp
         if sdp is not None:
@@ -429,10 +461,10 @@ class ObservationExecutionTool:
 
                 # Send configuration requests to the Science Data Processor if we are not already waiting for previous requests to complete
                 if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{sdp.sdp_id}_req_timer")):
-                    logger.info(f"Observation Execution Tool sending Science Data Processor configuration requests for observation {obs.obs_id} with index {obs.tgt_index}-{obs.tgt_scan}")
+                    logger.info(f"Observation Execution Tool sending Science Data Processor configuration requests for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}")
                     action = self.tm.update_sdp_configuration(old_sdp_config, new_sdp_config, action)
             else:
-                logger.info(f"Observation Execution Tool found Science Data Processor already configured for observation {obs.obs_id} with index {obs.tgt_index}-{obs.tgt_scan}")
+                logger.info(f"Observation Execution Tool found Science Data Processor already configured for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}")
 
         if dish is None or digitiser is None or sdp is None:
             raise XSoftwareFailure(f"Observation Execution Tool could not configure missing critical resource for observation {obs.obs_id}. " + \
@@ -468,7 +500,7 @@ class ObservationExecutionTool:
 
             instruction = {
                 "obs_id": obs.obs_id,
-                "tgt_index": obs.tgt_index,
+                "tgt_idx": obs.tgt_idx,
                 "freq_scan": (obs.tgt_scan // target_scan_set.scan_iterations) if target_scan_set is not None else -1,
                 "scan_iter": (obs.tgt_scan % target_scan_set.scan_iterations) if target_scan_set is not None else -1
             }
@@ -538,25 +570,51 @@ class ObservationExecutionTool:
         if target_scan_set is not None:
 
             # Record the observation's current tgt and freq scan indexes
-            old_tgt_index = obs.tgt_index
+            old_tgt_idx = obs.tgt_idx
             old_freq_scan = obs.tgt_scan // target_scan_set.scan_iterations
             
             # Set the observation's next target and scan indexes
             obs.set_next_tgt_scan()
 
-            new_tgt_index = obs.tgt_index
-            new_freq_scan = obs.tgt_scan // target_scan_set.scan_iterations # This works even if tgt_index was incremented (tgt_scan reset to 0)
+            new_tgt_idx = obs.tgt_idx
+            new_freq_scan = obs.tgt_scan // target_scan_set.scan_iterations # This works even if tgt_idx was incremented (tgt_scan reset to 0)
 
             # If we have completed all target configs for this observation
-            if obs.tgt_index >= len(obs.target_configs):
+            if obs.tgt_idx >= len(obs.target_configs):
                 logger.info(f"Observation Execution Tool completed all target configs for observation {obs.obs_id}")
                 return True
             
             # Trigger transition to configure resources (if needed)
             action.set_obs_transition(obs=obs, transition=ObsTransition.CONFIGURE_RESOURCES)
         else:
-            logger.error(f"Observation Execution Tool could not find current target scan set for observation {obs.obs_id} with index {obs.tgt_index}-{obs.tgt_scan}." + \
+            logger.error(f"Observation Execution Tool could not find current target scan set for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}." + \
                 "Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
 
         return False
+
+    def is_on_target(self, obs, target, dish) -> bool:
+        """ Check if the dish is currently pointed at the target within a tolerance.
+            Returns true if on target, false otherwise.
+        """
+
+        if obs is None or target is None or dish is None:
+            raise XSoftwareFailure(f"Observation Execution Tool could not determine if dish is on target due to missing observation, dish or target.")
+
+        target_id = obs.obs_id + f"_{obs.tgt_idx}" # Unique target identifier within the observation (see DishModel.tgt_id)
+
+        logger.info(f"Observation Execution Tool checking if Dish {dish.dsh_id} is on target for observation {obs.obs_id} target index {obs.tgt_idx} with target ID {target_id}, pointing type {target.pointing.name}, dish pointing state {dish.pointing_state.name}, dish target ID {dish.tgt_id}")
+
+        if dish.tgt_id != target_id:
+            return False
+
+        if target.pointing in [PointingType.SIDEREAL_TRACK,PointingType.NON_SIDEREAL_TRACK] and dish.pointing_state != PointingState.TRACK:
+            return False
+        elif target.pointing == PointingType.DRIFT_SCAN and dish.pointing_state != PointingState.READY:
+            return False
+        elif target.pointing in [PointingType.FIVE_POINT_SCAN, PointingType.OFFSET_SCAN] and dish.pointing_state != PointingState.SCAN:
+            return False
+
+        return True
+        
+

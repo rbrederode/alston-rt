@@ -30,19 +30,21 @@ class PointingType(enum.IntEnum):
     SIDEREAL_TRACK = 0        # Sidereal tracking (fixed RA/Dec) e.g. Andromeda Galaxy
     NON_SIDEREAL_TRACK = 1    # Solar system or satellite tracking e.g. planet, moon or Sun
     DRIFT_SCAN = 2            # Fixed Alt-azimuth target e.g. Zenith
-    FIVE_POINT_SCAN = 3       # Center point and 4 offset points e.g. for beam mapping
+    OFFSET_SCAN = 3           # Offset scan over the target
+    FIVE_POINT_SCAN = 4       # Center point and 4 offset points e.g. for beam mapping
 
 class TargetModel(BaseModel):
     """A class representing a target model."""
 
     schema = Schema({
         "_type": And(str, lambda v: v == "TargetModel"),
+        "obs_id": Or(None, And(str, lambda v: isinstance(v, str))),                      # Observation identifier (see Observation model)
         "tgt_idx": And(int, lambda v: v >= -1),                                          # Target list index (-1 = not set, 0-based)
 
         "id": Or(None, And(str, lambda v: isinstance(v, str))),                          # Target identifier e.g. "Sun", "Moon", "Mars", "Vega"
         "pointing": And(PointingType, lambda v: isinstance(v, PointingType)),            # Target type
         "sky_coord": Or(None, lambda v: v is None or isinstance(v, SkyCoord)),           # Sky coordinates (any frame)
-        "altaz": Or(None, dict, lambda v: v is None or isinstance(v, (dict, SkyCoord))), # Alt-az coordinates (SkyCoord or AltAz)
+        "altaz": Or(None, dict, lambda v: v is None or isinstance(v, (dict, SkyCoord, AltAz))), # Alt-az coordinates (SkyCoord or AltAz)
     })
 
     allowed_transitions = {}
@@ -52,8 +54,9 @@ class TargetModel(BaseModel):
         # Default values
         defaults = {
             "_type": "TargetModel",
+            "obs_id": None,                         # Observation identifier (see Observation model)
             "tgt_idx": -1,                          # Target list index (-1 = not set, 0-based)
-
+            
             "id": None,                             # Used for solar and lunar (and optionally sidereal) targets e.g. "Sun", "Moon", "Mars", "Vega"
             "pointing": PointingType.DRIFT_SCAN,    # Default to drift scan pointing
             "sky_coord": None,                      # Used for sidereal targets (ra,dec or l,b)
@@ -72,6 +75,7 @@ class TargetConfig(BaseModel):
 
     schema = Schema({
         "_type": And(str, lambda v: v == "TargetConfig"),
+        "obs_id": Or(None, And(str, lambda v: isinstance(v, str))),             # Observation identifier (see Observation model)
         "tgt_idx": And(int, lambda v: v >= -1),                                 # Target list index (-1 = not set, 0-based)
 
         "feed": And(Feed, lambda v: isinstance(v, Feed)),                       # Feed enum
@@ -90,6 +94,7 @@ class TargetConfig(BaseModel):
         # Default values
         defaults = {
             "_type": "TargetConfig",
+            "obs_id": None,                 # Observation identifier (see Observation model)
             "tgt_idx": -1,                  # Target list index (-1 = not set, 0-based)
 
             "feed": Feed.NONE,              # Default to None feed
@@ -113,6 +118,7 @@ class TargetScanSet(BaseModel):
 
     schema = Schema({
         "_type": And(str, lambda v: v == "TargetScanSet"),
+        "obs_id": Or(None, And(str, lambda v: isinstance(v, str))),                  # Observation identifier (see Observation model)
         "tgt_idx": And(int, lambda v: v >= -1),                                      # Target list index (-1 = not set, 0-based)
 
         # Below parameters are calculated based on the above parameters
@@ -133,6 +139,7 @@ class TargetScanSet(BaseModel):
         # Default values
         defaults = {
             "_type": "TargetScanSet",
+            "obs_id": None,                 # Observation identifier (see Observation model)
             "tgt_idx": -1,                  # Target list index (-1 = not set, 0-based)
 
             "freq_min": None,               # Start of frequency scanning (Hz)
@@ -175,11 +182,11 @@ class TargetScanSet(BaseModel):
 
         # Split the scan_id to extract target, freq_scan and scan_iter indices
         try:
-            tgt_index = int(scan_id.split("-")[-3])
+            tgt_indx  = int(scan_id.split("-")[-3])
             freq_scan = int(scan_id.split("-")[-2])
             scan_iter = int(scan_id.split("-")[-1])
 
-            if tgt_index != self.tgt_idx:
+            if tgt_indx != self.tgt_idx:
                 return None # Target index does not match
 
             return self.get_scan_by_index(freq_scan, scan_iter) 
@@ -208,7 +215,9 @@ class TargetScanSet(BaseModel):
             logger.error(f"Target cannot determine scans for obs_id={obs_id}: TargetConfig is not valid {tgt_config}")
             return
 
+        self.obs_id = obs_id if obs_id is not None else '<undefined>'
         self.tgt_idx = tgt_config.tgt_idx
+
         self.freq_min = tgt_config.center_freq - tgt_config.bandwidth / 2 - tgt_config.sample_rate * (1-USABLE_BANDWIDTH)/2  # Start of frequency scanning
         self.freq_max = tgt_config.center_freq + tgt_config.bandwidth / 2 + tgt_config.sample_rate * (1-USABLE_BANDWIDTH)/2  # End of frequency scanning
 
@@ -237,7 +246,7 @@ class TargetScanSet(BaseModel):
 
             scan = ScanModel(
                 obs_id=obs_id if obs_id is not None else '<undefined>',
-                tgt_index=self.tgt_idx,
+                tgt_idx=self.tgt_idx,
                 freq_scan=freq_scan,
                 scan_iter=scan_iter,
                 dig_id=None,
@@ -322,17 +331,23 @@ if __name__ == "__main__":
     print("Target Config: Vega Target")
     print('='*40)
     target_config001 = TargetConfig(
-        target=target001,
+        obs_id="obs001",
+        tgt_idx=1,
         feed=Feed.H3T_1420,
         gain=12.0,
         center_freq=1.42e9,
         bandwidth=2e6,
         sample_rate=2.0e6,
         integration_time=300,
-        spectral_resolution=1024,
-        index=0
+        spectral_resolution=1024
     )
     pprint.pprint(target_config001.to_dict())
-    target_config001.determine_scans()
-    print(f"Determined Scans: freq_scans={target_config001.freq_scans}, freq_overlap={target_config001.freq_overlap} Hz, scan_iterations={target_config001.scan_iterations}, scan_duration={target_config001.scan_duration} sec(s)")
-    pprint.pprint(target_config001.to_dict())
+
+    targetscanset = TargetScanSet(
+        obs_id="obs001",
+        tgt_idx=1
+    )
+
+    targetscanset.determine_scans(obs_id="obs001", tgt_config=target_config001)
+    print(f"Determined Scans: freq_scans={targetscanset.freq_scans}, freq_overlap={targetscanset.freq_overlap} Hz, scan_iterations={targetscanset.scan_iterations}, scan_duration={targetscanset.scan_duration} sec(s)")
+    pprint.pprint(targetscanset.to_dict())

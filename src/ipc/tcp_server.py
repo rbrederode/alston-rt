@@ -373,9 +373,21 @@ if __name__ == "__main__":
     Timer.manager = TimerManager()
     Timer.manager.start()
 
-    server = TCPServer(queue=queue, host='192.168.0.16')
+    msg = message.Message()
+    msg.msg_data = b'Test message from TCP Server'
+
+    server = TCPServer(queue=queue, host='192.168.0.2', port=65000)
     server.start()
-    time.sleep(1000) # Keep the server running for 1000 seconds for testing
+
+    while True:
+
+        while queue.empty():
+            time.sleep(0.1)
+
+        event = queue.get()
+        print("Received event from queue:", event)
+        server.send(msg, event.remote_conn)
+
     server.stop()    
 
     Timer.manager.stop()

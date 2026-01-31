@@ -261,7 +261,7 @@ class BaseModel:
         from models.app import AppModel
         from models.comms import CommunicationStatus, InterfaceType
         from models.dig import DigitiserList, DigitiserModel
-        from models.dsh import DishMode, DishModel, DishList, DishManagerModel, Feed, PointingState, CapabilityState
+        from models.dsh import DishMode, DishModel, DishList, DishManagerModel, Feed, PointingState, CapabilityState, DriverType
         from models.health import HealthState
         from models.obs import ObsState, Observation
         from models.oda import ObsList, ScanStore, ODAModel
@@ -316,6 +316,7 @@ class BaseModel:
                     "CapabilityState": CapabilityState,
                     "CommunicationStatus": CommunicationStatus,
                     "DishMode": DishMode,
+                    "DriverType": DriverType,
                     "Feed": Feed,
                     "HealthState": HealthState,
                     "InterfaceType": InterfaceType,
@@ -333,6 +334,11 @@ class BaseModel:
                     return Feed[v]
                 else:
                     return Feed(int(v))
+            elif model_type == "MD01Config":
+                # Import lazily to avoid package import errors when MD01 driver is not present
+                from dsh.drivers.md01.md01_model import MD01Config
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return MD01Config(**deserialized_fields)
             elif model_type == "Observer":
                 location = BaseModel._deserialise(v["location"])
                 return Observer(name=v["name"], location=location)

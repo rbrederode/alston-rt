@@ -50,74 +50,38 @@ class SignalDisplay:
         self.gs0 = GridSpec(1, 3, width_ratios=[1, 1, 1], left=0.07, right=0.93, top=0.90, bottom=0.3, wspace=0.2) # signal displays
         self.gs1 = GridSpec(1, 2, width_ratios=[0.32, 0.68], height_ratios=[1], left=0.07, right=0.93, top=0.20, bottom=0.07, wspace=0.2) # total power timeline display
 
-    def is_active_figure(self) -> bool:
-        """ Return whether this signal display figure is active 
-            The signal display is considered active if its figure window is the key window in the OS
+    def __str__(self):
+        return f"SignalDisplay(dig_id={self.dig_id}, is_active={self.is_active})"
+
+    def _create_figure(self):
+        """ Create the figure and axes of the signal displays """
+
+        self.fig = plt.figure(num=f"Digitiser {self.dig_id}", figsize=FIG_SIZE)
+
+        self.sig = [None] * 5  # Initialize axes for the subplots
+        self.sig[0] = self.fig.add_subplot(self.gs0[0]) # Power spectrum summed per second
+        self.sig[1] = self.fig.add_subplot(self.gs0[1]) # Sky signal per second
+        self.sig[2] = self.fig.add_subplot(self.gs0[2]) # Waterfall plot
+
+        self.sig[3] = self.fig.add_subplot(self.gs1[0]) # SDR Saturation Levels
+        self.sig[4] = self.fig.add_subplot(self.gs1[1]) # Total power timeline
+
+        self.fig.subplots_adjust(top=0.78)
+
+    def _close_figure(self):
+        """ Close the figure of the signal displays """
+        if self.fig is not None:
+            plt.close(num=f"Digitiser {self.dig_id}")
+            #self.fig = None
+            #self.sig = [None] * 5
+            #self.pwr_im = None
+            #self.extent = None
+
+    def _clear_figure(self):
+        """ Clear the figure of the signal displays for reuse 
+            The waterfall subplot must be recreated entirely due to imshow behavior (the colorbar remains otherwise).
         """
-
-        if not HAS_APPKIT or self.fig is None:
-            logger.warning(
-                f"Signal display checking whether figure for {self.dig_id} is active but "
-                + ("AppKit not available" if not HAS_APPKIT else "figure is None"))
-            return None
-
-        key_window = NSApplication.sharedApplication().keyWindow()
-        if key_window is None:
-             return None
-
-        key_window_title = key_window.title()                   # Get the title of the key window
-        fig_title = self.fig.canvas.manager.get_window_title()  # Get the title of the signal display figure
-        return (fig_title == key_window_title)
-
-    def is_active(self) -> bool:
-        """ Return whether this signal display instance is active """
-        return self.is_active
-
-    def set_is_active(self, active: bool):
-        """ Set whether this signal display instance is active """
-        self.is_active = active
-    
-    def _on_focus(self, event):
-        """ Handle focus event on the figure """
-        logger.info(f"Signal display {event.canvas.figure.get_suptitle()} for {self.dig_id} focused")
-
-    def _on_defocus(self, event):
-        """ Handle defocus event on the figure """
-        logger.info(f"Signal display {event.canvas.figure.get_suptitle()} for {self.dig_id} defocused")
-    
-    def set_scan(self, scan : Scan):
-        """ # Initialize the figure and axes of the signal displays for a given scan
-            :param scan: The Scan object containing the data to display
-        """
-        if scan is None:
-            logger.warning(f"Signal display for {self.dig_id} cannot set_scan when scan is None")
-            return
-
-        if not scan.scan_model.dig_id == self.dig_id:
-            logger.warning(f"Signal display for {self.dig_id} cannot set_scan for scan with different dig_id {scan.scan_model.dig_id}")
-            return
-        
-        self.scan = scan
-        self.sec = None
-
-        # If the figure doesn't exist yet, create it
-        if self.fig is None:
-
-            self.fig = plt.figure(num=f"Digitiser {self.dig_id}", figsize=FIG_SIZE)
-            self.fig.canvas.mpl_connect('figure_enter_event', self._on_focus)
-            self.fig.canvas.mpl_connect('figure_leave_event', self._on_defocus)
-
-            self.sig = [None] * 5  # Initialize axes for the subplots
-            self.sig[0] = self.fig.add_subplot(self.gs0[0]) # Power spectrum summed per second
-            self.sig[1] = self.fig.add_subplot(self.gs0[1]) # Sky signal per second
-            self.sig[2] = self.fig.add_subplot(self.gs0[2]) # Waterfall plot
-
-            self.sig[3] = self.fig.add_subplot(self.gs1[0]) # SDR Saturation Levels
-            self.sig[4] = self.fig.add_subplot(self.gs1[1]) # Total power timeline
-
-            self.fig.subplots_adjust(top=0.78)
-
-        else:
+        if self.fig is not None:
             # Clear existing axes for reuse
             for ax in self.sig:
                 if ax is not None:
@@ -134,20 +98,71 @@ class SignalDisplay:
         # Reset the power image reference
         self.pwr_im = None
 
+    def is_visible_figure(self) -> bool:
+        """ Return whether this signal display figure is visible or hidden. 
+            A figure can be active but not visible if another figure window is in focus.
+            The signal display is considered visible if its figure window is the key window in the OS
+        """
+        if not HAS_APPKIT or self.fig is None:
+            logger.warning(
+                f"Signal display checking whether figure for {self.dig_id} is visible but "
+                + ("AppKit not available" if not HAS_APPKIT else "figure is None"))
+            return None
+
+        key_window = NSApplication.sharedApplication().keyWindow()
+        if key_window is None:
+             return None
+
+        key_window_title = key_window.title()                   # Get the title of the key window
+        fig_title = self.fig.canvas.manager.get_window_title()  # Get the title of the signal display figure
+        return (fig_title == key_window_title)
+
+    def get_is_active(self) -> bool:
+        """ Return whether this signal display instance is active """
+        return self.is_active
+
+    def set_is_active(self, active: bool):
+        """ Set whether this signal display instance is active """
+        self.is_active = active
+    
+    def set_scan(self, scan : Scan):
+        """ # Initialize the figure and axes of the signal displays for a given scan
+            :param scan: The Scan object containing the data to display
+        """
+
+        if not self.is_active:
+            self._close_figure() # Close the figure if it exists
+            return
+
+        if scan is None:
+            logger.warning(f"Signal display for {self.dig_id} cannot set_scan when scan is None")
+            return
+
+        if not scan.scan_model.dig_id == self.dig_id:
+            logger.warning(f"Signal display for {self.dig_id} cannot set_scan for scan with different dig_id {scan.scan_model.dig_id}")
+            return
+        
+        self.scan = scan
+        self.sec = None
+
+        # If the figure doesn't exist 
+        if self.fig is None:
+            self._create_figure() # Create the figure and axes
+        else:
+            self._clear_figure()  # Clear the existing figure for reuse
+
         # Update the figure suptitle for the new scan
         self.fig.suptitle(
             f"Scan: {scan.scan_model.scan_id} Center Freq: {scan.scan_model.center_freq/1e6:.2f} MHz, "
             f"Gain: {scan.scan_model.gain} dB, Sample Rate: {scan.scan_model.sample_rate/1e6:.2f} MHz, "
             f"Channels: {scan.scan_model.channels} Load: {scan.scan_model.load}",
-            fontsize=12, y=0.96
-        )
+            fontsize=12, y=0.96)
 
         self.extent = [
             (scan.scan_model.center_freq + scan.scan_model.sample_rate / -2) / 1e6,
             (scan.scan_model.center_freq + scan.scan_model.sample_rate / 2) / 1e6,
             scan.scan_model.duration,
-            0
-        ]
+            0]
 
         # Set axes properties
         self.init_pwr_spectrum_axes(self.sig[0], "Power/Sec (SPR,BSL)", self.extent, units="{np.abs(shift fft(signal))**2}")
@@ -164,18 +179,20 @@ class SignalDisplay:
         Update the signal displays for the current scan.
         """
 
-        # Close the figure if the signal display is not active
-        if self.is_active is False:
-            if self.fig is not None:
-                plt.close(self.fig)
-                self.fig = None
-            self.scan = None
+        # If the signal display is not active
+        if not self.is_active:
+            self._close_figure() # Close the figure if it exists
             return
-        else: # Else ensure we have an active figure with a valid scan to display
-            is_active_fig = self.is_active_figure()
-            # If no scan, no figure or figure is not active, then return
-            if self.scan is None or self.fig is None or is_active_fig == False:
-                return
+
+        # If no scan or no figure, then log warning and return
+        if self.scan is None or self.fig is None:
+            logger.warning(f"Signal display for {self.dig_id} cannot display when {'scan' if self.scan is None else 'figure'} is None")
+            return
+
+        # Check if the signal display figure is still visible
+        is_visible_fig = self.is_visible_figure()
+        if is_visible_fig == False:
+            return
 
         # Get the number of loaded seconds in the scan (starts at 1...scan.duration)
         l_sec = self.scan.get_loaded_seconds()
@@ -201,7 +218,10 @@ class SignalDisplay:
             self.clear_axes_data(self.sig[4])
 
             # Update the existing power spectrum image with new data
-            self.pwr_im.set_data(self.scan.spr / self.scan.bsl)
+            if self.pwr_im is not None:
+                self.pwr_im.set_data(self.scan.spr / self.scan.bsl)
+            else:
+                self.pwr_im = self.sig[2].imshow(self.scan.spr / self.scan.bsl, aspect='auto', extent=self.extent)
 
         # Plot total power across all channels for each second up to the current second
         self.sig[4].plot(
@@ -255,10 +275,10 @@ class SignalDisplay:
         self.sig[4].legend(loc='lower right')
 
         # If we cannot determine which figure is active, draw all figures
-        if is_active_fig is None:
+        if is_visible_fig is None:
             plt.draw()                      # A figure will become active when plt.draw() is called
             plt.pause(0.0001)
-        elif is_active_fig == True:
+        elif is_visible_fig == True:
             self.fig.canvas.draw()          # Draw only this figure
             self.fig.canvas.flush_events()  # Process events for this figure only
         else:

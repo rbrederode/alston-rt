@@ -54,11 +54,6 @@ class Digitiser(App):
         self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint, InterfaceType.ENTITY)
         # Set initial Science Data Processor connection status
         self.dig_model.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
-        
-        # Software Defined Radio (internal) interface
-        self.sdr = SDR()
-        self.dig_model.sdr_eeprom = self.sdr.get_eeprom_info()
-        self.dig_model.sdr_connected = self.sdr.get_comms_status()
 
         self.dig_model.scanning = False # Flag indicating if we are currently scanning for samples (from the SDR)
  
@@ -76,11 +71,18 @@ class Digitiser(App):
         arg_parser.add_argument("--local_host", type=str, required=True, help="Localhost (ip4 address) on which the digitiser is running e.g. 192.168.0.1", default="0.0.0.0")
     
     def process_init(self) -> Action:
-        """ Processes initialisation events.
+        """ Processes initialisation event on startup once all app processors are running.
+            Runs in single threaded mode and switches to multi-threading mode after this method completes.
         """
         logger.debug(f"Digitiser initialisation event")
 
         action = Action()
+
+        # Initialise the Software Defined Radio (internal) interface
+        self.sdr = SDR()
+        self.dig_model.sdr_eeprom = self.sdr.get_eeprom_info()
+        self.dig_model.sdr_connected = self.sdr.get_comms_status()
+        
         # If SDR is not connected, start timer to periodically retry connection
         if self.dig_model.sdr_connected == CommunicationStatus.NOT_ESTABLISHED:
             action.set_timer_action(Action.Timer(name=f"sdr_retry", timer_action=5000))
@@ -503,7 +505,7 @@ class Digitiser(App):
             {"property": "read_start", "value": datetime.fromtimestamp(read_start, timezone.utc).isoformat()},
             {"property": "read_end", "value": datetime.fromtimestamp(read_end, timezone.utc).isoformat()},
             {"property": "obs_id", "value": self.dig_model.scanning.get('obs_id', '<undefined>') if isinstance(self.dig_model.scanning, dict) else '<undefined>'},  
-            {"property": "tgt_index", "value": self.dig_model.scanning.get('tgt_index', -1) if isinstance(self.dig_model.scanning, dict) else -1},
+            {"property": "tgt_idx", "value": self.dig_model.scanning.get('tgt_idx', -1) if isinstance(self.dig_model.scanning, dict) else -1},
             {"property": "freq_scan", "value": self.dig_model.scanning.get('freq_scan', -1) if isinstance(self.dig_model.scanning, dict) else -1},
             {"property": "scan_iter", "value": self.dig_model.scanning.get('scan_iter', -1) if isinstance(self.dig_model.scanning, dict) else -1}
          ]   

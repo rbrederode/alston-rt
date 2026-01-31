@@ -8,6 +8,8 @@ EXC_ID_API_UNSUPPORTED_VERSION              = 0x0003
 EXC_ID_SOFTWARE_FAILURE                     = 0x0004
 EXC_ID_SCHEDULER_FAILURE                    = 0x0005
 EXC_ID_INVALID_TRANSITION                   = 0x0006
+EXC_ID_TIMEOUT_WAITING_FOR_RESPONSE         = 0x0007
+EXC_ID_COMMS_FAILURE                        = 0x0008
 
 class XBase(Exception):
     
@@ -65,3 +67,13 @@ class XInvalidTransition(XBase):
 
     def __init__(self, message: str=None, data: bytes=None):
         super().__init__(EXC_ID_INVALID_TRANSITION, message, data)
+
+class XTimeoutWaitingForResponse(XBase):
+
+    def __init__(self, message: str=None, data: bytes=None):
+        super().__init__(EXC_ID_TIMEOUT_WAITING_FOR_RESPONSE, message, data)
+
+class XCommsFailure(XBase):
+
+    def __init__(self, message: str=None, data: bytes=None):
+        super().__init__(EXC_ID_COMMS_FAILURE, message, data)

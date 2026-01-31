@@ -89,8 +89,8 @@ class Observation(BaseModel):
         "target_configs": And(list, lambda v: isinstance(v, list)),             # List of target configurations (TargetConfig)
         "target_scans": And(list, lambda v: isinstance(v, list)),               # List of target scan sets (TargetScanSet)
 
-        "tgt_index": And(int, lambda v: isinstance(v, int)),                    # Index of the next target to be observed (0-based)
-        "tgt_scan": And(int, lambda v: isinstance(v, int)),                     # Index of the next scan (for the given tgt_index) to be observed (0-based)
+        "tgt_idx": And(int, lambda v: isinstance(v, int)),                    # Index of the next target to be observed (0-based)
+        "tgt_scan": And(int, lambda v: isinstance(v, int)),                     # Index of the next scan (for the given tgt_idx) to be observed (0-based)
 
         "dish_id": And(Or(None, str), lambda v: v is None or isinstance(v, str)),# Dish identifier e.g. "dish001"
         "capabilities": And(str, lambda v: isinstance(v, str)),                 # Dish capabilities e.g. "Drift Scan over Zenith"
@@ -147,7 +147,7 @@ class Observation(BaseModel):
             "targets": [],
             "target_configs": [],
             "target_scans": [],
-            "tgt_index": 0,
+            "tgt_idx": 0,
             "tgt_scan": 0,
             "dish_id": None,
             "capabilities": "",
@@ -181,21 +181,29 @@ class Observation(BaseModel):
 
         super().__init__(**kwargs)
 
-    def get_target_config_by_index(self, tgt_index:int) -> TargetConfig:
+    def get_target_by_index(self, tgt_idx:int) -> TargetModel:
+        """Retrieve a target by its index from the targets list."""
+
+        if tgt_idx is None or not isinstance(tgt_idx, int):
+            return None
+
+        return self.targets[tgt_idx] if 0 <= tgt_idx < len(self.targets) else None
+
+    def get_target_config_by_index(self, tgt_idx:int) -> TargetConfig:
         """Retrieve a target configuration by its index from the target configurations list."""
 
-        if tgt_index is None or not isinstance(tgt_index, int):
+        if tgt_idx is None or not isinstance(tgt_idx, int):
             return None
 
-        return self.target_configs[tgt_index] if 0 <= tgt_index < len(self.target_configs) else None
+        return self.target_configs[tgt_idx] if 0 <= tgt_idx < len(self.target_configs) else None
 
-    def get_target_scan_by_index(self, tgt_index:int, freq_scan:int, scan_iter:int) -> ScanModel:
+    def get_target_scan_by_index(self, tgt_idx:int, freq_scan:int, scan_iter:int) -> ScanModel:
         """Retrieve a target scan by its indices from the target scans list."""
 
-        if tgt_index is None or freq_scan is None or scan_iter is None:
+        if tgt_idx is None or freq_scan is None or scan_iter is None:
             return None
 
-        target_scans = self.target_scans[tgt_index] if 0 <= tgt_index < len(self.target_scans) else None
+        target_scans = self.target_scans[tgt_idx] if 0 <= tgt_idx < len(self.target_scans) else None
         return target_scans.get_scan_by_index(freq_scan, scan_iter) if target_scans else None
 
     def get_target_scan_by_id(self, scan_id) -> ScanModel:
@@ -206,15 +214,15 @@ class Observation(BaseModel):
 
         # Split the scan_id to extract target, freq_scan and scan_iter indices
         try:
-            tgt_index = int(scan_id.split("-")[-3])
+            tgt_idx = int(scan_id.split("-")[-3])
             freq_scan = int(scan_id.split("-")[-2])
             scan_iter = int(scan_id.split("-")[-1])
 
-            return self.get_target_scan_by_index(tgt_index, freq_scan, scan_iter)
+            return self.get_target_scan_by_index(tgt_idx, freq_scan, scan_iter)
         except Exception as e:
             # Use brute force method if parsing scan_id fails
-            for tgt_index in range(len(self.target_scans)):
-                target_scans = self.target_scans[tgt_index]
+            for tgt_idx in range(len(self.target_scans)):
+                target_scans = self.target_scans[tgt_idx]
                 for scan in target_scans.scans:
                     if scan.scan_id == scan_id:
                         return scan  
@@ -235,18 +243,18 @@ class Observation(BaseModel):
             self.target_scans.append(target_scans)
 
     def get_current_tgt_scan_set(self) -> TargetScanSet:
-        """Get the current target scan set to be observed based on the current tgt_index."""
+        """Get the current target scan set to be observed based on the current tgt_idx."""
 
-        target_scan_set = self.target_scans[self.tgt_index] if 0 <= self.tgt_index < len(self.target_scans) else None
+        target_scan_set = self.target_scans[self.tgt_idx] if 0 <= self.tgt_idx < len(self.target_scans) else None
         if target_scan_set is None or target_scan_set.scans is None or len(target_scan_set.scans) == 0:
             return None
 
         return target_scan_set
 
     def get_current_tgt_scan(self) -> ScanModel:
-        """Get the current target scan to be observed based on the current tgt_index and tgt_scan."""
+        """Get the current target scan to be observed based on the current tgt_idx and tgt_scan."""
 
-        target_scan_set = self.target_scans[self.tgt_index] if 0 <= self.tgt_index < len(self.target_scans) else None
+        target_scan_set = self.target_scans[self.tgt_idx] if 0 <= self.tgt_idx < len(self.target_scans) else None
         if target_scan_set is None or target_scan_set.scans is None or len(target_scan_set.scans) == 0:
             return None
 
@@ -254,30 +262,30 @@ class Observation(BaseModel):
         if scan_iterations <= 0:
             return None
 
-        return self.get_target_scan_by_index(self.tgt_index, self.tgt_scan // scan_iterations, self.tgt_scan % scan_iterations)
+        return self.get_target_scan_by_index(self.tgt_idx, self.tgt_scan // scan_iterations, self.tgt_scan % scan_iterations)
  
     def set_next_tgt_scan(self):
         """Set the next target and scan index to the next EMPTY OR WIP scan (i.e. open scan) in the observation's set of scans."""
 
         # Iterate through targets starting from the current target index
-        for tgt_index in range(self.tgt_index, len(self.targets)):
+        for tgt_idx in range(self.tgt_idx, len(self.targets)):
 
             # Get the target scans for the given target index
-            target_scan_set = self.target_scans[tgt_index] if 0 <= tgt_index < len(self.target_scans) else None
+            target_scan_set = self.target_scans[tgt_idx] if 0 <= tgt_idx < len(self.target_scans) else None
             if target_scan_set is None:
                 continue
             
             for idx, scan in enumerate(target_scan_set.scans):
                 if scan.status == ScanState.EMPTY or scan.status == ScanState.WIP:
-                    self.tgt_index = tgt_index
+                    self.tgt_idx = tgt_idx
                     self.tgt_scan = idx
-                    print(f"Observation.set_next_tgt_scan: set tgt_index to {self.tgt_index}, set tgt_scan to {self.tgt_scan}")
+                    print(f"Observation.set_next_tgt_scan: set tgt_idx to {self.tgt_idx}, set tgt_scan to {self.tgt_scan}")
                     return
 
         # If no EMPTY scan found, set to the end of the targets
-        self.tgt_index = len(self.targets)
+        self.tgt_idx = len(self.targets)
         self.tgt_scan = 0
-        print(f"Observation.set_next_tgt_scan: set tgt_index to {self.tgt_index}, set tgt_scan to {self.tgt_scan}")
+        print(f"Observation.set_next_tgt_scan: set tgt_idx to {self.tgt_idx}, set tgt_scan to {self.tgt_scan}")
 
     def save_to_disk(self, output_dir) -> bool:
         """

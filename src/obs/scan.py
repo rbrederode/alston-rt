@@ -32,8 +32,9 @@ class Scan:
                 load: Load flag (optional)
         """
 
-        # Compose a key from obs_id, tgt_index, freq_scan
-        key = (scan_model.obs_id, scan_model.tgt_index, scan_model.freq_scan)
+        # Compose a key from obs_id, tgt_idx, freq_scan
+        # Obs_id is unique per observation and per dish (and hence digitiser)
+        key = (scan_model.obs_id, scan_model.tgt_idx, scan_model.freq_scan)
 
         with Scan._id_lock:
            # If the key is new or changed, start at 0

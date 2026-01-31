@@ -1,7 +1,7 @@
 import logging
 from typing import Any
 
-from api import tm_dig, tm_sdp
+from api import tm_dig, tm_sdp, tm_dm
 from models import dsh
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,9 @@ _config_to_property = {
     "scanning":         tm_dig.PROPERTY_SCANNING,
     "channels":         tm_dig.PROPERTY_CHANNELS,
     "scan_duration":    tm_dig.PROPERTY_SCAN_DURATION,
+    "capability":       tm_dm.PROPERTY_CAPABILITY,
+    "mode":             tm_dm.PROPERTY_MODE,
+    "target":           tm_dm.PROPERTY_TARGET,
 }
 
 def get_property_name_value(config_item: str, value) -> (str, Any):
@@ -48,7 +51,39 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
                     logger.error(f"Telescope Manager map: invalid GAIN value {value} for property {property}")
                 return property, None
 
-        elif property == tm_dig.PROPERTY_SCANNING:
+        elif property == tm_dm.PROPERTY_CAPABILITY:
+
+            if isinstance(value, str):
+                value_upper = value.upper()
+                if value_upper in dsh.CapabilityState.__members__:
+                    return property, dsh.CapabilityState[value_upper].value
+                else:
+                    logger.error(f"Telescope Manager map: invalid CAPABILITY value {value} for property {property}")
+                    return property, None
+            elif isinstance(value, int):
+                if value in [state.value for state in dsh.CapabilityState]:
+                    return property, value
+                else:
+                    logger.error(f"Telescope Manager map: invalid CAPABILITY integer value {value} for property {property}")
+                    return property, None
+
+        elif property == tm_dm.PROPERTY_MODE:
+
+            if isinstance(value, str):
+                value_upper = value.upper()
+                if value_upper in dsh.DishMode.__members__:
+                    return property, dsh.DishMode[value_upper].value
+                else:
+                    logger.error(f"Telescope Manager map: invalid MODE value {value} for property {property}")
+                    return property, None
+            elif isinstance(value, int):
+                if value in [state.value for state in dsh.DishMode]:
+                    return property, value
+                else:
+                    logger.error(f"Telescope Manager map: invalid MODE integer value {value} for property {property}")
+                    return property, None
+
+        elif property in [tm_dig.PROPERTY_SCANNING, tm_dm.PROPERTY_TARGET]:
             if isinstance(value, bool):
                 return property, value
             elif isinstance(value, dict):
@@ -58,7 +93,7 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
             elif str(value).upper() in ["FALSE", "0", "NO", "OFF"]:
                 return property, False
             else:
-                logger.error(f"Telescope Manager map: invalid SCANNING value {value} for property {property}")
+                logger.error(f"Telescope Manager map: invalid value {value} for property {property}")
                 return property, None
 
         elif property in [

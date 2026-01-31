@@ -243,7 +243,7 @@ if __name__ == "__main__":
 
     default_dig001 = DigitiserModel(dig_id="dig001",
         app=AppModel(
-            arguments={"local_host": "192.168.0.18"},
+            arguments={"local_host": "192.168.0.48"},
         ))
 
     default_dig002 = DigitiserModel(dig_id="dig002",

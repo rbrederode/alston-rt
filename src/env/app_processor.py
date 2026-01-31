@@ -55,7 +55,7 @@ class AppProcessor(Processor):
             if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
                 self.driver.app_model.health = getattr(self.driver, handler_method)()
 
-            logger.info(f"AppProcessor {self.name} health state is {self.driver.app_model.health.name}")
+            logger.debug(f"AppProcessor {self.name} health state is {self.driver.app_model.health.name}")
 
             handler_method = "process_status_event"
             if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
@@ -116,7 +116,7 @@ class AppProcessor(Processor):
         start_time = time.time()
         st = datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat()
         
-        logger.info(f"AppProcessor {self.name} started processing event {type(event)} at {st}")
+        logger.debug(f"AppProcessor {self.name} started processing event {type(event)} at {st}")
 
         try:
             if isinstance(event, InitEvent):
@@ -329,7 +329,7 @@ class AppProcessor(Processor):
         finally:
             end_time = time.time()
             et = datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat()
-            logger.info(f"AppProcessor {self.name} finished processing event {type(event)} at {et} taking {(end_time-start_time):.3f} seconds")
+            logger.debug(f"AppProcessor {self.name} finished processing event {type(event)} at {et} taking {(end_time-start_time):.3f} seconds")
 
         return True
 

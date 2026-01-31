@@ -5,9 +5,9 @@
 * Useful for debugging without manually editing the sheet.
 */
 function testOnEdit() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("OBS DESIGN");;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("OBS STORE");;
   const e = {
-    range: sheet.getRange("B34"),
+    range: sheet.getRange("J10"),
     value: "TRUE"
   };
   onEditHandler(e);
@@ -515,8 +515,8 @@ function onEditHandler(e) {
   }
 
   // --- Delete Observation checkbox logic (sheet OBS STORE, column J, rows ≥4) ---
-  if (sheetName === "OBS STORE" && col === 10 && row >= 4 && e.value === "TRUE") {
-    const obsRow = row - 2; // Map 4->2, 5->3, etc.
+  if (sheetName === "OBS STORE" && col === 10 && row >= 10 && e.value === "TRUE") {
+    const obsRow = row - 8; // Map 10->2, 15->7, etc.
     Logger.log(`Deleting JSON in DB OBS LIST row: ${obsRow}`);
     obsSheet.getRange("A" + obsRow).clearContent();
 
@@ -534,47 +534,6 @@ function onEditHandler(e) {
 
   // --- Observation Submission (D3) ---
   if (sheetName === "OBS DESIGN" && col === 4 && row === 3 && e.value === "TRUE") {
-    
-    const lastTargetRow = targetSheet.getLastRow();
-    Logger.log("Last Target Row"+lastTargetRow)
-    const target_configs = [];
-    const targets = [];
-
-    if (lastTargetRow >= 2) { // skip header
-      const targetValues = targetSheet.getRange(2, 1, lastTargetRow - 1, 1).getValues();
-
-      const keysToScale = ["center_freq", "bandwidth", "sample_rate"];
-      
-      targetValues.forEach((targetRow, index) => { // index is 0-based
-        const targetJsonText = targetRow[0];
-        Logger.log("Target JSON Text:" + targetJsonText);
-        if (!targetJsonText) return;
-
-        try {
-          const obj = JSON.parse(targetJsonText);
-
-          // Extract the target and target_config from the object
-          const target = obj.target
-          const target_config = obj.target_config
-
-          // Add an index based on the row order (0-based)
-          target.tgt_idx = index;
-          target_config.tgt_idx = index
-
-          // Scale specific keys
-          keysToScale.forEach(key => {
-            if (target_config.hasOwnProperty(key)) {
-              target_config[key] = Number(target_config[key]) * 1e6;
-            }
-          });
-
-          target_configs.push(target_config);
-          targets.push(target)
-        } catch (err) {
-          Logger.log(`Skipping invalid target JSON: ${err}`);
-        }
-      });
-    }
 
     const obsRanges = ["A2:B3","A6:B11", "D29:E33"];
     const obsJsonObj = generateJSON(sheet, obsRanges, true);
@@ -604,6 +563,51 @@ function onEditHandler(e) {
     // Generate a unique observation id
     const obs_id = start_datetime + "-" + dish_id;
     obsJsonObj["obs_id"] = obs_id
+    
+    const lastTargetRow = targetSheet.getLastRow();
+    Logger.log("Last Target Row"+lastTargetRow)
+    const target_configs = [];
+    const targets = [];
+
+    if (lastTargetRow >= 2) { // skip header
+      const targetValues = targetSheet.getRange(2, 1, lastTargetRow - 1, 1).getValues();
+
+      const keysToScale = ["center_freq", "bandwidth", "sample_rate"];
+      
+      targetValues.forEach((targetRow, index) => { // index is 0-based
+        const targetJsonText = targetRow[0];
+        Logger.log("Target JSON Text:" + targetJsonText);
+        if (!targetJsonText) return;
+
+        try {
+          const obj = JSON.parse(targetJsonText);
+
+          // Extract the target and target_config from the object
+          const target = obj.target
+          const target_config = obj.target_config
+
+          // Add an index based on the row order (0-based)
+          target.tgt_idx = index;
+          target_config.tgt_idx = index
+
+          // Add reference to the observation id
+          target.obs_id = obs_id
+          target_config.obs_id = obs_id
+
+          // Scale specific keys
+          keysToScale.forEach(key => {
+            if (target_config.hasOwnProperty(key)) {
+              target_config[key] = Number(target_config[key]) * 1e6;
+            }
+          });
+
+          target_configs.push(target_config);
+          targets.push(target)
+        } catch (err) {
+          Logger.log(`Skipping invalid target JSON: ${err}`);
+        }
+      });
+    }
 
     // Set ObsState to EMPTY initially
     obsJsonObj["obs_state"] = { 
@@ -1585,7 +1589,7 @@ function parseJSON(jsonText, keyPath) {
     // Traverse JSON
     let val = obj;
     for (const part of parts) {
-      if (val === undefined || val === null) return "null";
+      if (val === undefined || val === null) return "";
 
       if (part.type === 'key') {
         val = val[part.value];
