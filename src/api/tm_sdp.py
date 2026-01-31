@@ -50,10 +50,15 @@ TO = (
 # Allowable properties to get or set on the system
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 PROPERTY_STATUS         = 'status'           # Get system status
+PROPERTY_SCAN_COMPLETE  = 'scan_complete'    # Notify Telescope Manager that a scan has completed
+PROPERTY_SIGNAL_DISPLAY = 'signal_display'   # Control the signal display (show/hide) for a digitiser
+
 
 PROPERTIES = (
     PROPERTY_DEBUG,
-    PROPERTY_STATUS
+    PROPERTY_STATUS,
+    PROPERTY_SCAN_COMPLETE,
+    PROPERTY_SIGNAL_DISPLAY,
 )
 
 # Allowable status codes for responses

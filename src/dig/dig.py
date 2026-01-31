@@ -16,10 +16,9 @@ from ipc.tcp_server import TCPServer
 from models.app import AppModel
 from models.comms import CommunicationStatus, InterfaceType
 from models.dig import DigitiserModel
-from models.dsh import Feed
 from models.health import HealthState
 from sdr.sdr import SDR
-from util import log
+from util import log, util
 from util.xbase import XBase, XStreamUnableToExtract, XSoftwareFailure, XAPIValidationFailed
 
 logger = logging.getLogger(__name__)
@@ -55,13 +54,8 @@ class Digitiser(App):
         self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint, InterfaceType.ENTITY)
         # Set initial Science Data Processor connection status
         self.dig_model.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
-        
-        # Software Defined Radio (internal) interface
-        self.sdr = SDR()
-        self.dig_model.sdr_eeprom = self.sdr.get_eeprom_info()
-        self.dig_model.sdr_connected = self.sdr.get_comms_status()
 
-        self.dig_model.streaming = False # Flag indicating if we are currently streaming samples (from the SDR)
+        self.dig_model.scanning = False # Flag indicating if we are currently scanning for samples (from the SDR)
  
     def add_args(self, arg_parser): 
         """ Specifies the digitiser's command line arguments.
@@ -75,14 +69,21 @@ class Digitiser(App):
         arg_parser.add_argument("--sdp_port", type=int, required=False, help="TCP server port to connect to for downstream Science Data Processor transport", default=60000)
 
         arg_parser.add_argument("--local_host", type=str, required=True, help="Localhost (ip4 address) on which the digitiser is running e.g. 192.168.0.1", default="0.0.0.0")
-
+    
     def process_init(self) -> Action:
-        """ Processes initialisation events.
+        """ Processes initialisation event on startup once all app processors are running.
+            Runs in single threaded mode and switches to multi-threading mode after this method completes.
         """
         logger.debug(f"Digitiser initialisation event")
 
         action = Action()
-        # If SDR is not connected, set timer to retry connection
+
+        # Initialise the Software Defined Radio (internal) interface
+        self.sdr = SDR()
+        self.dig_model.sdr_eeprom = self.sdr.get_eeprom_info()
+        self.dig_model.sdr_connected = self.sdr.get_comms_status()
+        
+        # If SDR is not connected, start timer to periodically retry connection
         if self.dig_model.sdr_connected == CommunicationStatus.NOT_ESTABLISHED:
             action.set_timer_action(Action.Timer(name=f"sdr_retry", timer_action=5000))
 
@@ -94,13 +95,12 @@ class Digitiser(App):
         logger.debug(f"Digitiser connected to Telescope Manager: {event.remote_addr}")
 
         self.dig_model.tm_connected = CommunicationStatus.ESTABLISHED
-
-        action = Action()
         
         # Send status advice message to Telescope Manager
         tm_adv = self._construct_status_adv_to_tm()
+        action = Action()
         action.set_msg_to_remote(tm_adv)
-        
+
         return action
 
     def process_tm_disconnected(self, event) -> Action:
@@ -116,75 +116,82 @@ class Digitiser(App):
         """
         logger.debug(f"Digitiser received Telescope Manager message:\n{event}")
 
-        # Dispatch the API Call to a handler method
-        dispatch = {
-            "set": self.handle_field_set,
-            "get": self.handle_field_get,
-            "method": self.handle_method_call
-            }
-
-        # Invoke handler method to process the api call
-        result = dispatch.get(api_call['action_code'], lambda x: None)(api_call)
-        status, message, value, payload = self._unpack_result(result)
-
         action = Action()
 
-        # If api call was a request that was successfully handled, prepare resultant actions 
-        if api_call['msg_type'] == 'req' and status == tm_dig.STATUS_SUCCESS:
+        # If api call is a rsp msg from the TM
+        if api_call['msg_type'] == 'rsp':
 
-            # Check if the API call is a "set" action for the sample "streaming" property
-            if api_call['action_code'] == tm_dig.ACTION_CODE_SET and api_call.get('property') == tm_dig.PROPERTY_STREAMING:
+            # Stop the corresponding req/adv timer if applicable
+            dt = api_msg.get('timestamp')
+            if dt:
+                action.set_timer_action(Action.Timer(name=f"tm_req_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
+                action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
+            
+            if api_call.get('status') == tm_dig.STATUS_ERROR:
+                logger.error(f"Digitiser received negative acknowledgement from TM for api call\n{json.dumps(api_call, indent=2)}")
 
-                timer_action = 0 if self.dig_model.streaming else Action.Timer.TIMER_STOP
-                    
-                # Start reading samples immediately (timer_action=0) else stop timers (timer_action=TIMER_STOP)
-                # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
-                for i in range(1, 3):
-                    action.set_timer_action(Action.Timer(name=f"stream_samples_{i}", timer_action=timer_action))
+            return action
 
-            if api_call['action_code'] == tm_dig.ACTION_CODE_METHOD and api_call['method'] in ("read_samples", "read_bytes"):
+        # Else if api call is a req or adv msg from the TM
+        elif api_call['msg_type'] in ['req', 'adv']:
+            
+            # Dispatch the API Call to a handler method
+            dispatch = {
+                "set": self.handle_field_set,
+                "get": self.handle_field_get,
+                "method": self.handle_method_call
+                }
 
-                if self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
-                    # Prepare adv msg to send samples to sdp
-                    sdp_adv = self._construct_adv_to_sdp(status, message, value, payload.tobytes())
-                    action.set_msg_to_remote(sdp_adv)
-                    action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=sdp_adv))
+            # Invoke set, get or method handler to process the api call
+            result = dispatch.get(api_call['action_code'], lambda x: None)(api_call)
+            status, message, value, payload = util.unpack_result(result)
 
-                elif not self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED:
-                    logger.warning("Digitiser cannot send samples to Science Data Processor, not connected.")
+            # If api call was successfully processed by the handler method
+            if status == tm_dig.STATUS_SUCCESS:
 
-                    # Send status advice message to Telescope Manager
-                    tm_adv = self._construct_status_adv_to_tm()
-                    action.set_msg_to_remote(tm_adv)
-                    action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=tm_adv))
+                # If the API call is a "set" action for the "scanning" property
+                if api_call['action_code'] == tm_dig.ACTION_CODE_SET and api_call.get('property') == tm_dig.PROPERTY_SCANNING:
 
-                elif payload is None:
-                    # Wait for stream_samples timer to trigger again
-                    logger.warning("Digitiser cannot send samples to Science Data Processor, no payload.")
-                
-        # Prepare rsp msg to tm containing result of initial api call
-        tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
-        tm_rsp.switch_from_to()
-        tm_rsp_api_call = {
-            "msg_type": "rsp", 
-            "action_code": api_call['action_code'], 
-            "status": status, 
-        }
-        if api_call.get('property') is not None:
-            tm_rsp_api_call["property"] = api_call['property']
-        if value is not None:
-            tm_rsp_api_call["value"] = value 
-        if message is not None:
-            tm_rsp_api_call["message"] = message
+                    logger.info(f"Digitiser scanning state changed to: {value}")
 
-        tm_rsp.set_api_call(tm_rsp_api_call)       
-        action.set_msg_to_remote(tm_rsp)
+                    # Timer action 0 to start reading samples immediately, TIMER_STOP to stop reading samples
+                    timer_action = 0 if self.dig_model.scanning else Action.Timer.TIMER_STOP
+                        
+                    # Start reading samples immediately (timer_action=0) else stop timers (timer_action=TIMER_STOP)
+                    # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
+                    for i in range(1, 3):
+                        action.set_timer_action(Action.Timer(name=f"scan_samples_{i}", timer_action=timer_action))
+
+                # Else if the API call is a "method" action for reading samples
+                elif api_call['action_code'] == tm_dig.ACTION_CODE_METHOD and api_call['method'] in ("read_samples", "read_bytes"):
+
+                    if self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
+                        # Prepare adv msg to send samples to sdp
+                        sdp_adv = self._construct_adv_to_sdp(status, message, value, payload.tobytes())
+                        action.set_msg_to_remote(sdp_adv)
+                        action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=sdp_adv))
+
+                    elif not self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED:
+                        logger.warning("Digitiser cannot send samples to Science Data Processor, not connected.")
+
+                        # Send status advice message to Telescope Manager
+                        tm_adv = self._construct_status_adv_to_tm()
+                        action.set_msg_to_remote(tm_adv)
+                        action.set_timer_action(Action.Timer(name=f"tm_adv_timer:{tm_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=tm_adv))
+
+                    elif payload is None:
+                        # Wait for scan_samples timer to trigger again
+                        logger.warning("Digitiser cannot send samples to Science Data Processor, no payload.")
+
+            tm_rsp = self._construct_rsp_to_tm(status, message, value, api_msg, api_call)
+            action.set_msg_to_remote(tm_rsp)
+
         return action
 
     def process_sdp_connected(self, event) -> Action:
         """ Processes Science Data Processor connected events.
         """
-        logger.debug(f"Digitiser connected to Science Data Processor: {event.remote_addr}")
+        logger.info(f"Digitiser connected to Science Data Processor: {event.remote_addr}")
 
         self.dig_model.sdp_connected = CommunicationStatus.ESTABLISHED
 
@@ -201,7 +208,7 @@ class Digitiser(App):
     def process_sdp_disconnected(self, event) -> Action:
         """ Processes Science Data Processor disconnected events.
         """
-        logger.debug(f"Digitiser disconnected from Science Data Processor: {event.remote_addr}")
+        logger.info(f"Digitiser disconnected from Science Data Processor: {event.remote_addr}")
 
         self.dig_model.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
 
@@ -223,14 +230,17 @@ class Digitiser(App):
 
         action = Action()
 
-        # If we are processing a samples acknowledgement from the sdp, stop the associated timer
-        if api_call['msg_type'] == 'rsp' and api_call['action_code'] == 'samples':
-            dt = api_msg.get("timestamp")
+         # If api call is a rsp msg from the SDP
+        if api_call['msg_type'] == 'rsp':
+
+            # Stop the corresponding req/adv timer if applicable
+            dt = api_msg.get('timestamp')
             if dt:
-                action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{dt}", timer_action=Action.Timer.TIMER_STOP, echo_data=api_msg))
+                action.set_timer_action(Action.Timer(name=f"sdp_req_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
+                action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
             
-            if api_call.get('status') == 'error':
-                logger.error(f"Digitiser received negative acknowledgement from SDP for a samples advice.\n{api_msg}")
+            if api_call.get('status') == tm_dig.STATUS_ERROR:
+                logger.error(f"Digitiser received negative acknowledgement from SDP for api call\n{json.dumps(api_call, indent=2)}")
 
         return action
 
@@ -241,13 +251,17 @@ class Digitiser(App):
 
         action = Action()
 
-        if event.name.startswith("stream_samples"):
+        # If the timer is for scanning samples from the SDR
+        if event.name.startswith("scan_samples"):
+            
+            # Invoke the read_samples method to read samples from the SDR
             result = self.handle_method_call({"method": "read_samples", "params": {}})
-            status, message, value, payload = self._unpack_result(result)
+            status, message, value, payload = util.unpack_result(result)
 
-            # If the digitiser is set to stream samples
-            if self.dig_model.streaming:
-                # Start the same stream_samples timer immediately if successful, else wait 1 second before retrying
+            # If the digitiser is set to scan samples
+            if self.dig_model.scanning:
+
+                # Start the same scan_samples timer immediately if it was successful, else wait 1000 milliseconds before retrying
                 wait = 0 if status == tm_dig.STATUS_SUCCESS else 1000 
                 action.set_timer_action(Action.Timer(name=event.name, timer_action=wait)) 
 
@@ -258,25 +272,19 @@ class Digitiser(App):
                 action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=sdp_adv))
 
             elif payload is None:
-                # Wait for stream_samples timer to trigger again
-                logger.warning("Digitiser cannot send samples to Science Data Processor, no payload.")
-            
+                # Wait for scan_samples timer to trigger again
+                logger.warning(f"Digitiser cannot send samples to Science Data Processor on {event.name}, no payload after reading samples.")
+        
+        # Else if the timer is for handling sdp adv timeouts
         elif event.name.startswith("sdp_adv_timer"):
 
+            # Simply log a warning that the SDP did not acknowledge the samples advice
             logger.warning(f"Digitiser timed out waiting for acknowledgement from SDP for samples advice {event}")
 
-            if event.user_ref and isinstance(event.user_ref, APIMessage):
-                try:
-                    dt = event.user_ref.get_timestamp()
-                    logger.debug(f"Digitiser stopping sdp_adv_timer for timestamp {dt}")
-                    if dt:
-                        action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{dt}", timer_action=Action.Timer.TIMER_STOP))
-                except Exception as e:
-                    logger.error(f"Digitiser - Error processing user_ref in event: {e}")
-
+        # Else if the timer is for handling comms to the SDR
         elif event.name.startswith("sdr_retry"):
-            # Retry connecting to the SDR
-            self.sdr = SDR()
+
+            self.sdr = SDR()  # Retry connecting to the SDR
             self.dig_model.sdr_connected = self.sdr.get_comms_status()
 
             if self.dig_model.sdr_connected == CommunicationStatus.NOT_ESTABLISHED:
@@ -313,22 +321,6 @@ class Digitiser(App):
             return HealthState.DEGRADED
         else:
             return HealthState.OK
-
-    def set_feed(self, feed_id: int):
-        """ Sets the current feed ID.
-        """
-        self.dig_model.feed = Feed(feed_id)
-        logger.info(f"Digitiser feed set to {self.dig_model.feed.name}")
-
-    def set_streaming(self, streaming: bool):
-        
-        self.dig_model.streaming = True if streaming else False
-        logger.info(f"Digitiser streaming set to {streaming}")
-
-    def get_streaming(self) -> bool:
-        """ Gets the current streaming status.
-        """
-        return self.dig_model.streaming
     
     def handle_field_set(self, api_call):
         """ Handles field set api calls.
@@ -349,15 +341,18 @@ class Digitiser(App):
                 setter(prop_value)
                 # Update the property in the digitiser model for sdr properties
                 setattr(self.dig_model, prop_name[4:], prop_value)
-                logger.info(f"Digitiser {prop_name[4:]} set to {prop_value}")
 
             # Else if the property setter exists on the Digitiser
             elif hasattr(self, prop_name) and callable(getattr(self, prop_name)):
                 setter = getattr(self, prop_name)
                 setter(prop_value)
 
-            # Else if the property does not exist on either the SDR or Digitiser
-            elif not hasattr(self.sdr, prop_name) and not hasattr(self, prop_name):
+            # Else if the property exists on the Digitiser model schema
+            elif prop_name[4:] in self.dig_model.schema.schema:
+                setattr(self.dig_model, prop_name[4:], prop_value)
+
+            # Else if the property does not exist on either the SDR, Digitiser or Digitiser model
+            elif not hasattr(self.sdr, prop_name) and not hasattr(self, prop_name) and not prop_name[4:] in self.dig_model.schema.schema:
                 logger.error(f"Digitiser unknown property {prop_name} with value {prop_value}")
                 return tm_dig.STATUS_ERROR, f"Digitiser unknown property {prop_name}", None, None
 
@@ -370,6 +365,7 @@ class Digitiser(App):
             logger.exception(f"Digitiser failed to set property {prop_name} to {prop_value}: {e}")
             return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name} to {prop_value}: {e}", None, None
 
+        logger.info(f"Digitiser set property {prop_name[4:]} to {prop_value}")
         return tm_dig.STATUS_SUCCESS, f"Digitiser set property {prop_name} to {prop_value}", prop_value, None
     
     def handle_field_get(self, api_call):
@@ -391,8 +387,12 @@ class Digitiser(App):
         elif hasattr(self, prop_name) and callable(getattr(self, prop_name)):
             getter = getattr(self, prop_name)
 
-        # Else if the property does not exist on either the SDR or Digitiser
-        elif not hasattr(self.sdr, prop_name) and not hasattr(self, prop_name):
+        # Else if the property exists on the Digitiser model schema
+        elif prop_name[4:] in self.dig_model.schema.schema:
+            getter = getattr(self.dig_model, prop_name[4:])
+
+        # Else if the property does not exist on either the SDR, Digitiser or Digitiser model
+        elif not hasattr(self.sdr, prop_name) and not hasattr(self, prop_name) and not prop_name[4:] in self.dig_model.schema.schema:
             logger.error(f"Digitiser unknown property {prop_name}")
             return tm_dig.STATUS_ERROR, f"Digitiser unknown property {prop_name}", None, None
 
@@ -407,7 +407,7 @@ class Digitiser(App):
             logger.error(f"Digitiser failed to get property {prop_name}: {e}")
             return tm_dig.STATUS_ERROR, f"Digitiser failed to get property {prop_name}: {e}", None, None
 
-        return tm_dig.STATUS_SUCCESS, f"Digitiser {prop_name} value {value}", value, None
+        return tm_dig.STATUS_SUCCESS, f"Digitiser get {prop_name} value {value}", value, None
   
     def handle_method_call(self, api_call):
         """ Handles method api calls.
@@ -453,6 +453,7 @@ class Digitiser(App):
     def _construct_status_adv_to_tm(self) -> APIMessage:
         """ Constructs a status advice message for the Telescope Manager.
         """
+
         tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
         tm_adv.set_json_api_header(
             api_version=self.tm_api.get_api_version(), 
@@ -492,15 +493,21 @@ class Digitiser(App):
         
         # Construct metadata using the digitiser model and sample read info
         metadata = [   
-            {"property": "dig_id", "value": self.dig_model.dig_id},                 # Digitiser Id
-            {"property": "feed", "value": self.dig_model.feed.name},            # Feed name
-            {"property": "center_freq", "value": self.dig_model.center_freq},   # Hz    
-            {"property": "sample_rate", "value": self.dig_model.sample_rate},   # Hz
-            {"property": "bandwidth", "value": self.dig_model.bandwidth},       # MHz
-            {"property": "gain", "value": self.dig_model.gain},                 # dB
+            {"property": "dig_id", "value": self.dig_model.dig_id},               # Digitiser Id
+            {"property": "load", "value": self.dig_model.load},                   # Bool
+            {"property": "center_freq", "value": self.dig_model.center_freq},     # Hz    
+            {"property": "sample_rate", "value": self.dig_model.sample_rate},     # Hz
+            {"property": "bandwidth", "value": self.dig_model.bandwidth},         # MHz
+            {"property": "gain", "value": self.dig_model.gain},                   # dB
+            {"property": "channels", "value": self.dig_model.channels},           # Number of spectral channels
+            {"property": "scan_duration", "value": self.dig_model.scan_duration}, # Scan duration in seconds
             {"property": "read_counter", "value": read_counter},
             {"property": "read_start", "value": datetime.fromtimestamp(read_start, timezone.utc).isoformat()},
             {"property": "read_end", "value": datetime.fromtimestamp(read_end, timezone.utc).isoformat()},
+            {"property": "obs_id", "value": self.dig_model.scanning.get('obs_id', '<undefined>') if isinstance(self.dig_model.scanning, dict) else '<undefined>'},  
+            {"property": "tgt_idx", "value": self.dig_model.scanning.get('tgt_idx', -1) if isinstance(self.dig_model.scanning, dict) else -1},
+            {"property": "freq_scan", "value": self.dig_model.scanning.get('freq_scan', -1) if isinstance(self.dig_model.scanning, dict) else -1},
+            {"property": "scan_iter", "value": self.dig_model.scanning.get('scan_iter', -1) if isinstance(self.dig_model.scanning, dict) else -1}
          ]   
 
         sdp_adv.set_api_call({
@@ -513,21 +520,29 @@ class Digitiser(App):
 
         return sdp_adv
 
-    def _unpack_result(self, result):
-        """ Unpacks the result of a method call.
+    def _construct_rsp_to_tm(self, status: int, message: str, value: any, api_msg: dict, api_call: dict) -> APIMessage:
+        """ Constructs a Telescope Manager response APIMessage.
         """
-        if isinstance(result, tuple) and len(result) == 4:
-            status, message, value, payload = result
-        elif isinstance(result, tuple) and len(result) == 3:
-            status, message, value, payload = result, None
-        elif isinstance(result, tuple) and len(result) == 2:
-            status, message, value, payload = result, None, None
-        elif isinstance(result, tuple) and len(result) == 1:
-            status, message, value, payload = result, None, None, None
-        else:
-            status, message, value, payload = tm_dig.STATUS_ERROR, "Invalid result format", None, None
+        tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
+        tm_rsp.switch_from_to()
 
-        return status, message, value, payload
+        tm_rsp_api_call = {
+            "msg_type": "rsp", 
+            "action_code": api_call['action_code'], 
+            "status": status, 
+        }
+        
+        if api_call.get('property') is not None:
+            tm_rsp_api_call["property"] = api_call['property']
+
+        if value is not None:
+            tm_rsp_api_call["value"] = value
+
+        if message is not None:
+            tm_rsp_api_call["message"] = message
+
+        tm_rsp.set_api_call(tm_rsp_api_call)       
+        return tm_rsp
 
 def main():
     digitiser = Digitiser()

@@ -5,6 +5,9 @@ import time
 from queue import Queue
 from datetime import datetime
 
+from models.obs import Observation
+from util.xbase import XSoftwareFailure
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -254,3 +257,27 @@ class ConfigEvent:
             f" - Category: {self.category}\n" + \
             f" - Old Config: {self.old_config}\n" + \
             f" - New Config: {self.new_config}\n"
+
+class ObsEvent:
+
+    def __init__(self, obs: Observation=None, transition=None, user_ref=None, timestamp=None):
+        """Initialize the obs event with the given parameters.
+
+        Parameters
+            obs: Observation associated with the event
+            event_type: Type of the observation event
+            timestamp: Timestamp of the event
+        """
+        self.obs = obs
+        self.transition = transition
+        self.user_ref = user_ref
+        self.timestamp = timestamp
+
+    def __str__(self):
+        """
+        Returns a human-readable string representation of this event.
+        """
+        return f"ObsEvent@{self.timestamp}\n" + \
+            f" - Obs: {self.obs}\n" + \
+            f" - Transition Type: {self.transition.name if self.transition else None}\n" + \
+            f" - User Ref: {self.user_ref}\n"

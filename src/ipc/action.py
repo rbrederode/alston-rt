@@ -1,4 +1,5 @@
 from ipc.message import APIMessage
+from models.obs import Observation
 from util.timer import Timer
 from util.xbase import XSoftwareFailure
 
@@ -29,7 +30,9 @@ class Action:
             return self.comms_action
 
         def __str__(self):
-            return f"Action.Comms(endpoint_name={self.endpoint_name}, comms_action={self.comms_action})"
+            return f"Action.Comms\n" + \
+                f" - Endpoint Name: {self.endpoint_name}\n" + \
+                f" - Comms Action: {self.comms_action}\n"
 
     class Timer:
 
@@ -58,7 +61,39 @@ class Action:
             return self.echo_data
 
         def __str__(self):
-            return f"Action.Timer(name={self.name}, timer_action={self.timer_action}, echo_data={self.echo_data})"
+            return f"Action.Timer\n" + \
+                f" - Name: {self.name}\n" + \
+                f" - Timer Action: {self.timer_action}\n" + \
+                f" - Echo Data: {self.echo_data}\n"
+
+    class Transition:
+
+        def __init__(self, obs: Observation=None, transition=None, echo_data=None):
+
+            if transition is None:
+                raise XSoftwareFailure("Action.Transition transition cannot be None")
+
+            if obs is None:
+                raise XSoftwareFailure("Action.Transition obs cannot be None")
+
+            self.obs = obs
+            self.transition = transition
+            self.echo_data = echo_data
+
+        def get_transition(self):
+            return self.transition
+
+        def get_obs(self):
+            return self.obs
+
+        def get_echo_data(self):
+            return self.echo_data
+
+        def __str__(self):
+            return f"Action.Transition\n" + \
+                f" - Obs: {self.obs}\n" + \
+                f" - Transition Type: {self.transition.name if self.transition else None}\n" + \
+                f" - Echo Data: {self.echo_data}\n"
 
     #--------------------------
     # Main Action class methods
@@ -69,6 +104,7 @@ class Action:
         self.msgs_to_remote = []
         self.timer_actions = []
         self.connection_actions = []
+        self.obs_transitions = []
 
     def set_cause(self, cause):
         self.cause = cause
@@ -88,6 +124,11 @@ class Action:
             self.timer_actions.append(timer_action)
         return self
 
+    def set_obs_transition(self, transition=None, obs: Observation=None, echo_data=None):
+        transition = Action.Transition(transition=transition, obs=obs, echo_data=echo_data)
+        self.obs_transitions.append(transition)
+        return self
+
     def clear_msgs_to_remote(self):
         self.msgs_to_remote.clear()
         return self
@@ -100,12 +141,20 @@ class Action:
         self.connection_actions.clear()
         return self
 
+    def clear_obs_transitions(self):
+        self.obs_transitions.clear()
+        return self
+
     def is_empty(self) -> bool:
         return (len(self.msgs_to_remote) == 0 and
                 len(self.timer_actions) == 0 and
-                len(self.connection_actions) == 0)
+                len(self.connection_actions) == 0 and
+                len(self.obs_transitions) == 0)
 
     def __str__(self):
-        return f"Action(cause={self.cause}, msgs_to_remote={self.msgs_to_remote}, timer_actions={self.timer_actions}, connection_actions={self.connection_actions})"
-
-        
+        return f"Action\n" + \
+            f" - Cause: {self.cause}\n" + \
+            f" - Messages to Remote: {self.msgs_to_remote}\n" + \
+            f" - Timer Actions: {self.timer_actions}\n" + \
+            f" - Connection Actions: {self.connection_actions}\n" + \
+            f" - Observation Transitions: {self.obs_transitions}\n"

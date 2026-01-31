@@ -1,12 +1,26 @@
 from __future__ import annotations
 from datetime import datetime
+import numpy as np
 from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from models.dsh import Feed
 
 import logging
 logger = logging.getLogger(__name__)
+
+def unpack_result(result) -> tuple:
+        """ Unpacks a tuple result containing status, message, value, and payload.
+        """
+        if isinstance(result, tuple) and len(result) == 4:
+            status, message, value, payload = result
+        elif isinstance(result, tuple) and len(result) == 3:
+            status, message, value, payload = result, None
+        elif isinstance(result, tuple) and len(result) == 2:
+            status, message, value, payload = result, None, None
+        elif isinstance(result, tuple) and len(result) == 1:
+            status, message, value, payload = result, None, None, None
+        else:
+            status, message, value, payload = "error", "Invalid result format", None, None
+
+        return status, message, value, payload
 
 def dict_diff(old_dict, new_dict):
     """
@@ -48,36 +62,35 @@ def dict_diff(old_dict, new_dict):
 
 def gen_file_prefix(
     dt:datetime,
-    feed:Feed,
+    entity_id:str,
     gain:float,
     duration:int,
     sample_rate:float,
     center_freq:float,
     channels:int,
-    entity_id:int = None,
+    instance_id:str = None,
     filetype: str = None) -> str:
 
     """ Generate a filename prefix based on metadata parameters.
         :param dt: The datetime object representing the entity start time
-        :param feed: The feed type e.g. Feed.F1420_H3T
+        :param entity_id: The entity identifier e.g. dig_id 
         :param gain: The gain setting e.g. 39.6 dB
         :param duration: The duration in seconds
         :param sample_rate: The sample rate e.g. 2.4e6 Hz
         :param center_freq: The center frequency e.g. 1.42e9 Hz
         :param channels: The number of channels e.g. 1024
-        :param entity_id: The entity ID 
-        :param filetype: The type of file being generated (e.g., "raw", "spr", "meta")
+        :param instance_id: The instance ID number e.g. for multiple files per entity
+        :param filetype: The type of file being generated (e.g., "raw", "spr", "load", "meta")
         :returns: A string representing the file prefix
     """
-
-    return dt.strftime("%Y-%m-%dT%H%M%S") + \
-        "-f" + str(feed) + \
+    return (str(instance_id).replace(':', '') if instance_id is not None else '') + \
+        (dt.strftime("%Y-%m-%dT%H%M%S") if instance_id is None else '') + \
+        ("-" + str(entity_id) if entity_id is not None else '') + \
         "-g" + str(gain) + \
         "-du" + str(duration) + \
         "-bw" + str(round(sample_rate/1e6,2)) + \
         "-cf" + str(round(center_freq/1e6,2)) + \
         "-ch" + str(channels) + \
-        ("-id" + str(entity_id) if entity_id is not None else "") + \
         ("-" + filetype if filetype is not None else '')
 
 def find_json_object_end(data:bytes) -> int:
@@ -103,8 +116,63 @@ def find_json_object_end(data:bytes) -> int:
         escape = (c == '\\' and not escape)
     return -1  # Not found
 
+def get_azimuth_distance(az1, az2):
+    """ This function calculates the distance needed to move in azimuth between two angles. This takes into account that the 
+    telescope may need to go 'the other way around' to reach some positions, i.e. the distance to travel can be much larger than the 
+    simple angular distance. This assumes that both azimuth positions are valid, something which can be checked first with the can_reach function."""
+    # Normalize angles to [0, 360) range
+    az1_norm = az1 % 360
+    az2_norm = az2 % 360
+    
+    # Calculate absolute difference
+    diff = np.abs(az1_norm - az2_norm)
+    
+    # Return the shorter path around the circle
+    return min(diff, 360 - diff)
 
-# --- Pytest test functions below ---
+def get_angular_distance(alt1_deg, az1_deg, alt2_deg, az2_deg) -> float:
+    """ Calculate angular distance between two altaz positions in degrees.
+        For altitude azimuth coordinates, the angular separation satisfies:
+    
+        cosθ = sin(a1) sin(a2)+cos(a1) cos(a2) cos(ΔAz)
+        where a1 and a2 are the altitudes, and ΔAz is the difference in azimuths.
+    """
+
+    alt1 = np.deg2rad(alt1_deg)
+    az1  = np.deg2rad(az1_deg)
+    alt2 = np.deg2rad(alt2_deg)
+    az2  = np.deg2rad(az2_deg)
+
+    x1 = np.cos(alt1) * np.cos(az1)
+    y1 = np.cos(alt1) * np.sin(az1)
+    z1 = np.sin(alt1)
+
+    x2 = np.cos(alt2) * np.cos(az2)
+    y2 = np.cos(alt2) * np.sin(az2)
+    z2 = np.sin(alt2)
+
+    dot = x1*x2 + y1*y2 + z1*z2
+    dot = np.clip(dot, -1.0, 1.0)  # numerically safe
+
+    return np.rad2deg(np.arccos(dot))
+
+# Runs tests using: pytest util/util.py -v
+# -v for verbose output (or -vv or -vvv for more verbosity)
+# -s to show print output
+
+def test_azimuth_distance():
+    assert get_azimuth_distance(10.0, 20.0) == 10.0
+    assert get_azimuth_distance(350.0, 10.0) == 20.0
+    assert get_azimuth_distance(180.0, 270.0) == 90.0
+    assert get_azimuth_distance(0.0, 360.0) == 0.0
+    assert get_azimuth_distance(-10.0, 360.0) == 10.0
+
+def test_angular_distance():
+    assert abs(get_angular_distance(45.0, 180.0, 45.0, 180.0) - 0.0) < 0.001
+    assert abs(get_angular_distance(45.0, 180.0, 46.0, 180.0) - 1.0) < 0.001
+    assert abs(get_angular_distance(45.0, 180.0, 45.0, 181.0) - 0.707) < 0.001
+    assert abs(get_angular_distance(0.0, 0.0, 90.0, 0.0) - 90.0) < 0.001
+    assert abs(get_angular_distance(90.0, 0.0, -90.0, 0.0) - 180.0) < 0.001  
 
 def test_find_json_object_end_simple():
     test_data = b'{"key1": "value1"}{"key2": "value2"}'

@@ -6,6 +6,7 @@ astropy
 astroplan
 astroquery
 witmotion
+pyobjc
 pyrtlsdr
 scipy
 schema

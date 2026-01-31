@@ -6,7 +6,6 @@ import json
 import os
 from datetime import datetime, timezone
 
-from models.dsh import Feed
 from models.scan import ScanModel, ScanState
 from util import gen_file_prefix
 from util.xbase import XSoftwareFailure
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 class Scan:
 
     _id_lock = threading.Lock()
-    _next_id = 1
+    _scan_iter_counter = {}
 
     def __init__(self, scan_model: ScanModel):
         """ Initialize a scan with the given parameters.
@@ -30,19 +29,29 @@ class Scan:
                 channels: Number of channels (FFT size) for the analysis
                 center_freq: Center frequency of the samples in Hz (optional)
                 gain: Gain in dB (optional)
-                feed: Feed Id (optional)
+                load: Load flag (optional)
         """
 
+        # Compose a key from obs_id, tgt_idx, freq_scan
+        # Obs_id is unique per observation and per dish (and hence digitiser)
+        key = (scan_model.obs_id, scan_model.tgt_idx, scan_model.freq_scan)
+
         with Scan._id_lock:
-            self.id = Scan._next_id                     # Unique scan identifier
-            Scan._next_id += 1                          # Increment for next scan
+           # If the key is new or changed, start at 0
+            if key not in Scan._scan_iter_counter:
+                scan_iter = 0
+            else:
+                scan_iter = Scan._scan_iter_counter[key] + 1
+
+             # Set the scan_iter in the model and update the counter
+            scan_model.scan_iter = scan_iter
+            Scan._scan_iter_counter[key] = scan_iter
 
         self._rlock = threading.RLock()  # Lock for thread-safe access to shared resources
 
         with self._rlock:
 
             self.scan_model = scan_model
-            self.scan_model.scan_id = str(self.id)
             self.scan_model.created = datetime.now(timezone.utc)     # Timestamp when the scan was created
             self.scan_model.status = ScanState.EMPTY                 # Status of the scan: EMPTY, WIP, COMPLETE
 
@@ -83,7 +92,7 @@ class Scan:
             :param sample_rate: Sample rate in Hz
             :param duration: Duration of the scan in seconds
             :param channels: Number of channels (FFT size) for the analysis
-        """    
+        """
         with self._rlock:
 
             # Calculate the number of rows in the spectrogram based on duration and sample rate
@@ -168,16 +177,16 @@ class Scan:
         remove_dc_spike(self.scan_model.channels, spr)  # Remove DC spike if present
 
         # Store the raw, power and summed spectrum data in the appropriate rows of the scan data arrays
-        #with self._rlock:
-        self.raw[row_start:row_start + iq.shape[0],:] = iq
-        self.pwr[row_start:row_start + iq.shape[0],:] = pwr
-        self.spr[sec - 1,:] = spr  # sec is 1-based index, so adjust for 0-based array index
-        self.loaded_secs[sec - 1] = True  # Mark this second as loaded
+        with self._rlock:
+            self.raw[row_start:row_start + iq.shape[0],:] = iq
+            self.pwr[row_start:row_start + iq.shape[0],:] = pwr
+            self.spr[sec - 1,:] = spr  # sec is 1-based index, so adjust for 0-based array index
+            self.loaded_secs[sec - 1] = True  # Mark this second as loaded
 
-        indices = np.linspace(row_start, row_end - 1, int(self.raw.shape[0]*0.01), dtype=int)
+            indices = np.linspace(row_start, row_end - 1, int(self.raw.shape[0]*0.01), dtype=int)
 
-        self.mean_real = np.mean(np.abs(self.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
-        self.mean_imag = np.mean(np.abs(self.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
+            self.mean_real = np.mean(np.abs(self.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
+            self.mean_imag = np.mean(np.abs(self.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
 
         # Count how many rows have self.loaded_secs marked as True
         actual_rows = np.count_nonzero(self.loaded_secs)
@@ -207,10 +216,6 @@ class Scan:
             :param include_iq: Whether to flush the IQ data or not (default is False)
             :returns: True if the data was saved successfully, False otherwise
         """
-        
-        if self.scan_model.feed is None:
-            logger.warning(f"Scan {self} - Feed Id is not set. Cannot save scan to disk.")
-            return False
 
         if self.scan_model.status != ScanState.COMPLETE:
             logger.warning(f"Scan - Saving an incomplete scan: {self}.")
@@ -222,10 +227,13 @@ class Scan:
         os.makedirs(output_dir, exist_ok=True)
 
         prefix = gen_file_prefix(
-            dt=self.scan_model.read_start, feed=self.scan_model.feed, gain=self.scan_model.gain, 
+            dt=self.scan_model.read_start, entity_id=self.scan_model.dig_id, gain=self.scan_model.gain, 
             duration=self.scan_model.duration, sample_rate=self.scan_model.sample_rate, center_freq=self.scan_model.center_freq, 
-            channels=self.scan_model.channels, entity_id=self.scan_model.scan_id
+            channels=self.scan_model.channels, instance_id=self.scan_model.scan_id
         )
+
+        self.scan_model.files_prefix = prefix
+        self.scan_model.files_directory = output_dir
 
         try:
             if include_iq:
@@ -237,7 +245,7 @@ class Scan:
             with open(f"{output_dir}/{filename}", 'w') as f:
                 json.dump(self.get_scan_meta(), f, indent=4)  
 
-            filename = prefix + "-load" + ".csv" if self.scan_model.feed == Feed.LOAD else prefix + "-spr" + ".csv"
+            filename = prefix + "-load" + ".csv" if self.scan_model.load else prefix + "-spr" + ".csv"
             with open(f"{output_dir}/{filename}", 'w') as f:
                 np.savetxt(f, self.spr, delimiter=",", fmt="%.6f")
         
@@ -295,7 +303,7 @@ class Scan:
         try:
             self.init_data_arrays()
 
-            prefix = gen_file_prefix(dt=self.scan_model.read_start, feed=self.scan_model.feed, gain=self.scan_model.gain, 
+            prefix = gen_file_prefix(dt=self.scan_model.read_start, load=self.scan_model.load, gain=self.scan_model.gain, 
                 duration=self.scan_model.duration, sample_rate=self.scan_model.sample_rate, center_freq=self.scan_model.center_freq, 
                 channels=self.scan_model.channels, entity_id=self.scan_model.scan_id)
 
@@ -323,7 +331,7 @@ class Scan:
                 self.loaded_secs = [True] * self.scan_model.duration
             else:
                 # Load summed power spectrum only
-                filename = prefix + "-load" + ".csv" if self.scan_model.feed == Feed.NONE else prefix + "-spr" + ".csv"
+                filename = prefix + "-load" + ".csv" if self.scan_model.load else prefix + "-spr" + ".csv"
                 with open(f"{input_dir}/{filename}", 'r') as f:
                     self.spr = np.loadtxt(f, delimiter=",")
                     self.spr = self.spr.reshape(-1, self.scan_model.channels)
@@ -404,7 +412,7 @@ if __name__ == "__main__":
         channels=1024,
         center_freq=1420400000,
         gain=12,
-        feed=Feed.H3T_1420,
+        load=False,
         status="WIP",
         load_failures=0,
         last_update=datetime.now(timezone.utc)

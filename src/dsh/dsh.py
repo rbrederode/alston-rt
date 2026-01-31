@@ -1,22 +1,14 @@
 from astropy.coordinates import EarthLocation, AltAz
-from models.dsh import PointingState, CapabilityStates, DishMode, Feed
+from models.dsh import DishModel, PointingState, CapabilityStates, DishMode, Feed
 from models.health import HealthState
 
 class Dish:
 
-    def __init__(self, name: str, diameter: float, focal_length: float, location: EarthLocation):
+    def __init__(self, dsh_model: DishModel=None):
+        if dsh_model is None:
+            raise ValueError("DishModel cannot be None")
 
-        self.name = name
-        self.diameter = diameter # Meters
-        self.focal_length = focal_length # Meters
-        self.focal_ratio = focal_length / diameter
-        self.location = location
-
-        self.configured_feed = Feed.NONE
-        self.health_state = HealthState.UNKNOWN
-        self.pointing_state = PointingState.UNKNOWN
-        self.capability_state = CapabilityStates.UNKNOWN
-        self.mode = DishMode.UNKNOWN
+        self.dsh_model = dsh_model
 
     def set_standby_mode(self):
         pass
@@ -30,8 +22,20 @@ class Dish:
     def set_full_power_mode(self):
         pass
 
-    def track(self):
-        pass
+    def track(self)->Tuple[str,str]:
+
+        def _is_track_cmd_allowed(self) -> bool:
+            
+            if self.dsh_model.mode != DishMode.OPERATE:
+                return False
+            if self.dsh_model.pointing_state != PointingState.READY:
+                return False
+            return True
+        # Check if track command is allowed
+        if not _is_track_cmd_allowed(self):
+            return ("ERROR", "Track command not allowed in current dish mode or pointing state.")
+        # Implement track logic here
+        return ("OK", "Track command accepted.")
 
     def track_stop(self):
         pass
@@ -39,8 +43,21 @@ class Dish:
     def configure_feed(self, feed: int):
         pass
 
-    def slew(self, altaz: AltAz):
-        pass
+    def slew(self, altaz: AltAz)->Tuple[str,str]:
+
+        def _is_slew_cmd_allowed(self) -> bool:
+
+            if self.dsh_model.mode != DishMode.OPERATE:
+                return False
+            if self.dsh_model.pointing_state != PointingState.READY:
+                return False
+            return True
+
+        # Check if slew command is allowed
+        if not _is_slew_cmd_allowed(self):
+            return ("ERROR", "Slew command not allowed in current dish mode or pointing state.")
+        # Implement slew logic here
+        return ("OK", "Slew command accepted.")
 
     def scan(self, start_altaz: AltAz, end_altaz: AltAz, rate_deg_per_sec: float):
         pass
@@ -49,14 +66,19 @@ class Dish:
         pass
 
 if __name__ == "__main__":
-    # Example usage
-    from astropy.coordinates import EarthLocation
-    from astropy import units as u
+    # Example usage 
 
-    # Define dish location
-    location = EarthLocation(lat=-30.7215*u.deg, lon=21.4439*u.deg, height=1073*u.m)
+    dish001 = DishModel(
+        dsh_id="dish001",
+        short_desc="70cm Discovery Dish",
+        diameter=0.7,
+        fd_ratio=0.37,
+        latitude=53.187052, longitude=-2.256079, height=94.0,
+        mode=DishMode.STANDBY_FP,
+        pointing_state=PointingState.UNKNOWN,
+        feed=Feed.H3T_1420,
+        dig_id="dig001",
+        capability_state=CapabilityState.OPERATE_FULL,
+        last_update=datetime.now(timezone.utc)
+    )
 
-    # Create Dish instance
-    dish = Dish(name="Alston RT", diameter=3.0, focal_length=1.5, location=location)
-
-    print(f"Dish '{dish.name}' initialized at location {dish.location}.")

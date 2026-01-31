@@ -1,12 +1,14 @@
 from env.processor import Processor
-from env.events import InitEvent, StatusUpdateEvent, ConfigEvent
+from env.events import InitEvent, StatusUpdateEvent, ConfigEvent, ObsEvent
 from queue import Queue, Empty
 from datetime import datetime, timezone
 import time
+import json
 from api.api import API
 from ipc.tcp_server import TCPServer
 from ipc.message import AppMessage, APIMessage
 from ipc.action import Action
+from models.base import BaseModel
 from models.comms import InterfaceType
 from util.xbase import XBase
 from util.timer import Timer, TimerManager
@@ -53,7 +55,7 @@ class AppProcessor(Processor):
             if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
                 self.driver.app_model.health = getattr(self.driver, handler_method)()
 
-            logger.info(f"AppProcessor {self.name} health state is {self.driver.app_model.health.name}")
+            logger.debug(f"AppProcessor {self.name} health state is {self.driver.app_model.health.name}")
 
             handler_method = "process_status_event"
             if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
@@ -62,45 +64,59 @@ class AppProcessor(Processor):
         finally:
             event.notify_update_completed()
 
-    def _get_entity_id(self, event, interface_type) -> str:
-        """Resolve the entity ID from the event for ENTITY and ENTITY_DRIVER interfaces.
+    def _get_entity(self, event) -> (str, BaseModel):
+        """Resolve the entity id from the event by calling the driver's get_<from_system>_entity handler.
             : param event: The event to extract the entity ID from
-            : param interface_type: The interface type (ENTITY or ENTITY_DRIVER)
-            : return: The resolved entity ID or None if not found
+            : return: A tuple of (entity ID, entity) or (None, None) if not found, 
         """
-        entity_id = None
+        entity = (None, None)
 
-        if interface_type == InterfaceType.ENTITY:
+        # Check if the event is a ConnectEvent, DisconnectEvent, or DataEvent
+        if isinstance(event, events.ConnectEvent) or isinstance(event, events.DisconnectEvent) or isinstance(event, events.DataEvent):
+        
+            api, endpoint, interface_type = self.driver.get_interface(event.local_sap.description)
 
-            # Resolve the entity id from the arguments 
-            if hasattr(self.driver, "get_args"):
-                args = self.driver.get_args()
-                if hasattr(args, "entity_id"):
-                    entity_id = args.entity_id
+            if interface_type == InterfaceType.ENTITY_DRIVER:
 
-        elif interface_type == InterfaceType.ENTITY_DRIVER:
-            
-            # Resolve the entity id from the event using the driver's get_<from_system>_entity_id handler
-            handler_method = "get_" + event.local_sap.description + "_entity_id"
+                # Resolve the entity from the event using the driver's get_<from_system>_entity handler
+                handler_method = "get_" + event.local_sap.description + "_entity"
 
-            if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
-                try:
-                    entity_id = getattr(self.driver, handler_method)(event)
-                except Exception as e:
-                    logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing event {event}: {e}")
-                    return None
-            else:
-                logger.warning(f"AppProcessor {self.name} driver has no handler to get entity ID from event {event}")
-                return None
+                if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
+                    try:
+                        entity = getattr(self.driver, handler_method)(event) # Expecting a tuple (entity_id, entity)
+                    except Exception as e:
+                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing event {event}: {e}")
+                        return None, None
+                else:
+                    logger.warning(f"AppProcessor {self.name} driver has no handler to get entity ID from event {event}")
+                    return None, None
 
-        return entity_id
+        return entity
+
+    def _construct_rsp_msg(self, api_msg: APIMessage, status: str, message: str) -> APIMessage:
+        """Construct a response APIMessage based on the given api_msg with the specified status and message.
+            : param api_msg: The original APIMessage to respond to
+            : param status: The status string ('success' or 'error')
+            : param message: The message string providing additional information
+            : return: A new APIMessage representing the response
+        """
+        rsp_msg = APIMessage(api_msg.get_json_api_header())
+        rsp_msg.switch_from_to()
+        
+        api_call = rsp_msg.get_api_call()
+        api_call['msg_type'] = 'rsp'
+        api_call['status'] = status
+        api_call['message'] = message
+
+        rsp_msg.set_api_call(api_call)
+        return rsp_msg
     
     def process_event(self, event) -> bool:
 
         start_time = time.time()
         st = datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat()
         
-        logger.info(f"AppProcessor {self.name} started processing event {type(event)} at {st}")
+        logger.debug(f"AppProcessor {self.name} started processing event {type(event)} at {st}")
 
         try:
             if isinstance(event, InitEvent):
@@ -158,129 +174,153 @@ class AppProcessor(Processor):
                     api_transl_msg = api.translate(api_msg.get_json_api_header())
                     api.validate(api_transl_msg)
 
-                    # Resolve the driver's application name safely. 
+                    # Safely resolve the driver's application name
                     if getattr(self.driver, "app_model", None) is not None and hasattr(self.driver.app_model, "app_name"):
                         driver_app_name = self.driver.app_model.app_name
                     else:
                         logger.error(f"AppProcessor {self.name} driver has no app_model.app_name attribute")
                         driver_app_name = getattr(self.driver, "app_name", None) or type(self.driver).__name__
 
-                    entity_match = False
-
-                    # Check entity matching for ENTITY and ENTITY_DRIVER interfaces
-                    if interface_type in [InterfaceType.ENTITY, InterfaceType.ENTITY_DRIVER]:
-
-                        entity_id = self._get_entity_id(event, interface_type)
-
-                        if entity_id is None:
-                            logger.error(f"AppProcessor {self.name} failed to resolve entity ID for interface type {interface_type.name} for event {event}")
-                            return False
-
-                        # Check whether the entity in the API message matches the driver's entity id (if any)
-                        entity_match = not (api_msg.get_entity() is None or entity_id is None or api_msg.get_entity() != entity_id)
-
-                        if entity_match:
-                            # Store the entity_id and corresponding connection in the driver's entity connection map for future use
-                            if hasattr(self.driver, "entity_connection_map"):
-                                try:
-                                    self.driver.entity_connection_map[entity_id] = (event.remote_conn, event.remote_addr)
-                                except Exception as e:
-                                    logger.exception(f"AppProcessor {self.name} exception in driver while storing connection for entity {entity_id}: {e}")
-                                    return False
-
-                    elif interface_type in [InterfaceType.APP_APP]:
-
-                        # No entity matching required for APP_APP interfaces
-                        entity_match = True
-                    
-                    # Check if the message is not intended for this App or entity
-                    if api_msg.get_to_system() != driver_app_name or not entity_match:
-                        rsp_msg = APIMessage(api_msg.get_json_api_header())
-                        rsp_msg.switch_from_to()
-
-                        api_call = rsp_msg.get_api_call()
-                        api_call['status'] = 'error'
-                        api_call['message'] = f"Message not intended for {driver_app_name}:{entity_id}, but for {api_msg.get_to_system()}:{api_msg.get_entity()}"
-
-                        rsp_msg.set_api_call(api_call)
-                        logger.warning(f"AppProcessor {self.name} received API message for unknown App:Entity {api_msg.get_to_system()}:{api_msg.get_entity()} Current config driver:entity {driver_app_name}:{entity_id} Check configuration!\n{rsp_msg}")
+                    # Check if the API message is not intended for this App (using from_system/to_system api header fields)
+                    if api_msg.get_to_system() != driver_app_name:
+                        logger.warning(f"AppProcessor {self.name} received API message intended for different App: {api_msg.get_to_system()} (this App: {driver_app_name}): {event}")
+                        rsp_msg = self._construct_rsp_msg(api_msg, 'error', f"Message not intended for {driver_app_name}, but for {api_msg.get_to_system()}")
                         self.performActions(Action().set_msg_to_remote(rsp_msg), event.local_sap, event.remote_conn, event.remote_addr)
                         return True
+
+                    # Handle debug get/set requests
+                    api_call = api_msg.get_api_call()
+                    if api_call['msg_type'] == 'req' and api_call['action_code'] in ('set', 'get') and api_call['property'] in ("debug"):
+                        rsp_msg = self._handle_debug_req(api_msg, api_call)
+                        self.performActions(Action().set_msg_to_remote(rsp_msg), event.local_sap, event.remote_conn, event.remote_addr)
+                        return True
+
+                    # If ENTITY_DRIVER interface, perform entity matching and setup appropriate handler
+                    if interface_type == InterfaceType.ENTITY_DRIVER:
+
+                        # Ask the driver if it can resolve the entity from the event based on entity configuration
+                        entity_id, entity = self._get_entity(event)
+                        # Perform entity id matching betweem the incoming message and the driver entity configuration
+                        entity_match = not (api_msg.get_entity() is None or entity_id is None or api_msg.get_entity() != entity_id)
+
+                        # If no entity match (or entity unknown), respond with an error
+                        if not entity_match:
+                            logger.warning(f"AppProcessor {self.name} received API message for unknown Entity {api_msg.get_entity()}. Check configuration!\n{event}")
+                            rsp_msg = self._construct_rsp_msg(api_msg, 'error', f"Received API message for unknown entity {driver_app_name}:{api_msg.get_entity()}. Check configuration!")
+                            self.performActions(Action().set_msg_to_remote(rsp_msg), event.local_sap, event.remote_conn, event.remote_addr)
+                            return True
+
+                        # Store the entity_id and corresponding connection in the driver's entity connection map for future use    
+                        self.driver.entity_connection_map[entity_id] = (event.remote_conn, event.remote_addr)
+
+                        handler_method = "process_" + api_msg.get_from_system() + "_entity_msg"
+                        handler_parameters = (event, api_msg.get_json_api_header(), api_msg.get_api_call(), api_msg.get_payload_data(), entity)
+
+                    else:
+
+                        handler_method = "process_" + api_msg.get_from_system() + "_msg"
+                        handler_parameters = (event, api_msg.get_json_api_header(), api_msg.get_api_call(), api_msg.get_payload_data())
+                    
+                    # Invoke the appropriate driver handler with its parameters
+                    if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
+                        try:
+                            self.performActions(getattr(self.driver, handler_method)(*handler_parameters), 
+                                event.local_sap, event.remote_conn, event.remote_addr)
+                        except Exception as e:
+                            logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing message from {api_msg.get_from_system()}.\n{event}\nException: {e}")
+                            return False
+                    else:
+                        logger.warning(f"AppProcessor {self.name} driver has no handler {handler_method} for messages from {api_msg.get_from_system()}.\n{event}")
 
                 except XBase as e:
                     logger.exception(f"AppProcessor {self.name} failed to process data event from Service Access Point {event.local_sap.description}: {e}")
                     return False
 
-                # Handle debug get/set requests
-                api_call = api_msg.get_api_call()
-                if api_call['msg_type'] == 'req' and api_call['action_code'] in ('set', 'get') and api_call['property'] in ("debug"):
-                    rsp_msg = self._handle_debug_req(api_msg, api_call)
-                    self.performActions(Action().set_msg_to_remote(rsp_msg), event.local_sap, event.remote_conn, event.remote_addr)
-                    return True
-
-                # Dispatch to appropriate handler in the driver: process_<from_system>_msg
-                handler_method = "process_" + api_msg.get_from_system() + "_msg"
-                if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
-                    try:
-                        self.performActions(getattr(self.driver, handler_method)(event, api_msg.get_json_api_header(), api_msg.get_api_call(), api_msg.get_payload_data()), 
-                            event.local_sap, event.remote_conn, event.remote_addr)
-                    except Exception as e:
-                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing message from {api_msg.get_from_system()}: {e}")
-                        return False
-                else:
-                    logger.warning(f"AppProcessor {self.name} driver has no handler for messages from {api_msg.get_from_system()}: {api_msg}")
                 return True
 
-            if isinstance(event, events.ConnectEvent):
+            elif isinstance(event, events.ConnectEvent):
 
                 api, endpoint, interface_type = self.driver.get_interface(event.local_sap.description)
 
-                # Ensure the connection is coming from a known entity for ENTITY and ENTITY_DRIVER interfaces
-                if interface_type in [InterfaceType.ENTITY, InterfaceType.ENTITY_DRIVER]:
+                # Ensure the connection is coming from a known entity for ENTITY_DRIVER interfaces
+                if interface_type == InterfaceType.ENTITY_DRIVER:
 
-                    entity_id = self._get_entity_id(event, interface_type)
+                    entity_id, entity = self._get_entity(event)
 
-                    if entity_id is None:
-                        logger.error(f"AppProcessor {self.name} failed to resolve entity ID for interface type {interface_type.name} for event {event}")
+                    if entity_id is None or entity is None:
+                        logger.error(f"AppProcessor {self.name} received connect event from unknown entity on {interface_type.name} interface.\n{event}")
                         return False
 
                     # Store the entity_id and corresponding connection in the driver's entity connection map for future use
-                    if hasattr(self.driver, "entity_connection_map"):
-                        try:
-                            self.driver.entity_connection_map[entity_id] = (event.remote_conn, event.remote_addr)
-                        except Exception as e:
-                            logger.exception(f"AppProcessor {self.name} exception in driver while storing connection for entity {entity_id}: {e}")
-                            return False
+                    self.driver.entity_connection_map[entity_id] = (event.remote_conn, event.remote_addr)
 
-                handler_method = "process_" + event.local_sap.description + "_connected"
+                    handler_method = "process_" + event.local_sap.description + "_entity_connected"
+                    handler_parameters = (event, entity)
+
+                else:
+                    handler_method = "process_" + event.local_sap.description + "_connected"
+                    handler_parameters = (event,)
 
                 if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
                     try:
-                        self.performActions(getattr(self.driver, handler_method)(event),
+                        self.performActions(getattr(self.driver, handler_method)(*handler_parameters),
                             event.local_sap, event.remote_conn, event.remote_addr)
                     except Exception as e:
                         logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing connect event {event}: {e}")
                         return False
                 return True
                 
-            if isinstance(event, events.DisconnectEvent):
-                handler_method = "process_" + event.local_sap.description + "_disconnected"
+            elif isinstance(event, events.DisconnectEvent):
+                
+                api, endpoint, interface_type = self.driver.get_interface(event.local_sap.description)
+
+                # Check if the disconnect is for an ENTITY_DRIVER interface
+                if interface_type == InterfaceType.ENTITY_DRIVER:
+
+                    entity_id, entity = self._get_entity(event)
+
+                    if entity_id is None or entity is None:
+                        logger.error(f"AppProcessor {self.name} received disconnect event from unknown entity on {interface_type.name} interface.\n{event}")
+                        return False
+
+                    # Remove the entity connection from the driver's entity connection map
+                    if entity_id in self.driver.entity_connection_map:
+                        del self.driver.entity_connection_map[entity_id]
+
+                    handler_method = "process_" + event.local_sap.description + "_entity_disconnected"
+                    handler_parameters = (event, entity)
+                    
+                else:
+                    handler_method = "process_" + event.local_sap.description + "_disconnected"
+                    handler_parameters = (event,)
 
                 if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
                     try:
-                        self.performActions(getattr(self.driver, handler_method)(event),
+                        self.performActions(getattr(self.driver, handler_method)(*handler_parameters),
                             event.local_sap, event.remote_conn, event.remote_addr)
                     except Exception as e:
                         logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing disconnect event {event}: {e}")
                         return False
                 return True
 
-            if isinstance(event, events.ConfigEvent):
+            elif isinstance(event, events.ConfigEvent):
                 try:
                     self.process_config_event(event)
                 except Exception as e:
                     logger.exception(f"AppProcessor: Exception processing config event {event}: {e}")
                     return False
+                return True
+
+            elif isinstance(event, events.ObsEvent):
+
+                handler_method = "process_obs_event"
+
+                if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
+                    try:
+                        self.performActions(getattr(self.driver, handler_method)(event))
+                    except Exception as e:
+                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing observation event {event}: {e}")
+                        return False
                 return True
 
             else:
@@ -289,7 +329,7 @@ class AppProcessor(Processor):
         finally:
             end_time = time.time()
             et = datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat()
-            logger.info(f"AppProcessor {self.name} finished processing event {type(event)} at {et} taking {(end_time-start_time):.3f} seconds")
+            logger.debug(f"AppProcessor {self.name} finished processing event {type(event)} at {et} taking {(end_time-start_time):.3f} seconds")
 
         return True
 
@@ -339,10 +379,14 @@ class AppProcessor(Processor):
                 logger.error(f"AppProcessor {self.name} failed to perform action 'send message to remote' because validate/translate of API message failed: {e} Message:\n{msg}")
                 continue
 
-            # Determine the connection to send the message on
-            if interface_type in [InterfaceType.ENTITY_DRIVER, InterfaceType.ENTITY]:
+            # If the destination endpoint is the same as the local_sap of the originating event, send the message on the originating connection (client_socket)
+            if endpoint == local_sap and remote_conn is not None:
+
+                endpoint.send(msg_to_send, remote_conn)  # Send the message on the originating connection (socket)
+
+            elif interface_type in [InterfaceType.ENTITY_DRIVER]:
                 entity_id = msg.get_entity()
-                
+
                 if entity_id is None:
                     logger.error(f"AppProcessor {self.name} failed to perform action 'send message to remote' because entity ID is not specified in message for an ENTITY interface:\n{msg}")
                     continue
@@ -351,13 +395,10 @@ class AppProcessor(Processor):
                     continue
                 else:
                     conn, addr = self.driver.entity_connection_map[entity_id]
-                endpoint.send(msg_to_send, conn)            # Send the message on the entity connection (socket)
+
+                endpoint.send(msg_to_send, conn)         # Send the message on the entity connection (socket)
             else:
-                # If the destination endpoint is the same as the local_sap of the originating event, send the message on the originating connection (client_socket)
-                if endpoint == local_sap and remote_conn is not None:
-                    endpoint.send(msg_to_send, remote_conn)  # Send the message on the originating connection (socket)
-                else:
-                    endpoint.send(msg_to_send)               # Send the message on the registered endpoint's default connection (socket)
+                endpoint.send(msg_to_send)               # Send the message on the registered endpoint's default connection (socket)
         
             action.msgs_to_remote.remove(msg)  # Remove the msg from the list                
         
@@ -401,6 +442,21 @@ class AppProcessor(Processor):
             # Placeholder for actual connection handling logic
             action.connection_actions.remove(conn_action)  # Remove the connection action from the list
             logger.debug(f"AppProcessor {self.name} processed connection action: {conn_action}")
+
+        # For each observation transition action, create an ObsEvent and enqueue it (hand it over to another processor)
+        for obs_transition in action.obs_transitions[:]:  # Iterate over a copy [:] of the list to allow removal during iteration
+
+            logger.debug(f"AppProcessor {self.name} performing action: observation transition: {obs_transition}")
+
+            if not isinstance(obs_transition, Action.Transition):
+                logger.error(f"AppProcessor {self.name} failed to perform observation transition action {obs_transition} because it is not an Action.Transition instance")
+                continue
+
+            obs_event = ObsEvent(transition=obs_transition.get_transition(), obs=obs_transition.get_obs(), user_ref=obs_transition.get_echo_data(), timestamp=datetime.now(timezone.utc))
+            self.get_queue().put(obs_event)  # Enqueue the observation event for processing
+
+            action.obs_transitions.remove(obs_transition)  # Remove the observation transition action from the list
+            logger.debug(f"AppProcessor {self.name} processed observation transition action: {obs_transition}")
 
     def _handle_debug_req(self, api_msg: APIMessage, api_call: dict) -> APIMessage:
         

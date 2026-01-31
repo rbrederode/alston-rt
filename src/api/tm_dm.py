@@ -50,11 +50,17 @@ TO = (
 # Allowable properties to get or set on the system
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 PROPERTY_STATUS         = 'status'           # Get system status
+PROPERTY_TARGET         = 'target'           # Set target model 
+PROPERTY_CAPABILITY     = 'capability'       # Set dish capability state
+PROPERTY_MODE           = 'mode'             # Set dish mode
 
 PROPERTIES = (
     PROPERTY_DEBUG,
-    PROPERTY_STATUS
-)
+    PROPERTY_STATUS,
+    PROPERTY_TARGET,
+    PROPERTY_CAPABILITY,
+    PROPERTY_MODE,
+)   
 
 # Allowable status codes for responses
 STATUS_SUCCESS   = "success"

@@ -61,7 +61,9 @@ class App:
         self.stop()
 
     def get_args(self):
-        return self.arg_parser.parse_args()
+        # Use parse_known_args to avoid pytest's extra CLI arguments causing failures
+        args, _ = self.arg_parser.parse_known_args()
+        return args
 
     def get_queue(self):
         return self.queue

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import enum
+import logging
 from pathlib import Path
 from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
@@ -10,12 +11,20 @@ from models.comms import CommunicationStatus
 from models.base import BaseModel
 from models.health import HealthState
 from models.proc import ProcessorModel
+from util import log, util
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
+
+logger = logging.getLogger(__name__)
 
 class AllocationState(enum.IntEnum):
     REQUESTED = 1
     ACTIVE = 2
     RELEASED = 3
+
+class ResourceType(enum.Enum):
+    DISH = "dish"
+    DIGITISER = "digitiser"
+    OBS = "observation"
 
 class Allocation(BaseModel):
     """A class representing a single resource allocation."""
@@ -146,7 +155,7 @@ class ResourceAllocations(BaseModel):
         """
         allocations = self.get_allocations(resource_type=resource_type, resource_id=resource_id, state=AllocationState.ACTIVE, include_expired=False)
         if len(allocations) > 1:
-            raise XSoftwareFailure(f"Resource Allocations found multiple active allocations for {resource_type}:{resource_id}")
+            raise XSoftwareFailure(f"Resource Allocations found multiple active allocations for {resource_type}:{resource_id}. There should be at most one active allocation per resource.")
         return allocations[0] if len(allocations)==1 else None
  
     def is_active_allocation(self, resource_type: str, resource_id: str) -> bool:
@@ -238,6 +247,50 @@ class ResourceAllocations(BaseModel):
         allocation.last_update = datetime.now(timezone.utc)
         self.last_update = datetime.now(timezone.utc)
 
+    def handle_resource_allocation(self, resource_type, resource_id, resource_req, resource_alloc) -> bool:
+        """
+        Generic resource allocation handler.
+        Attempts to grant the resource allocation request if the resource is available.
+        Logs the result of the allocation attempt.
+        Returns True if the resource is granted, False otherwise.
+        """
+
+        # Resource is available
+        if resource_alloc is None:
+            try:
+                self.grant_allocation(resource_req)
+                logger.info(
+                    f"Resource Allocation successfully granted "
+                    f"{resource_type} {resource_id} to {resource_req.allocated_type} {resource_req.allocated_id}, "
+                    f"expiring at {resource_req.expires}"
+                )
+                return True
+            except XInvalidTransition as e:
+                logger.error(
+                    f"Resource Allocation failed to grant "
+                    f"{resource_type} {resource_id} to {resource_req.allocated_type} {resource_req.allocated_id}, "
+                    f"due to exception {e}"
+                )
+
+        # Already allocated 
+        elif resource_alloc.allocated_id == resource_req.allocated_id:
+            logger.info(
+                f"Resource Allocation already granted "
+                f"{resource_type} {resource_id} to {resource_alloc.allocated_type} {resource_alloc.allocated_id}, "
+                f"expiring at {resource_alloc.expires}"
+            )
+            return True
+
+        # Allocated to another observation
+        else:
+            logger.info(
+                f"Resource Allocation failed to grant "
+                f"{resource_type} {resource_id} to {resource_req.allocated_type} {resource_req.allocated_id}, "
+                f"because it is already allocated to {resource_alloc.allocated_type} {resource_alloc.allocated_id},"
+                f"expiring at {resource_alloc.expires}"
+            )
+        return False
+
 class TelescopeManagerModel(BaseModel):
     """A class representing the telescope manager model."""
 
@@ -245,7 +298,7 @@ class TelescopeManagerModel(BaseModel):
         "_type": And(str, lambda v: v == "TelescopeManagerModel"),
         "id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
-        "resource_allocations": And(ResourceAllocations, lambda v: isinstance(v, ResourceAllocations)),
+        "allocations": And(ResourceAllocations, lambda v: isinstance(v, ResourceAllocations)),
         "sdp_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "dig_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "dm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
@@ -270,7 +323,7 @@ class TelescopeManagerModel(BaseModel):
                 last_update=datetime.now(timezone.utc),
             ),
             "id": "<undefined>",
-            "resource_allocations": ResourceAllocations(),
+            "allocations": ResourceAllocations(),
             "sdp_connected": CommunicationStatus.NOT_ESTABLISHED,
             "dig_connected": CommunicationStatus.NOT_ESTABLISHED,
             "dm_connected": CommunicationStatus.NOT_ESTABLISHED,

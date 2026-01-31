@@ -70,6 +70,13 @@ class ObsList(BaseModel):
 
         super().__init__(**kwargs)
 
+    def get_obs_by_id(self, obs_id: str):
+        """Retrieve an observation by its identifier."""
+        for obs in self.obs_list:
+            if obs.obs_id == obs_id:
+                return obs
+        return None
+
 class ODAModel(BaseModel):
     """A class representing the observation data archive."""
 

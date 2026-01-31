@@ -277,6 +277,8 @@ class TCPClient:
                 self.connected = False
                 return
 
+            data = None
+
             # Iterate over all connections and send the message
             for key in list(self.sel.get_map().values()):
                 if key.data is not None:
@@ -327,7 +329,7 @@ class TCPClient:
                                 logger.error(f"TCP Client {self.description} socket not valid anymore while setting non-blocking mode while sending message to host {self.host} port {self.port}\n{e}")
 
             time_exit = time.time()
-            logger.info(f"TCP Client {self.description} SEND {len(data)} bytes duration: {(time_exit - time_enter)*1000:.2f} ms")
+            logger.info(f"TCP Client {self.description} SEND {len(data) if data is not None else 'unknown'} bytes duration: {(time_exit - time_enter)*1000:.2f} ms")
     
     def nrConnections(self):
         """Return the number of connections to the server."""

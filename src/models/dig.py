@@ -23,16 +23,18 @@ class DigitiserModel(BaseModel):
         "_type": And(str, lambda v: v == "DigitiserModel"),
         "dig_id": And(str, lambda v: isinstance(v, str)),
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
-        "feed": And(Feed, lambda v: isinstance(v, Feed)),
+        "load": And(bool, lambda v: isinstance(v, bool)),
         "gain": And(float, lambda v: 0 <= v <= 100.0),
         "sample_rate": And(float, lambda v: v >= 0.0),
         "bandwidth": And(float, lambda v: v >= 0.0),
         "center_freq": And(float, lambda v: v >= 0.0),
         "freq_correction": And(int, lambda v: -1000 <= v <= 1000),
+        "channels": And(int, lambda v: v >= 0),
+        "scan_duration": And(int, lambda v: v >= 0),
         "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "sdp_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "sdr_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
-        "streaming": And(bool, lambda v: isinstance(v, bool)),
+        "scanning": And(Or(bool, str, dict, int), lambda v: isinstance(v, bool) or isinstance(v, str) or isinstance(v, dict) or isinstance(v, int)),
         "sdr_eeprom": And(dict, lambda v: isinstance(v, dict)),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
@@ -55,13 +57,15 @@ class DigitiserModel(BaseModel):
                 health=HealthState.UNKNOWN,
                 last_update=datetime.now(timezone.utc),
             ),
-            "feed": Feed.NONE,
+            "load": False,
             "gain": 0.0,
             "sample_rate": 0.0,
             "bandwidth": 0.0,
             "center_freq": 0.0,
             "freq_correction": 0,
-            "streaming": False,
+            "channels": 0,
+            "scan_duration": 0,
+            "scanning": False,
             "tm_connected": CommunicationStatus.NOT_ESTABLISHED,
             "sdp_connected": CommunicationStatus.NOT_ESTABLISHED,
             "sdr_connected": CommunicationStatus.NOT_ESTABLISHED,
@@ -119,13 +123,15 @@ if __name__ == "__main__":
             health=HealthState.UNKNOWN,
             last_update=datetime.now()
         ),
-        feed=Feed.NONE,
+        load=False,
         gain=0.0,
         sample_rate=0.0,
         bandwidth=0.0,
         center_freq=0.0,
         freq_correction=0,
-        streaming=False,
+        channels=0,
+        scan_duration=0,
+        scanning={"obs_id": "obs001", "tgt_index": 1, "freq_scan": 5},
         tm_connected=CommunicationStatus.NOT_ESTABLISHED,
         sdp_connected=CommunicationStatus.NOT_ESTABLISHED,
         sdr_connected=CommunicationStatus.NOT_ESTABLISHED,
@@ -133,7 +139,7 @@ if __name__ == "__main__":
         last_update=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     )
 
-    dig002 = DigitiserModel(dig_id="dig002")
+    dig002 = DigitiserModel(dig_id="dig002", scanning={"obs_id": "obs003", "tgt_index": 5, "freq_scan": 2},)
 
     import pprint
     print("="*40)
@@ -145,7 +151,7 @@ if __name__ == "__main__":
     print("="*40)
     pprint.pprint(dig002.to_dict())
 
-    dig001.from_dict(dig002.to_dict())
+    dig001 = DigitiserModel.from_dict(dig002.to_dict())
     print("="*40)
     print("Digitiser 001 after from_dict with Digitiser 002 data")
     print("="*40)
@@ -169,7 +175,6 @@ if __name__ == "__main__":
                     'queue_size': 0},
             'bandwidth': 200000.0,
             'center_freq': 1420000000.0,
-            'feed': {'_type': 'enum.IntEnum', 'instance': 'Feed', 'value': 'LOAD'},
             'freq_correction': 0,
             'gain': 0.0,
             'dig_id': 'dig001',
@@ -182,7 +187,7 @@ if __name__ == "__main__":
                             'instance': 'CommunicationStatus',
                             'value': 'NOT_ESTABLISHED'},
             'sdr_eeprom': {},
-            'streaming': False,
+            'scanning': False,
             'tm_connected': {'_type': 'enum.IntEnum',
                             'instance': 'CommunicationStatus',
                             'value': 'NOT_ESTABLISHED'}}
@@ -238,7 +243,7 @@ if __name__ == "__main__":
 
     default_dig001 = DigitiserModel(dig_id="dig001",
         app=AppModel(
-            arguments={"local_host": "192.168.0.18"},
+            arguments={"local_host": "192.168.0.48"},
         ))
 
     default_dig002 = DigitiserModel(dig_id="dig002",

@@ -101,6 +101,12 @@ class TimerManager:
             return [t for _, t in self.heap if t.name == name]
         return []   
 
+    def get_timers_by_keyword(self, keyword: str) -> list[Timer]:
+        """ Get all timers with a name containing the given keyword. """
+        with self.lock:
+            return [t for _, t in self.heap if keyword in t.name]
+        return [] 
+
     def remove_timer(self, timer: Timer):
 
         timer.cancel() # Cancel the timer and event if possible
