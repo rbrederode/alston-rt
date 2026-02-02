@@ -10,6 +10,7 @@ EXC_ID_SCHEDULER_FAILURE                    = 0x0005
 EXC_ID_INVALID_TRANSITION                   = 0x0006
 EXC_ID_TIMEOUT_WAITING_FOR_RESPONSE         = 0x0007
 EXC_ID_COMMS_FAILURE                        = 0x0008
+EXC_ID_UNKNOWN_ENTITY                       = 0x0009
 
 class XBase(Exception):
     
@@ -77,3 +78,8 @@ class XCommsFailure(XBase):
 
     def __init__(self, message: str=None, data: bytes=None):
         super().__init__(EXC_ID_COMMS_FAILURE, message, data)
+
+class XUnknownEntity(XBase):
+
+    def __init__(self, message: str=None, data: bytes=None):
+        super().__init__(EXC_ID_UNKNOWN_ENTITY, message, data)

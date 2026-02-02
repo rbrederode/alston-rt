@@ -20,6 +20,8 @@ _config_to_property = {
     "capability":       tm_dm.PROPERTY_CAPABILITY,
     "mode":             tm_dm.PROPERTY_MODE,
     "target":           tm_dm.PROPERTY_TARGET,
+    "obs_complete":     tm_sdp.PROPERTY_OBS_COMPLETE,
+    "obs_reset":        tm_sdp.PROPERTY_OBS_RESET,
 }
 
 def get_property_name_value(config_item: str, value) -> (str, Any):
@@ -55,13 +57,13 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
 
             if isinstance(value, str):
                 value_upper = value.upper()
-                if value_upper in dsh.CapabilityState.__members__:
-                    return property, dsh.CapabilityState[value_upper].value
+                if value_upper in dsh.Capability.__members__:
+                    return property, dsh.Capability[value_upper].value
                 else:
                     logger.error(f"Telescope Manager map: invalid CAPABILITY value {value} for property {property}")
                     return property, None
             elif isinstance(value, int):
-                if value in [state.value for state in dsh.CapabilityState]:
+                if value in [state.value for state in dsh.Capability]:
                     return property, value
                 else:
                     logger.error(f"Telescope Manager map: invalid CAPABILITY integer value {value} for property {property}")
@@ -112,6 +114,12 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
                     return property, float(value)
             except ValueError:
                 logger.error(f"Telescope Manager map: invalid numeric value {value} for property {property}")
+                return property, None
+        elif property in [tm_sdp.PROPERTY_OBS_COMPLETE, tm_sdp.PROPERTY_OBS_RESET]:
+            if isinstance(value, str):
+                return property, value
+            else:
+                logger.error(f"Telescope Manager map: invalid OBS_COMPLETE value {value} for property {property}")
                 return property, None
   
     return property, value

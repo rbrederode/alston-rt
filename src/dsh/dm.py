@@ -19,13 +19,13 @@ from ipc.tcp_server import TCPServer
 from models.comms import CommunicationStatus, InterfaceType
 from dsh.drivers.driver import DishDriver
 from dsh.drivers.md01.md01_driver import MD01Driver
-from models.dsh import DishManagerModel, DriverType, PointingState, DishMode, CapabilityState
+from models.dsh import DishManagerModel, DriverType, PointingState, DishMode, Capability
 from models.health import HealthState
 from models.obs import Observation
 from models.oda import ObsList, ScanStore
 from models.target import TargetModel, PointingType
 from util import log
-from util.xbase import XBase, XStreamUnableToExtract
+from util.xbase import XBase, XStreamUnableToExtract, XSoftwareFailure
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,24 @@ class DM(App):
         self.dm_model.tm_connected = CommunicationStatus.ESTABLISHED
         
         action = Action()
+
+        # For each dish driver, try to set the dish to STANDBY mode
+        for dish_id, dish_driver in self.dish_drivers.items():
+
+            # If the dish does not have an operational capability, skip setting to STANDBY
+            if dish_driver.get_capability() not in [Capability.OPERATE_FULL, Capability.OPERATE_DEGRADED]:
+                continue
+
+            # If the dish cannot auto-transition to STANDBY_FP from its current mode, skip setting to STANDBY
+            if dish_driver.get_mode() not in [DishMode.STARTUP, DishMode.STOW]:
+                continue
+
+            dish_lock = self._get_dish_lock(dish_id)
+            with dish_lock:
+                try:
+                    dish_driver.set_dish_mode(DishMode.STANDBY_FP)
+                except XBase as e:
+                    logger.error(f"DM failed to set STANDBY_FP mode for Dish {dish_id} on TM connect: {e}")
         
         # Send initial status advice message to Telescope Manager
         # Informs TM of current DM status including dish statuses
@@ -141,7 +159,12 @@ class DM(App):
         # For each dish driver, set the dish to STOW mode for safety if not already in STOW
         for dish_id, dish_driver in self.dish_drivers.items():
 
-            if dish_driver.get_mode() == DishMode.STOW:
+            # If the dish does not have an operational capability, skip setting to STOW
+            if dish_driver.get_capability() not in [Capability.OPERATE_FULL, Capability.OPERATE_DEGRADED]:
+                continue
+
+            # If the dish cannot auto-transition to STOW from its current mode, skip setting to STOW
+            if dish_driver.get_mode() not in [DishMode.STANDBY_LP, DishMode.STANDBY_FP, DishMode.CONFIG, DishMode.OPERATE, DishMode.UNKNOWN]:
                 continue
 
             dish_lock = self._get_dish_lock(dish_id)
@@ -163,10 +186,15 @@ class DM(App):
         dish_driver = self.dish_drivers.get(dish_id, None) if dish_id is not None else None
         dish_lock = self._get_dish_lock(dish_id) if dish_id is not None else None
 
-        if dish_driver is None or dish_lock is None:
-            raise XSoftwareFailure(f"DM processing event for dish id {dish_id} without valid driver instance or lock\n{event}")
-
         action = Action()
+
+        # Validate that we have a valid dish driver and lock for the requested dish id
+        if dish_driver is None or dish_lock is None:
+            msg = f"DM processing event for dish id {dish_id} without valid driver instance and driver lock"
+            logger.error(msg + f"\n{api_call}")
+            rsp_msg = self._construct_rsp_to_tm(status=tm_dm.STATUS_ERROR, message=msg, api_msg=api_msg, api_call=api_call)
+            action.set_msg_to_remote(rsp_msg)
+            return action
 
         # If the Telescope Manager API call is to set the dish mode
         if api_call.get('action_code','') == 'set' and api_call.get('property','') == tm_dm.PROPERTY_MODE:
@@ -194,7 +222,7 @@ class DM(App):
         if api_call.get('action_code','') == 'set' and api_call.get('property','') == tm_dm.PROPERTY_CAPABILITY:
 
             capability = api_call.get('value', None)
-            capability = CapabilityState(capability) if capability is not None else None
+            capability = Capability(capability) if capability is not None else None
 
             # Prevent concurrent access to the dish driver
             with dish_lock:
@@ -215,27 +243,31 @@ class DM(App):
         # If the Telescope Manager API call is to set a new target for the dish
         if api_call.get('action_code','') == 'set' and api_call.get('property','') == tm_dm.PROPERTY_TARGET:
 
-            # Retreive the target model and unique target identifier from the API call
-            target = TargetModel.from_dict(api_call['value'])
+            # Retrieve the target model and unique target identifier from the API call
+            target = TargetModel.from_dict(api_call['value']) if isinstance(api_call.get('value'), dict) else None
             target_id = target.obs_id + f"_{target.tgt_idx}" if target is not None else None
 
             # Prevent concurrent access to the dish driver
             with dish_lock:
                 try:
-
+                    # If no target is provided, clear the current target and set dish to STANDBY mode
                     if target is None or target_id is None:
                         dish_driver.clear_target_tuple()
-                        dish_driver.set_stow_mode()
-                    else:
-                        # Assign the new unique target id (obs_id_tgt_idx) and model to the dish (see DishModel.tgt_id)
-                        # The driver will initiate slewing to the new target if in OPERATE mode    
+                        dish_driver.set_dish_mode(DishMode.STANDBY_FP)
+
+                    # Else if a valid target is provided, set the new target and set dish to OPERATE mode (it will initiate slewing) 
+                    elif target is not None and target_id is not None:
                         dish_driver.set_target_tuple(target_id, target)
+                        dish_driver.set_dish_mode(DishMode.OPERATE)
+
+                    else:
+                        raise XSoftwareFailure(f"Invalid target provided to set for dish {dish_id}\n{api_call}")
 
                 except XBase as e:
                     msg = f"DM failed to set target id {target_id if target_id is not None else 'None'} in observation " \
                      f"{target.obs_id if target is not None else 'None' } for Dish {dish_id}: {e}"
 
-                    logger.error(msg + f"\n{target.to_dict()}")
+                    logger.error(msg + f"\n{target.to_dict() if target is not None else 'No Target'}")
                     rsp_msg = self._construct_rsp_to_tm(status=tm_dm.STATUS_ERROR, message=msg, api_msg=api_msg, api_call=api_call)
                     action.set_msg_to_remote(rsp_msg)
                     return action
@@ -299,7 +331,7 @@ class DM(App):
                     
                     self._send_status_adv_to_tm(action, target_id, target)
 
-                elif target is not None and dish_driver.get_pointing_state() == PointingState.TRACKING:                     
+                elif target is not None and dish_driver.get_pointing_state() == PointingState.TRACK:                     
                     try:
                         dish_driver.track()  # Continue tracking the target
                     except XBase as e:
@@ -335,13 +367,7 @@ class DM(App):
         """
         self.get_app_processor_state()
 
-        action = Action()
-
-        # If connected to Telescope Manager, send status advice message
-        if self.dm_model.tm_connected == CommunicationStatus.ESTABLISHED:
-            tm_adv = self._construct_status_adv_to_tm()
-            action.set_msg_to_remote(tm_adv)
-
+        action = self._send_status_adv_to_tm()
         return action
 
     def get_health_state(self) -> HealthState:
@@ -356,6 +382,7 @@ class DM(App):
         """ Constructs a status advice message for the Telescope Manager.
         """
         tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
+
         tm_adv.set_json_api_header(
             api_version=self.tm_api.get_api_version(), 
             dt=datetime.now(timezone.utc), 
@@ -370,16 +397,19 @@ class DM(App):
             })
         return tm_adv
 
-    def _send_status_adv_to_tm(self, action, target_id, target) -> Action:
+    def _send_status_adv_to_tm(self, action=None, target_id=None, target=None) -> Action:
         """ Sends a status advice message to the Telescope Manager if connected.
         """
+        action = Action() if action is None else action
+
         if self.dm_model.tm_connected == CommunicationStatus.ESTABLISHED:
 
             tm_adv = self._construct_status_adv_to_tm()
 
             # Setting the Obs ID will trigger the Observation Execution Tool to review the observation state
             if target is not None and target_id is not None:
-                tm_adv.set_echo_data({'obs_id': target.obs_id, 'target_id': target_id})
+                api_call = tm_adv.get_api_call()
+                api_call['obs_data'] = {'obs_id': target.obs_id, 'target_id': target_id}
 
             action.set_msg_to_remote(tm_adv)
             

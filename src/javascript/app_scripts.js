@@ -5,9 +5,9 @@
 * Useful for debugging without manually editing the sheet.
 */
 function testOnEdit() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("OBS STORE");;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("DM00X");;
   const e = {
-    range: sheet.getRange("J10"),
+    range: sheet.getRange("D5"),
     value: "TRUE"
   };
   onEditHandler(e);
@@ -472,12 +472,22 @@ function onEditHandler(e) {
   const obsSheet = ss.getSheetByName("DB OBS LIST")
 
   // ---------- DIG00X sheet: Digitiser config ----------
-  if (sheetName === "DIG00X" && col === 5 && row >= 4 && row <= 10) {
-    const jsonStr = generateJSON(sheet, ["A3:B3","D4:E10"]);
+  if (sheetName === "DIG00X" && col === 4 && row >= 3 && row <= 9) {
+    const jsonStr = generateJSON(sheet, ["A3:B3","C3:D9"]);
 
     apiSheet.getRange("B3").setValue(jsonStr);
     Logger.log("Digitiser JSON updated in TM_UI_API B3");
     sendWebhook("dig", jsonStr);
+    return;
+  }
+
+  // ---------- DM00X sheet: Dish config ----------
+  if (sheetName === "DM00X" && col === 4 && row >= 3 && row <= 4) {
+    const jsonStr = generateJSON(sheet, ["C1:D1","C3:D4"]);
+
+    apiSheet.getRange("F3").setValue(jsonStr);
+    Logger.log("Dish JSON updated in TM_UI_API F3");
+    sendWebhook("dsh", jsonStr);
     return;
   }
 
@@ -1550,7 +1560,7 @@ function flattenJSON(jsonText) {
  * @param {string} [keyPath] - Optional path to nested field
  * @return {string} The extracted value or a friendly message
  */
-function parseJSON(jsonText, keyPath) {
+function parseJSON(jsonText, keyPath, decimals = 2) {
   try {
     if (!jsonText) return "";
 
@@ -1607,6 +1617,11 @@ function parseJSON(jsonText, keyPath) {
     // Return value
     if (typeof val === 'object') {
       return JSON.stringify(val, null, 2);
+    }
+
+    if (typeof val === 'number') {
+      const factor = Math.pow(10, decimals);
+      return Math.round(val * factor) / factor;
     }
     return val;
 

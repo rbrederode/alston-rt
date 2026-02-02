@@ -17,6 +17,19 @@ class Scan:
     _id_lock = threading.Lock()
     _scan_iter_counter = {}
 
+    @staticmethod
+    def reset_scan_iter_counter(obs_id: str):
+        """ Reset the scan iteration counter that is used to assign unique scan_iter values to scans with the same (obs_id, tgt_idx, freq_scan).
+            This is needed when a digitiser restarted (scan_iter starts at 0 again) AND the observation id remains the same (it was reset).
+        """
+        if obs_id is None or obs_id == '':
+            return
+
+        with Scan._id_lock:
+            keys_to_remove = [key for key in Scan._scan_iter_counter if key[0] == obs_id]
+            for key in keys_to_remove:
+                del Scan._scan_iter_counter[key]
+
     def __init__(self, scan_model: ScanModel):
         """ Initialize a scan with the given parameters.
             A scan holds raw IQ samples, power spectrum, summed power spectrum and baseline data arrays.
@@ -76,7 +89,7 @@ class Scan:
         total_time = (self.scan_model.read_end - self.scan_model.read_start).total_seconds() if self.scan_model.read_start is not None and self.scan_model.read_end is not None else None
 
         return f"Scan(id={self.scan_model.scan_id}, created={created}, scan model {self.scan_model}, total_time={total_time})\n"
-
+    
     def get_start_end_idx(self) -> (int, int):
         """ Get the starting and ending index of the digitiser read counter for this scan.
             :returns: The starting and ending index as a tuple of integers
@@ -109,6 +122,13 @@ class Scan:
             :returns: The digitiser ID as a string
         """
         return self.scan_model.dig_id
+
+    def get_obs_id(self) -> str:
+        """
+        Get the observation ID associated with this scan.
+            :returns: The observation ID as a string
+        """
+        return self.scan_model.obs_id
     
     def get_status(self) -> str:
         """

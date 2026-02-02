@@ -8,7 +8,7 @@ import threading
 from env.events import ObsEvent
 from ipc.action import Action
 from models.comms import CommunicationStatus
-from models.dsh import DishManagerModel, Feed, CapabilityState, DishMode, PointingState
+from models.dsh import DishManagerModel, Feed, Capability, DishMode, PointingState
 from models.health import HealthState
 from models.obs import Observation, ObsTransition, ObsState
 from models.oda import ODAModel, ObsList, ScanStore
@@ -140,6 +140,8 @@ class ObservationExecutionTool:
             if self.complete_scan(event.obs, action):
                 self.stop_scanning(event.obs, action)
                 action.set_obs_transition(obs=event.obs, transition=ObsTransition.RELEASE_RESOURCES)
+            
+            # If the observation is not complete, prepare for the next scan
             # Workflow will transition to SCAN_STARTED or CONFIGURE_RESOURCES as needed within complete_scan()  
 
         elif event.transition == ObsTransition.SCAN_ENDED:
@@ -149,10 +151,29 @@ class ObservationExecutionTool:
             if self.complete_scan(event.obs, action):
                 self.stop_scanning(event.obs, action)
                 action.set_obs_transition(obs=event.obs, transition=ObsTransition.RELEASE_RESOURCES)
-            # Workflow will transition to SCAN_STARTED or CONFIGURE_RESOURCES as needed within obs_complete_scan()
+
+            # If the observation is not complete, prepare for the next scan
+            # Workflow will transition to SCAN_STARTED or CONFIGURE_RESOURCES as needed within complete_scan()
 
         elif event.transition == ObsTransition.ABORT:
+
+            # If resources were assigned and are either configuring, ready or scanning
+            if event.obs.obs_state in [ObsState.CONFIGURING, ObsState.READY, ObsState.SCANNING]:
+                # Stop scanning for this observation
+                self.stop_scanning(event.obs, action)
+
+            # Transition to ABORTED state where resources will be released after a timeout
             event.obs.obs_state = ObsState.ABORTED
+
+            # Start timer till end of the scheduling block before releasing resources
+            # Allows operators to investigate and potentially reset the observation before the end of the scheduling block
+            timer_name = f"obs_abort_timer:{event.obs.obs_id}"
+
+            time_ms_until_end = int((event.obs.scheduling_block_end - datetime.now(timezone.utc)).total_seconds() * 1000)
+            action.set_timer_action(Action.Timer(
+                name=timer_name, 
+                timer_action=time_ms_until_end,
+                echo_data=event.obs))
 
         elif event.transition == ObsTransition.FAULT_OCCURRED:
             event.obs.obs_state = ObsState.FAULT
@@ -204,9 +225,9 @@ class ObservationExecutionTool:
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
             return False
 
-        elif dish.capability_state not in [CapabilityState.OPERATE_FULL, CapabilityState.OPERATE_DEGRADED]:
+        elif dish.capability not in [Capability.OPERATE_FULL, Capability.OPERATE_DEGRADED]:
             logger.error(
-                f"Observation Execution Tool found Dish {obs.dish_id}, but it is not currently operational. Capability state {dish.capability_state.name}. "
+                f"Observation Execution Tool found Dish {obs.dish_id}, but it is not currently operational. Capability {dish.capability.name}. "
                 f"Cannot assign dish for observation {obs.obs_id}. Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
             return False
@@ -372,12 +393,11 @@ class ObservationExecutionTool:
             old_dsh_config = {}
             new_dsh_config = {}
 
-            # Check if parameters of the dish need to be adjusted
-            if dish.mode != DishMode.OPERATE:
+            # If we are not on the correct target, set the dish to CONFIG mode and provide the new target
+            if not self.is_on_target(obs, target, dish): 
                 old_dsh_config['mode'] = dish.mode
-                new_dsh_config['mode'] = DishMode.OPERATE
+                new_dsh_config['mode'] = DishMode.CONFIG
 
-            if not self.is_on_target(obs, target, dish):
                 old_dsh_config['target'] = dish.pointing_altaz
                 new_dsh_config['target'] = target.to_dict()
 
@@ -451,6 +471,7 @@ class ObservationExecutionTool:
             old_sdp_config = {}
             new_sdp_config = {}
 
+            # Nothing to configure yet, but placeholder for future expansion
             if len(new_sdp_config) > 0:
 
                 already_configured = False
@@ -481,11 +502,9 @@ class ObservationExecutionTool:
         # Lookup the dish model for this observation
         dish = next((dsh for dsh in self.telmodel.dsh_mgr.dish_store.dish_list if dsh.dsh_id == obs.dish_id), None)
 
-        if dish is None:
-            logger.error(f"Observation Execution Tool could not find Dish {obs.dish_id} in Dish Manager model. " \
-                f"Cannot instruct start scanning on dish for observation {obs.obs_id}.")
-            return False
-
+        if dish is not None:
+            pass # Nothing to do as it should be pointing and tracking already
+  
         # Lookup the digitiser model for this observation
         digitiser = next((dig for dig in self.telmodel.dig_store.dig_list if dig.dig_id == dish.dig_id), None)
 
@@ -518,6 +537,10 @@ class ObservationExecutionTool:
                 logger.info(f"Observation Execution Tool sending Digitiser start scanning request with instruction {instruction}")
                 action = self.tm.update_dig_configuration(old_dig_config, new_dig_config, action)
 
+        if dish is None or digitiser is None:
+            raise XSoftwareFailure(f"Observation Execution Tool could not start scanning on missing critical resource for observation {obs.obs_id}. " + \
+                f"Dish found: {dish is not None}, Digitiser found: {digitiser is not None}.")
+
         return True
 
     def stop_scanning(self, obs, action) -> bool:
@@ -529,10 +552,25 @@ class ObservationExecutionTool:
         # Lookup the dish model for this observation
         dish = next((dsh for dsh in self.telmodel.dsh_mgr.dish_store.dish_list if dsh.dsh_id == obs.dish_id), None)
 
-        if dish is None:
-            logger.error(f"Observation Execution Tool could not find Dish {obs.dish_id} in Dish Manager model. " \
-                f"Cannot instruct stop scanning on dish for observation {obs.obs_id}.")
-            return False
+        if dish is not None:
+            # Instruct the dish to go to STANDBY_FP mode (ready for configuration)
+            old_dsh_config = {}
+            new_dsh_config = {}
+
+            old_dsh_config['mode'] = dish.mode
+            new_dsh_config['mode'] = DishMode.STANDBY_FP
+
+            old_dsh_config['target'] = dish.target
+            new_dsh_config['target'] = None
+
+            old_dsh_config['dsh_id'] = dish.dsh_id
+            new_dsh_config['dsh_id'] = dish.dsh_id
+            new_dsh_config['obs_id'] = obs.obs_id
+
+            # Send configuration requests to the Dish if we are not already waiting for previous requests to complete
+            if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{dish.dsh_id}_req_timer")):
+                logger.info(f"Observation Execution Tool sending Dish stop scanning request for observation {obs.obs_id}")
+                action = self.tm.update_dsh_configuration(old_dsh_config, new_dsh_config, action)
 
         # Lookup the digitiser model for this observation
         digitiser = next((dig for dig in self.telmodel.dig_store.dig_list if dig.dig_id == dish.dig_id), None)
@@ -543,7 +581,7 @@ class ObservationExecutionTool:
             old_dig_config = {}
             new_dig_config = {}
 
-            # Instruct the digitiser to stop scanning 
+            # Instruct the digitiser to stop scanning samples because the observation has completed / aborted
             old_dig_config['scanning'] = digitiser.scanning
             new_dig_config['scanning'] = False
 
@@ -555,6 +593,29 @@ class ObservationExecutionTool:
             if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{digitiser.dig_id}_req_timer")):
                 logger.info(f"Observation Execution Tool sending Digitiser stop scanning request for observation {obs.obs_id}")
                 action = self.tm.update_dig_configuration(old_dig_config, new_dig_config, action)
+
+        sdp = self.telmodel.sdp
+        if sdp is not None:
+
+            old_sdp_config = {}
+            new_sdp_config = {}
+
+            # Inform the Science Data Processor that the observation has completed / aborted
+            old_sdp_config['obs_complete'] = None
+            new_sdp_config['obs_complete'] = obs.obs_id
+
+            old_sdp_config['sdp_id'] = sdp.sdp_id
+            new_sdp_config['sdp_id'] = sdp.sdp_id
+            new_sdp_config['obs_id'] = obs.obs_id
+
+            # Send configuration requests to the Science Data Processor if we are not already waiting for previous requests to complete
+            if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{sdp.sdp_id}_req_timer")):
+                logger.info(f"Observation Execution Tool sending Science Data Processor observation complete request for observation {obs.obs_id}")
+                action = self.tm.update_sdp_configuration(old_sdp_config, new_sdp_config, action)
+
+        if dish is None or digitiser is None or sdp is None:
+            raise XSoftwareFailure(f"Observation Execution Tool could not stop scanning on missing critical resource for observation {obs.obs_id}. " + \
+                f"Dish found: {dish is not None}, Digitiser found: {digitiser is not None}, SDP found: {sdp is not None}.")
 
         return True
 
@@ -597,24 +658,25 @@ class ObservationExecutionTool:
         """ Check if the dish is currently pointed at the target within a tolerance.
             Returns true if on target, false otherwise.
         """
-
         if obs is None or target is None or dish is None:
             raise XSoftwareFailure(f"Observation Execution Tool could not determine if dish is on target due to missing observation, dish or target.")
 
+        on_target = True
+
         target_id = obs.obs_id + f"_{obs.tgt_idx}" # Unique target identifier within the observation (see DishModel.tgt_id)
-
-        logger.info(f"Observation Execution Tool checking if Dish {dish.dsh_id} is on target for observation {obs.obs_id} target index {obs.tgt_idx} with target ID {target_id}, pointing type {target.pointing.name}, dish pointing state {dish.pointing_state.name}, dish target ID {dish.tgt_id}")
-
         if dish.tgt_id != target_id:
-            return False
+            on_target = False
 
         if target.pointing in [PointingType.SIDEREAL_TRACK,PointingType.NON_SIDEREAL_TRACK] and dish.pointing_state != PointingState.TRACK:
-            return False
+            on_target = False
         elif target.pointing == PointingType.DRIFT_SCAN and dish.pointing_state != PointingState.READY:
-            return False
+            on_target = False
         elif target.pointing in [PointingType.FIVE_POINT_SCAN, PointingType.OFFSET_SCAN] and dish.pointing_state != PointingState.SCAN:
-            return False
+            on_target = False
 
-        return True
+        logger.info(f"Observation Execution Tool is {'ON' if on_target else 'OFF'} target for observation {obs.obs_id}, target index {obs.tgt_idx}, " + \
+             f"target ID {target_id}, pointing type {target.pointing.name}, dish pointing state {dish.pointing_state.name}, dish target ID {dish.tgt_id}, dish {dish.dsh_id}")
+
+        return on_target
         
 

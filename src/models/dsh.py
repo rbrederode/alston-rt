@@ -15,21 +15,13 @@ from models.health import HealthState
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
 
 # Definition: Mode
-# A mode dictates the behaviour of the system. For example when in the OPERATE mode, a dish shall capture
-# and transmit signal data and execute pointing commands received from Dish LMC.
+# State: A mutually exclusive condition representing the current internal and operational status of a system, typically changing automatically in response to events or execution progress.
+# Mode: A configuration or operating context that defines how a system behaves, what actions are permitted, and how state transitions are constrained.
 
-# Definition: State
-# A state is a fixed setting. For example in the LOW power state, all sub-elements go into a low power
-# state to power only the essential equipment.
+# Think of state as internal truth
+# Think of mode as external contract
 
-# If I am in Exercising Mode there a certain types of exercise I could be doing and this would be the state
-# I am in such as running or riding a bike or lifting weights.
-
-# If I am in Resting Mode there are a different set of states I would be allowed to be in such
-# as sitting or lying down.
-
-
-# Pointing States are only relevant when the dish is in OPERATE_FULL or OPERATE_DEGRADED capability states
+# Pointing States are only relevant when the dish is in OPERATE mode
 class PointingState(enum.IntEnum):
     READY = 0
     SLEW = 1
@@ -44,11 +36,11 @@ class DishMode(enum.IntEnum):
     STANDBY_FP = 3          # Non-transitional: Dish is fully powered and can prepare for an observation, generally transition to CONFIG from here
     MAINTENANCE = 4         # Non-transitional: Stow the dish to make it safe for maintenance activities, remain in maintenance until explicitly changed to another mode
     STOW = 5                # Non-transitional: Stow the dish to a safe position, generally transition to STANDBY after stowing
-    CONFIG = 6              # Configure the dish before observations e.g. switching a feed, generally transition to OPERATE (by TM)
+    CONFIG = 6              # Transitional: Configure the dish before observations e.g. switching a feed, generally transition to OPERATE (by TM)
     OPERATE = 7             # Transitional: Actively observe targets as directed by TM, generally transition to STANDBY after observations
     UNKNOWN = 8
 
-class CapabilityState(enum.IntEnum):
+class Capability(enum.IntEnum):
     UNAVAILABLE = 0         # Dish is unavailable due to functional error or components are not fitted, or during STARTUP 
     STANDBY = 1             # Dish is fully functional and ready to operate, but not currently marked as operational
     CONFIGURING = 2         # Dish is in the process of configuring to become ready for operation
@@ -92,26 +84,28 @@ class DishModel(BaseModel):
         "target": Or(None, lambda v: v is None or isinstance(v, BaseModel)),                      # Current target model assigned to the dish
         "desired_altaz": Or(None, dict, lambda v: v is None or isinstance(v, (dict, SkyCoord))),  # Desired alt-az position of dish
         "pointing_altaz": Or(None, dict, lambda v: v is None or isinstance(v, (dict, SkyCoord))), # Current alt-az pointing direction of dish
-        "capability_state": And(CapabilityState, lambda v: isinstance(v, CapabilityState)),
+        "capability": And(Capability, lambda v: isinstance(v, Capability)),
         "driver_type": And(DriverType, lambda v: isinstance(v, DriverType)),                      # Dish driver type e.g. "ASCOM", "INDI", "MD-01", "MD-02"
         "driver_config": Or(None, lambda v: v is None or isinstance(v, BaseModel)),               # Dish driver configuration instance e.g. MD01Config
         "driver_poll_period": Or(None, And(int, lambda v: v > 0)),                                # Dish driver poll period in milliseconds to get altaz updates
         "driver_failures": And(int, lambda v: v >= 0),                                            # Count of consecutive driver call failures
+        "last_err_msg": Or(None, And(str, lambda v: isinstance(v, str))),                         # Last error message from the dish manager
+        "last_err_dt": Or(None, And(datetime, lambda v: isinstance(v, datetime))),                # Last error datetime from the dish manager
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
-    # Allow transitions to UNKNOWN (something went wrong), and to itself (for re-affirming state)
+    # Allow transitions to UNKNOWN (inconsistency detected) from any state/mode, and to itself to remain in a given state/mode following an event
     allowed_transitions = {
         "mode": { 
-            DishMode.UNKNOWN:   {DishMode.UNKNOWN, DishMode.STARTUP, DishMode.SHUTDOWN, DishMode.STOW, DishMode.MAINTENANCE},
-            DishMode.SHUTDOWN:  {DishMode.UNKNOWN, DishMode.SHUTDOWN, DishMode.STARTUP},
-            DishMode.STARTUP:   {DishMode.UNKNOWN, DishMode.STARTUP, DishMode.STANDBY_LP, DishMode.STANDBY_FP, DishMode.STOW, DishMode.SHUTDOWN},
-            DishMode.STANDBY_LP:{DishMode.UNKNOWN, DishMode.STANDBY_LP, DishMode.STANDBY_FP, DishMode.CONFIG, DishMode.STOW, DishMode.SHUTDOWN},
-            DishMode.STANDBY_FP:{DishMode.UNKNOWN, DishMode.STANDBY_FP, DishMode.STANDBY_LP, DishMode.CONFIG, DishMode.STOW, DishMode.SHUTDOWN},
-            DishMode.CONFIG:    {DishMode.UNKNOWN, DishMode.CONFIG, DishMode.OPERATE, DishMode.MAINTENANCE, DishMode.STOW, DishMode.SHUTDOWN},
-            DishMode.STOW:      {DishMode.UNKNOWN, DishMode.STOW, DishMode.STANDBY_LP, DishMode.STANDBY_FP, DishMode.CONFIG, DishMode.MAINTENANCE, DishMode.SHUTDOWN},
+            DishMode.STARTUP:     {DishMode.UNKNOWN, DishMode.STARTUP, DishMode.STANDBY_FP, DishMode.SHUTDOWN},
+            DishMode.SHUTDOWN:    {DishMode.UNKNOWN, DishMode.SHUTDOWN, DishMode.STARTUP},
+            DishMode.STANDBY_LP:  {DishMode.UNKNOWN, DishMode.STANDBY_LP, DishMode.STANDBY_FP, DishMode.STOW, DishMode.SHUTDOWN},
+            DishMode.STANDBY_FP:  {DishMode.UNKNOWN, DishMode.STANDBY_FP, DishMode.STANDBY_LP, DishMode.CONFIG, DishMode.STOW, DishMode.SHUTDOWN},
+            DishMode.CONFIG:      {DishMode.UNKNOWN, DishMode.CONFIG, DishMode.OPERATE, DishMode.STOW, DishMode.SHUTDOWN},
+            DishMode.STOW:        {DishMode.UNKNOWN, DishMode.STOW, DishMode.STANDBY_LP, DishMode.STANDBY_FP, DishMode.MAINTENANCE, DishMode.SHUTDOWN},
             DishMode.MAINTENANCE: {DishMode.UNKNOWN, DishMode.MAINTENANCE, DishMode.STOW, DishMode.SHUTDOWN},
-            DishMode.OPERATE:   {DishMode.UNKNOWN, DishMode.OPERATE, DishMode.STANDBY_FP, DishMode.STANDBY_LP, DishMode.CONFIG, DishMode.STOW, DishMode.SHUTDOWN},
+            DishMode.OPERATE:     {DishMode.UNKNOWN, DishMode.OPERATE, DishMode.STANDBY_FP, DishMode.STANDBY_LP, DishMode.CONFIG, DishMode.STOW, DishMode.SHUTDOWN},
+            DishMode.UNKNOWN:     {DishMode.UNKNOWN, DishMode.STARTUP, DishMode.STOW, DishMode.MAINTENANCE, DishMode.SHUTDOWN},
         },
         "pointing_state": { 
             PointingState.UNKNOWN:  {PointingState.UNKNOWN, PointingState.READY},
@@ -119,13 +113,13 @@ class DishModel(BaseModel):
             PointingState.SLEW:     {PointingState.UNKNOWN, PointingState.SLEW, PointingState.READY},
             PointingState.TRACK:    {PointingState.UNKNOWN, PointingState.TRACK, PointingState.READY},
         },
-        "capability_state": {
-            CapabilityState.UNKNOWN:          {CapabilityState.UNKNOWN, CapabilityState.UNAVAILABLE, CapabilityState.STANDBY, CapabilityState.CONFIGURING, CapabilityState.OPERATE_DEGRADED, CapabilityState.OPERATE_FULL},
-            CapabilityState.UNAVAILABLE:      {CapabilityState.UNKNOWN, CapabilityState.UNAVAILABLE, CapabilityState.STANDBY},
-            CapabilityState.STANDBY:          {CapabilityState.UNKNOWN, CapabilityState.STANDBY, CapabilityState.CONFIGURING, CapabilityState.UNAVAILABLE},
-            CapabilityState.CONFIGURING:      {CapabilityState.UNKNOWN, CapabilityState.CONFIGURING, CapabilityState.OPERATE_DEGRADED, CapabilityState.OPERATE_FULL, CapabilityState.STANDBY},
-            CapabilityState.OPERATE_DEGRADED: {CapabilityState.UNKNOWN, CapabilityState.OPERATE_DEGRADED, CapabilityState.OPERATE_FULL, CapabilityState.STANDBY, CapabilityState.CONFIGURING},
-            CapabilityState.OPERATE_FULL:     {CapabilityState.UNKNOWN, CapabilityState.OPERATE_FULL, CapabilityState.OPERATE_DEGRADED, CapabilityState.STANDBY, CapabilityState.CONFIGURING},
+        "capability": {
+            Capability.UNKNOWN:          {Capability.UNKNOWN, Capability.UNAVAILABLE, Capability.STANDBY, Capability.CONFIGURING, Capability.OPERATE_DEGRADED, Capability.OPERATE_FULL},
+            Capability.UNAVAILABLE:      {Capability.UNKNOWN, Capability.UNAVAILABLE, Capability.STANDBY},
+            Capability.STANDBY:          {Capability.UNKNOWN, Capability.STANDBY, Capability.CONFIGURING, Capability.UNAVAILABLE},
+            Capability.CONFIGURING:      {Capability.UNKNOWN, Capability.CONFIGURING, Capability.OPERATE_DEGRADED, Capability.OPERATE_FULL, Capability.STANDBY},
+            Capability.OPERATE_DEGRADED: {Capability.UNKNOWN, Capability.OPERATE_DEGRADED, Capability.OPERATE_FULL, Capability.STANDBY, Capability.CONFIGURING},
+            Capability.OPERATE_FULL:     {Capability.UNKNOWN, Capability.OPERATE_FULL, Capability.OPERATE_DEGRADED, Capability.STANDBY, Capability.CONFIGURING},
         },
     }
 
@@ -149,11 +143,13 @@ class DishModel(BaseModel):
             "target": None,
             "desired_altaz": None,
             "pointing_altaz": None,
-            "capability_state": CapabilityState.UNKNOWN,
+            "capability": Capability.UNKNOWN,
             "driver_type": DriverType.UNKNOWN,
             "driver_config": None,                          # Initialize with None, will be set based on driver_type
             "driver_poll_period": 1000,                     # Default to 1000 ms
-            "driver_failures": 0,                           # Initialize failure count to zero     
+            "driver_failures": 0,                           # Initialize failure count to zero  
+            "last_err_msg": None,
+            "last_err_dt": None,   
             "last_update": datetime.now(timezone.utc),
         }
 
@@ -247,6 +243,27 @@ class DishManagerModel(BaseModel):
 
         super().__init__(**kwargs)
 
+    def get_dish_by_id(self, dsh_id: str) -> DishModel:
+        """ Retrieve a DishModel from the dish_store by its dsh_id.
+        Args: dsh_id (str): The identifier of the dish to retrieve.
+        Returns: DishModel: The DishModel with the specified dsh_id. Returns None if not found.
+        """
+        for dish in self.dish_store.dish_list:
+            if dish.dsh_id == dsh_id:
+                return dish
+        return None
+
+    def get_dish_by_dig_id(self, dig_id: str) -> DishModel:
+        """ Retrieve a DishModel from the dish_list by its dig_id.
+            Theoretically, dig_id should be unique across dishes.
+        Args: dig_id (str): The digitiser identifier assigned to the dish.
+        Returns: DishModel: The DishModel with the specified dig_id. Returns None if not found.
+        """
+        for dish in self.dish_list:
+            if dish.dig_id == dig_id:
+                return dish
+        return None
+
 if __name__ == "__main__":
 
     dish001 = DishModel(
@@ -257,7 +274,7 @@ if __name__ == "__main__":
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
         dig_id="dig001",
-        capability_state=CapabilityState.UNKNOWN,
+        capability=Capability.UNKNOWN,
         last_update=datetime.now(timezone.utc)
     )
 
@@ -304,7 +321,7 @@ if __name__ == "__main__":
                     mode=DishMode.STARTUP,
                     pointing_state=PointingState.UNKNOWN,
                     feed=Feed.NONE,
-                    capability_state=CapabilityState.UNKNOWN,
+                    capability=Capability.UNKNOWN,
                     last_update=datetime.now(timezone.utc)
                 )
             ],
@@ -336,7 +353,7 @@ if __name__ == "__main__":
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
         dig_id="dig002",
-        capability_state=CapabilityState.UNKNOWN,
+        capability=Capability.UNKNOWN,
         last_update=datetime.now(timezone.utc)
     )
     dsh_mgr.dish_store.dish_list.append(new_dish)
@@ -374,7 +391,7 @@ if __name__ == "__main__":
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.H3T_1420,
         dig_id="dig001",
-        capability_state=CapabilityState.OPERATE_FULL,
+        capability=Capability.OPERATE_FULL,
         driver_type=DriverType.LOSMANDY_G11,
         driver_config=None,
         last_update=datetime.now(timezone.utc)
@@ -405,7 +422,7 @@ if __name__ == "__main__":
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
         dig_id="dig002",
-        capability_state=CapabilityState.OPERATE_FULL,
+        capability=Capability.OPERATE_FULL,
         driver_type=DriverType.MD01,
         driver_config=md01_cfg,
         last_update=datetime.now(timezone.utc)

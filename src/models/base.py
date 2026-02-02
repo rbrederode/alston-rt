@@ -261,7 +261,7 @@ class BaseModel:
         from models.app import AppModel
         from models.comms import CommunicationStatus, InterfaceType
         from models.dig import DigitiserList, DigitiserModel
-        from models.dsh import DishMode, DishModel, DishList, DishManagerModel, Feed, PointingState, CapabilityState, DriverType
+        from models.dsh import DishMode, DishModel, DishList, DishManagerModel, Feed, PointingState, Capability, DriverType
         from models.health import HealthState
         from models.obs import ObsState, Observation
         from models.oda import ObsList, ScanStore, ODAModel
@@ -313,7 +313,7 @@ class BaseModel:
                 # Map class name to actual enum class
                 enum_class = {
                     "AllocationState": AllocationState,
-                    "CapabilityState": CapabilityState,
+                    "Capability": Capability,
                     "CommunicationStatus": CommunicationStatus,
                     "DishMode": DishMode,
                     "DriverType": DriverType,

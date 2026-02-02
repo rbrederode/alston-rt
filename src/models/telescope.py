@@ -4,7 +4,7 @@ import os
 
 from models.app import AppModel
 from models.comms import CommunicationStatus
-from models.dsh import DishManagerModel, DishModel, DishMode, PointingState, Feed, CapabilityState
+from models.dsh import DishManagerModel, DishModel, DishMode, PointingState, Feed, Capability
 from models.dig import DigitiserList, DigitiserModel
 from models.health import HealthState
 from models.oet import OETModel

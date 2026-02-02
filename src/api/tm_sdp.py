@@ -51,6 +51,8 @@ TO = (
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 PROPERTY_STATUS         = 'status'           # Get system status
 PROPERTY_SCAN_COMPLETE  = 'scan_complete'    # Notify Telescope Manager that a scan has completed
+PROPERTY_OBS_COMPLETE   = 'obs_complete'     # Notify Science Data Processor that an observation has completed
+PROPERTY_OBS_RESET      = 'obs_reset'        # Notify Science Data Processor to reset observation data
 PROPERTY_SIGNAL_DISPLAY = 'signal_display'   # Control the signal display (show/hide) for a digitiser
 
 
@@ -58,6 +60,8 @@ PROPERTIES = (
     PROPERTY_DEBUG,
     PROPERTY_STATUS,
     PROPERTY_SCAN_COMPLETE,
+    PROPERTY_OBS_COMPLETE,
+    PROPERTY_OBS_RESET,
     PROPERTY_SIGNAL_DISPLAY,
 )
 
@@ -87,6 +91,7 @@ MSG_FIELDS = {
     "value":        {"type": "(int, float, str, dict)"},            # Value to set or value returned
     "status":       {"enum": STATUS},                               # Status of response (e.g. success, error)
     "message":      {"type": "str"},                                # Additional information about the status
+    "obs_data":     {"type": "dict"},                               # Observation data in dictionary format
 }
 
 # Definition of required, conditional and optional fields for each api msg type
@@ -96,20 +101,23 @@ MSG_FIELDS_DEFINITIONS = {
         "conditional": {
             "property",     # Required if action_code is "get" or "set"
             "value",        # Required if action_code is "set" 
-         }
+         },
+         "optional": {"obs_data"},  # Optional field
     },
     "adv": {
         "required": {"msg_type", "action_code"},
         "conditional": {
             "property",     # Required if action_code is "get" or "set"
             "value",        # Required if action_code is "set"
-        }
+        },
+        "optional": {"obs_data"},  # Optional field
     },
     "rsp": {
         "required": {"msg_type", "action_code", "status"},
         "optional": {"message"},
         "optional": {"property"},   # Copied from req/adv
         "optional": {"value"},      # Copied from req/adv
+        "optional": {"obs_data"},   # Optional field
     },
 }
 

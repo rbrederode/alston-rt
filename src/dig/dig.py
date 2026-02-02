@@ -110,6 +110,11 @@ class Digitiser(App):
 
         self.dig_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
 
+        # If currently scanning for an observation, stop scanning due to TM disconnect
+        if isinstance(self.dig_model.scanning, dict) and self.dig_model.scanning.get('obs_id', None) is not None:
+            logger.warning(f"Digitiser stopping scanning for observation {self.dig_model.scanning.get('obs_id', 'None')} due to Telescope Manager disconnect.")
+            self.dig_model.scanning = False
+
     def process_tm_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Telescope Manager service access point (SAP)
             API messages are already translated and validated before being passed to this method.
@@ -211,6 +216,11 @@ class Digitiser(App):
         logger.info(f"Digitiser disconnected from Science Data Processor: {event.remote_addr}")
 
         self.dig_model.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
+
+        # If currently scanning for an observation, stop scanning due to SDP disconnect (TM will abort the observation anyway)
+        if isinstance(self.dig_model.scanning, dict) and self.dig_model.scanning.get('obs_id', None) is not None:
+            logger.warning(f"Digitiser stopping scanning for observation {self.dig_model.scanning.get('obs_id', 'None')} due to Science Data Processor disconnect.")
+            self.dig_model.scanning = False
 
         action = Action()
 
@@ -347,7 +357,7 @@ class Digitiser(App):
                 setter = getattr(self, prop_name)
                 setter(prop_value)
 
-            # Else if the property exists on the Digitiser model schema
+            # Else if the property exists on the Digitiser model schema e.g. scanning
             elif prop_name[4:] in self.dig_model.schema.schema:
                 setattr(self.dig_model, prop_name[4:], prop_value)
 
