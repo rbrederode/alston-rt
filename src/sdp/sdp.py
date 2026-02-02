@@ -217,6 +217,10 @@ class SDP(App):
                     elif read_counter > end_idx + scan.scan_model.duration or read_counter < start_idx:
                         abort_scans.append(scan)  # add it to the abort list
                         logger.warning(f"SDP aborting scan id: {scan.scan_model.scan_id}, dig read_counter {read_counter} not consistent with scan indexes {start_idx}-{end_idx}")
+                        
+                        # If the digitiser read_counter is 0 or 1 (the digitiser was restarted), reset the scan_iter counter to match the digitiser
+                        if read_counter in [0,1]:
+                            Scan.reset_scan_iter_counter(obs_id)
 
                 # If we found scans to abort, do so
                 for scan in abort_scans:
@@ -325,7 +329,7 @@ class SDP(App):
                 action.set_timer_action(Action.Timer(name=f"tm_adv_timer_final:{dt}", timer_action=Action.Timer.TIMER_STOP))
             
             if api_call.get('status') == tm_sdp.STATUS_ERROR:
-                logger.error(f"Science Data Processor received negative acknowledgement from TM for api call\n{json.dumps(api_call, indent=2)}")
+                logger.error(self.set_last_err(f"Science Data Processor received negative acknowledgement from TM for api call\n{json.dumps(api_call, indent=2)}"))
 
             return action
 
@@ -427,9 +431,32 @@ class SDP(App):
 
         return True
 
+    def set_obs_reset(self, value: str) -> bool:
+        """ Handles observation reset notification from Telescope Manager.
+        """
+        logger.info(f"Science Data Processor received observation reset notification with value: {value}")
+
+        # Reset the scan iteration counter for this observation, so that we can start from scan_iter=0 again
+        obs_id = value if value is not None and isinstance(value, str) else None
+        # Find pending scans for this observation and abort them
+        pending_scans = [s for s in list(self.scan_q.queue) if s.get_status() in [ScanState.EMPTY, ScanState.WIP] and s.get_obs_id() == obs_id]
+        for scan in pending_scans:
+            self._abort_scan(scan)
+        
+        Scan.reset_scan_iter_counter(obs_id)
+
+        return True
+
+    def set_obs_complete(self, value: str) -> bool:
+        """ Handles observation complete notification from Telescope Manager.
+        """
+        logger.info(f"Science Data Processor received observation complete notification with value: {value}")
+        # Do nothing for now, allows the scan iter counter to roll-over naturally
+        return True
+
     def handle_field_get(self, api_call):
         """ Handles field get api calls.
-                : returns: (status, message, value, payload)
+              returns: (status, message, value, payload)
         """
         prop_name = api_call['property']
 
@@ -449,7 +476,7 @@ class SDP(App):
 
     def handle_field_set(self, api_call):
         """ Handles field set api calls.
-                : returns: (status, message, value, payload)
+              returns: (status, message, value, payload)
         """
         prop_name = api_call['property']
         prop_value = api_call['value']

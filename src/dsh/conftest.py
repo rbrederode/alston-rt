@@ -2,13 +2,13 @@ import pytest
 from datetime import datetime, timezone
 from dsh.drivers.md01.md01_driver import MD01Driver
 from dsh.drivers.md01.md01_model import MD01Config
-from models.dsh import DishModel, DishMode, PointingState, Feed, DriverType, CapabilityState
+from models.dsh import DishModel, DishMode, PointingState, Feed, DriverType, Capability
 
 @pytest.fixture
 def md01_driver():
     from dsh.drivers.md01.md01_driver import MD01Driver
     from dsh.drivers.md01.md01_model import MD01Config
-    from models.dsh import DishModel, DishMode, PointingState, Feed, DriverType, CapabilityState
+    from models.dsh import DishModel, DishMode, PointingState, Feed, DriverType, Capability
 
     md01_cfg = MD01Config(
         host="192.168.0.2",
@@ -34,7 +34,7 @@ def md01_driver():
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
         dig_id="dig002",
-        capability_state=CapabilityState.OPERATE_FULL,
+        capability=Capability.OPERATE_FULL,
         driver_type=DriverType.MD01,
         driver_config=md01_cfg,
         last_update=datetime.now(timezone.utc)
@@ -86,7 +86,7 @@ def dsh_model():
         pointing_state=PointingState.UNKNOWN,
         feed=Feed.NONE,
         dig_id="dig002",
-        capability_state=CapabilityState.OPERATE_FULL,
+        capability=Capability.OPERATE_FULL,
         driver_type=DriverType.MD01,
         driver_config=md01_cfg,
         last_update=datetime.now(timezone.utc)

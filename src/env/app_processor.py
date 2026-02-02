@@ -53,7 +53,7 @@ class AppProcessor(Processor):
 
             handler_method = "get_health_state"
             if hasattr(self.driver, handler_method) and callable(getattr(self.driver, handler_method)):
-                self.driver.app_model.health = getattr(self.driver, handler_method)()
+                self.driver.set_health_state(getattr(self.driver, handler_method)())
 
             logger.debug(f"AppProcessor {self.name} health state is {self.driver.app_model.health.name}")
 
@@ -85,7 +85,7 @@ class AppProcessor(Processor):
                     try:
                         entity = getattr(self.driver, handler_method)(event) # Expecting a tuple (entity_id, entity)
                     except Exception as e:
-                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing event {event}: {e}")
+                        logger.exception(self.driver.set_last_err(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing event {event}: {e}"))
                         return None, None
                 else:
                     logger.warning(f"AppProcessor {self.name} driver has no handler to get entity ID from event {event}")
@@ -124,7 +124,7 @@ class AppProcessor(Processor):
                 try:
                     self.initialise_app()
                 except Exception as e:
-                    logger.exception(f"AppProcessor: Exception initialising app: {e}")
+                    logger.exception(self.driver.set_last_err(f"AppProcessor: Exception initialising app: {e}"))
                     return False
 
             elif isinstance(event, StatusUpdateEvent):
@@ -132,7 +132,7 @@ class AppProcessor(Processor):
                 try:
                     self.process_status_update(event)
                 except Exception as e:
-                    logger.exception(f"AppProcessor: Exception processing status update event {event}: {e}")
+                    logger.exception(self.driver.set_last_err(f"AppProcessor: Exception processing status update event {event}: {e}"))
                     return False
 
             elif isinstance(event, events.TimerEvent):
@@ -146,7 +146,7 @@ class AppProcessor(Processor):
                     try:
                         event.user_callback(event.user_ref)
                     except Exception as e:
-                        logger.exception(f"AppProcessor {self.name} exception in user callback for timer event {event}: {e}")
+                        logger.exception(self.driver.set_last_err(f"AppProcessor {self.name} exception in user callback for timer event {event}: {e}"))
                         return False
 
                 handler_method = "process_timer_event"
@@ -155,7 +155,7 @@ class AppProcessor(Processor):
                     try:
                         self.performActions(getattr(self.driver, handler_method)(event))
                     except Exception as e:
-                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing timer event {event}: {e}")
+                        logger.exception(self.driver.set_last_err(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing timer event {event}: {e}"))
                         return False
                 return True
 
@@ -178,7 +178,7 @@ class AppProcessor(Processor):
                     if getattr(self.driver, "app_model", None) is not None and hasattr(self.driver.app_model, "app_name"):
                         driver_app_name = self.driver.app_model.app_name
                     else:
-                        logger.error(f"AppProcessor {self.name} driver has no app_model.app_name attribute")
+                        logger.error(self.driver.set_last_err(f"AppProcessor {self.name} driver has no app_model.app_name attribute"))
                         driver_app_name = getattr(self.driver, "app_name", None) or type(self.driver).__name__
 
                     # Check if the API message is not intended for this App (using from_system/to_system api header fields)
@@ -227,13 +227,14 @@ class AppProcessor(Processor):
                             self.performActions(getattr(self.driver, handler_method)(*handler_parameters), 
                                 event.local_sap, event.remote_conn, event.remote_addr)
                         except Exception as e:
-                            logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing message from {api_msg.get_from_system()}.\n{event}\nException: {e}")
+                            logger.exception(self.driver.set_last_err(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing message " + \
+                                f"from {api_msg.get_from_system()}.\n{event}\nException: {e}"))
                             return False
                     else:
                         logger.warning(f"AppProcessor {self.name} driver has no handler {handler_method} for messages from {api_msg.get_from_system()}.\n{event}")
 
                 except XBase as e:
-                    logger.exception(f"AppProcessor {self.name} failed to process data event from Service Access Point {event.local_sap.description}: {e}")
+                    logger.exception(self.driver.set_last_err(f"AppProcessor {self.name} failed to process data event from Service Access Point {event.local_sap.description}: {e}"))
                     return False
 
                 return True
@@ -248,7 +249,7 @@ class AppProcessor(Processor):
                     entity_id, entity = self._get_entity(event)
 
                     if entity_id is None or entity is None:
-                        logger.error(f"AppProcessor {self.name} received connect event from unknown entity on {interface_type.name} interface.\n{event}")
+                        logger.error(self.driver.set_last_err(f"AppProcessor {self.name} received connect event from unknown entity on {interface_type.name} interface.\n{event}"))
                         return False
 
                     # Store the entity_id and corresponding connection in the driver's entity connection map for future use
@@ -266,7 +267,7 @@ class AppProcessor(Processor):
                         self.performActions(getattr(self.driver, handler_method)(*handler_parameters),
                             event.local_sap, event.remote_conn, event.remote_addr)
                     except Exception as e:
-                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing connect event {event}: {e}")
+                        logger.exception(self.driver.set_last_err(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing connect event {event}: {e}"))
                         return False
                 return True
                 
@@ -280,7 +281,7 @@ class AppProcessor(Processor):
                     entity_id, entity = self._get_entity(event)
 
                     if entity_id is None or entity is None:
-                        logger.error(f"AppProcessor {self.name} received disconnect event from unknown entity on {interface_type.name} interface.\n{event}")
+                        logger.error(self.driver.set_last_err(f"AppProcessor {self.name} received disconnect event from unknown entity on {interface_type.name} interface.\n{event}"))
                         return False
 
                     # Remove the entity connection from the driver's entity connection map
@@ -299,7 +300,7 @@ class AppProcessor(Processor):
                         self.performActions(getattr(self.driver, handler_method)(*handler_parameters),
                             event.local_sap, event.remote_conn, event.remote_addr)
                     except Exception as e:
-                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing disconnect event {event}: {e}")
+                        logger.exception(self.driver.set_last_err(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing disconnect event {event}: {e}"))
                         return False
                 return True
 
@@ -307,7 +308,7 @@ class AppProcessor(Processor):
                 try:
                     self.process_config_event(event)
                 except Exception as e:
-                    logger.exception(f"AppProcessor: Exception processing config event {event}: {e}")
+                    logger.exception(self.driver.set_last_err(f"AppProcessor: Exception processing config event {event}: {e}"))
                     return False
                 return True
 
@@ -319,7 +320,7 @@ class AppProcessor(Processor):
                     try:
                         self.performActions(getattr(self.driver, handler_method)(event))
                     except Exception as e:
-                        logger.exception(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing observation event {event}: {e}")
+                        logger.exception(self.driver.set_last_err(f"AppProcessor {self.name} exception in driver handler {handler_method} while processing observation event {event}: {e}"))
                         return False
                 return True
 
@@ -356,7 +357,7 @@ class AppProcessor(Processor):
             logger.debug(f"AppProcessor {self.name} performing action: send message to remote:\n{msg}")
 
             if not isinstance(msg, APIMessage):
-                logger.error(f"AppProcessor {self.name} failed to perform action 'send message to remote' because message is not an APIMessage instance:\n{msg}")
+                logger.error(self.driver.set_last_err(f"AppProcessor {self.name} failed to perform action 'send message to remote' because message is not an APIMessage instance:\n{msg}"))
                 continue
 
             dest_system = msg.get_to_system()
@@ -376,7 +377,7 @@ class AppProcessor(Processor):
                     msg_to_send = APIMessage(api_msg=api_transl_msg, payload=msg.get_payload_data())
 
             except XBase as e:
-                logger.error(f"AppProcessor {self.name} failed to perform action 'send message to remote' because validate/translate of API message failed: {e} Message:\n{msg}")
+                logger.error(self.driver.set_last_err(f"AppProcessor {self.name} failed to perform action 'send message to remote' because validate/translate of API message failed: {e} Message:\n{msg}"))
                 continue
 
             # If the destination endpoint is the same as the local_sap of the originating event, send the message on the originating connection (client_socket)
@@ -388,10 +389,10 @@ class AppProcessor(Processor):
                 entity_id = msg.get_entity()
 
                 if entity_id is None:
-                    logger.error(f"AppProcessor {self.name} failed to perform action 'send message to remote' because entity ID is not specified in message for an ENTITY interface:\n{msg}")
+                    logger.error(self.driver.set_last_err(f"AppProcessor {self.name} failed to perform action 'send message to remote' because entity ID is not specified in message for an ENTITY interface:\n{msg}"))
                     continue
                 if entity_id not in self.driver.entity_connection_map:
-                    logger.error(f"AppProcessor {self.name} failed to perform action 'send message to remote' because no connection found for entity ID {entity_id} in ENTITY interface:\n{msg}")
+                    logger.error(self.driver.set_last_err(f"AppProcessor {self.name} failed to perform action 'send message to remote' because no connection found for entity ID {entity_id} in ENTITY interface:\n{msg}"))
                     continue
                 else:
                     conn, addr = self.driver.entity_connection_map[entity_id]
@@ -408,7 +409,7 @@ class AppProcessor(Processor):
             logger.debug(f"AppProcessor {self.name} performing action: set timer: {timer}")
 
             if not isinstance(timer, Action.Timer):
-                logger.error(f"AppProcessor {self.name} failed to perform timer action {timer} because it is not an Action.Timer instance")
+                logger.error(self.driver.set_last_err(f"AppProcessor {self.name} failed to perform timer action {timer} because it is not an Action.Timer instance"))
                 continue
 
             timers = Timer.manager.get_timers_by_name(timer.name)
@@ -436,7 +437,7 @@ class AppProcessor(Processor):
             logger.debug(f"AppProcessor {self.name} performing action: set connection: {conn_action}")
 
             if not isinstance(conn_action, Action.Connection):
-                logger.error(f"AppProcessor {self.name} failed to perform connection action {conn_action} because it is not an Action.Connection instance")
+                logger.error(self.driver.set_last_err(f"AppProcessor {self.name} failed to perform connection action {conn_action} because it is not an Action.Connection instance"))
                 continue
 
             # Placeholder for actual connection handling logic
@@ -449,7 +450,7 @@ class AppProcessor(Processor):
             logger.debug(f"AppProcessor {self.name} performing action: observation transition: {obs_transition}")
 
             if not isinstance(obs_transition, Action.Transition):
-                logger.error(f"AppProcessor {self.name} failed to perform observation transition action {obs_transition} because it is not an Action.Transition instance")
+                logger.error(self.driver.set_last_err(f"AppProcessor {self.name} failed to perform observation transition action {obs_transition} because it is not an Action.Transition instance"))
                 continue
 
             obs_event = ObsEvent(transition=obs_transition.get_transition(), obs=obs_transition.get_obs(), user_ref=obs_transition.get_echo_data(), timestamp=datetime.now(timezone.utc))

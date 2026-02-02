@@ -1,10 +1,13 @@
 import argparse
-import threading
-import datetime
-import time
 import asyncio
-
+from datetime import datetime, timezone, timedelta
+from logging.handlers import TimedRotatingFileHandler
+import os
+from pathlib import Path
 from queue import Queue, Empty
+import time
+import threading
+
 from api.api import API
 from ipc.tcp_server import TCPServer
 from ipc.message import AppMessage, APIMessage
@@ -13,7 +16,7 @@ from models.app import AppModel
 from models.comms import InterfaceType
 from models.proc import ProcessorModel
 from models.health import HealthState
-from util.xbase import XBase
+from util.xbase import XBase, XSoftwareFailure
 from util.timer import Timer, TimerManager
 from env import events
 from env.events import InitEvent, StatusUpdateEvent
@@ -28,9 +31,9 @@ class App:
     def __init__(self, app_name: str, app_model: AppModel):
 
         if app_name is None or app_name.strip() == "":
-            raise XBase("App requires a non-empty app name to initialise itself")
+            raise XSoftwareFailure("App requires a non-empty app name to initialise itself")
 
-        self.app_model = app_model
+        self.app_model = app_model if app_model is not None else AppModel(app_name=app_name)
         self.app_model.app_name = app_name
         self.app_model.app_running = True
         
@@ -56,6 +59,9 @@ class App:
         self.start_timer_manager()              # Ensure timer manager is started before any timers are created
 
         self.app_model.health = HealthState.UNKNOWN
+        self._last_heartbeat = None
+        self._lock = threading.Lock()
+        self.avail_logger = self.get_availability_logger()
 
     def __del__(self):
         self.stop()
@@ -76,6 +82,17 @@ class App:
 
     def get_arg_parser(self):
         return self.arg_parser
+
+    def get_last_err_msg(self) -> str:
+        return self.app_model.last_err_msg
+
+    def get_last_err_dt(self) -> datetime:
+        return self.app_model.last_err_dt
+
+    def set_last_err(self, err_msg: str, err_dt: datetime=None) -> str:
+        self.app_model.last_err_msg = err_msg
+        self.app_model.last_err_dt = err_dt if err_dt is not None else datetime.now(timezone.utc)
+        return err_msg
 
     def add_args(self, arg_parser):
         """Specifies the application's command line arguments.
@@ -101,6 +118,9 @@ class App:
         while self.app_model.app_running:
             try:
                 logger.info(f"App {self.app_model.app_name} status thread checking status update event {self.status_update_event}")
+                
+                # Sends heartbeat to the availability logger (I'm alive!)
+                self.heartbeat()
 
                 if self.status_update_event.is_update_pending():
                     if self.status_update_event.get_dequeued_count() == 0:
@@ -137,7 +157,7 @@ class App:
                 time.sleep(30)  # Sleep briefly to avoid busy-waiting
 
             except Exception as e:
-                logger.error(f"App {self.app_model.app_name} encountered an error: {e}")
+                logger.error(self.set_last_err(f"App {self.app_model.app_name} encountered an error: {e}"))
     
     def stop(self):
         """Stops the application."""
@@ -199,13 +219,13 @@ class App:
         """
 
         if system_name is None or system_name.strip() == "":
-            raise XBase("App {self.app_model.app_name} system name must be a non-empty string")
+            raise XSoftwareFailure(self.set_last_err(f"App {self.app_model.app_name} system name must be a non-empty string.\n{self.app_model.to_dict()}"))
 
         if api is None:
-            raise XBase("App {self.app_model.app_name} API implementation must be provided")
+            raise XSoftwareFailure(self.set_last_err(f"App {self.app_model.app_name} API implementation must be provided.\n{self.app_model.to_dict()}"))
 
         if endpoint is None:
-            raise XBase("App {self.app_model.app_name} endpoint must be provided")
+            raise XSoftwareFailure(self.set_last_err(f"App {self.app_model.app_name} endpoint must be provided.\n{self.app_model.to_dict()}"))
 
         logger.info(f"App {self.app_model.app_name} registered interface for system '{system_name}' with API version {api.get_api_version()} at endpoint {endpoint}")
 
@@ -230,7 +250,7 @@ class App:
             : return: The API, endpoint, and interface type if found, else None
         """
         if system_name not in self.interfaces:
-            raise XBase(f"App {self.app_model.app_name} has no registered interface for system '{system_name}'")
+            raise XSoftwareFailure(self.set_last_err(f"App {self.app_model.app_name} has no registered interface for system '{system_name}'"))
 
         return self.interfaces.get(system_name, None)
 
@@ -266,6 +286,54 @@ class App:
 
         self.app_model.queue_size = self.queue.qsize()
         self.app_model.processors = processors
-        self.app_model.last_update = datetime.datetime.now(datetime.timezone.utc)
+        self.app_model.last_update = datetime.now(timezone.utc)
 
         return self.app_model.to_dict()
+
+    def heartbeat(self):
+        """Updates the last heartbeat timestamp to the current time."""
+        with self._lock:
+            self._last_heartbeat = datetime.now(timezone.utc)
+            self.avail_logger.info("Heartbeat received")
+
+    def set_health_state(self, health: HealthState):
+        """Sets the health state of the application.
+            : param health: The new health state
+        """
+        with self._lock:
+            old_health = self.app_model.health
+            if old_health != health:
+                self.app_model.health = health
+                self.app_model.last_update = datetime.now(timezone.utc)
+                self.avail_logger.info(f"App {self.app_model.app_name} health state transition {old_health.name} -> {health.name}")
+
+    def get_availability_logger(self) -> logging.Logger:
+        """Gets a logger for availability logging.
+            : return: A logger instance for availability logging
+        """
+        log_dir = Path("~/logs/availability").expanduser()
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        logger = logging.getLogger(self.app_model.app_name)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False  # Don't propagate to root logger
+
+        log_file = os.path.join(log_dir, f"{self.app_model.app_name}_availability.log")
+
+        # Rotate monthly (when= 'midnight', interval=1, backupCount=24 handles 2 years)
+        handler = TimedRotatingFileHandler(
+            filename=log_file,
+            when="midnight",
+            interval=1,
+            backupCount=24,       # keep 2 years of monthly logs
+            encoding="utf-8",
+            utc=True)
+
+        handler.suffix = "%Y-%m"  # results in e.g. dm_availability.log.2026-02
+        formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+        handler.setFormatter(formatter)
+
+        if not logger.handlers:
+            logger.addHandler(handler)
+
+        return logger

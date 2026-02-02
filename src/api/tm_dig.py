@@ -125,6 +125,7 @@ MSG_FIELDS = {
     "params":       {"type": "dict"},                               # Key Value pairs in a dictionary e.g. {"num_samples": 1024}
     "status":       {"enum": STATUS},                               # Status of response (e.g. success, error)
     "message":      {"type": "str"},                                # Additional information about the status
+    "obs_data":     {"type": "dict"},                               # Observation data in dictionary format 
 }
 
 # Definition of required, conditional and optional fields for each api msg type
@@ -136,7 +137,8 @@ MSG_FIELDS_DEFINITIONS = {
             "value",        # Required if action_code is "set" 
             "method",       # Required if action_code is "method"
             "params"        # Required if action_code is "method"
-        }
+        },
+        "optional": {"obs_data"},  # Optional field
     },
     "adv": {
         "required": {"msg_type", "action_code"},
@@ -145,7 +147,8 @@ MSG_FIELDS_DEFINITIONS = {
             "value",        # Required if action_code is "set"
             "method",       # Required if action_code is "method"
             "params"        # Required if action_code is "method"
-        }
+        },
+        "optional": {"obs_data"},  # Optional field
     },
     "rsp": {
         "required": {"msg_type", "action_code", "status"},
@@ -153,7 +156,8 @@ MSG_FIELDS_DEFINITIONS = {
         "optional": {"property"},   # Copied from req/adv
         "optional": {"value"},      
         "optional": {"method"},     # Copied from req/adv
-        "optional": {"params"}      
+        "optional": {"params"},
+        "optional": {"obs_data"},   # Optional field
     },
 }
 

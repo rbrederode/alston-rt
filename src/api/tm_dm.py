@@ -51,7 +51,7 @@ TO = (
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 PROPERTY_STATUS         = 'status'           # Get system status
 PROPERTY_TARGET         = 'target'           # Set target model 
-PROPERTY_CAPABILITY     = 'capability'       # Set dish capability state
+PROPERTY_CAPABILITY     = 'capability'       # Set dish capability capability
 PROPERTY_MODE           = 'mode'             # Set dish mode
 
 PROPERTIES = (
@@ -88,6 +88,7 @@ MSG_FIELDS = {
     "value":        {"type": "(int, float, str, dict)"},            # Value to set or value returned
     "status":       {"enum": STATUS},                               # Status of response (e.g. success, error)
     "message":      {"type": "str"},                                # Additional information about the status
+    "obs_data":     {"type": "dict"},                               # Observation data in dictionary format 
 }
 
 # Definition of required, conditional and optional fields for each api msg type
@@ -97,20 +98,23 @@ MSG_FIELDS_DEFINITIONS = {
         "conditional": {
             "property",     # Required if action_code is "get" or "set"
             "value",        # Required if action_code is "set" 
-         }
+         },
+         "optional": {"obs_data"},  # Optional field
     },
     "adv": {
         "required": {"msg_type", "action_code"},
         "conditional": {
             "property",     # Required if action_code is "get" or "set"
             "value",        # Required if action_code is "set"
-        }
+        },
+        "optional": {"obs_data"},   # Optional field
     },
     "rsp": {
         "required": {"msg_type", "action_code", "status"},
         "optional": {"message"},
         "optional": {"property"},   # Copied from req/adv
         "optional": {"value"},      # Copied from req/adv
+        "optional": {"obs_data"},   # Optional field
     },
 }
 

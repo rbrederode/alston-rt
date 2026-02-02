@@ -153,7 +153,7 @@ class SignalDisplay:
 
         # Update the figure suptitle for the new scan
         self.fig.suptitle(
-            f"Scan: {scan.scan_model.scan_id} Center Freq: {scan.scan_model.center_freq/1e6:.2f} MHz, "
+            f"Scan Id: {scan.scan_model.scan_id} Center Freq: {scan.scan_model.center_freq/1e6:.2f} MHz, "
             f"Gain: {scan.scan_model.gain} dB, Sample Rate: {scan.scan_model.sample_rate/1e6:.2f} MHz, "
             f"Channels: {scan.scan_model.channels} Load: {scan.scan_model.load}",
             fontsize=12, y=0.96)

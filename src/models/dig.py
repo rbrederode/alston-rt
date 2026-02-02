@@ -36,6 +36,8 @@ class DigitiserModel(BaseModel):
         "sdr_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "scanning": And(Or(bool, str, dict, int), lambda v: isinstance(v, bool) or isinstance(v, str) or isinstance(v, dict) or isinstance(v, int)),
         "sdr_eeprom": And(dict, lambda v: isinstance(v, dict)),
+        "last_err_msg": Or(None, And(str, lambda v: isinstance(v, str))),                        # Last error message from the app
+        "last_err_dt": Or(None, And(datetime, lambda v: isinstance(v, datetime))),               # Last error datetime from the app
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -70,6 +72,8 @@ class DigitiserModel(BaseModel):
             "sdp_connected": CommunicationStatus.NOT_ESTABLISHED,
             "sdr_connected": CommunicationStatus.NOT_ESTABLISHED,
             "sdr_eeprom": {},
+            "last_err_msg": None,
+            "last_err_dt": None,
             "last_update": datetime.now(timezone.utc),
         }
 
@@ -108,6 +112,14 @@ class DigitiserList(BaseModel):
                 kwargs.setdefault(key, value)
 
         super().__init__(**kwargs)
+
+    def get_dig_by_id(self, dig_id: str) -> DigitiserModel:
+        """ Retrieve a DigitiserModel from the dig_list by its dig_id.
+        """
+        for dig in self.dig_list:
+            if dig.dig_id == dig_id:
+                return dig
+        return None
 
 if __name__ == "__main__":
     
