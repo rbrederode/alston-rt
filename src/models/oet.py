@@ -87,7 +87,7 @@ if __name__ == "__main__":
         title="Test Observation",
         description="This is a test observation of a celestial target.",
         state=ObsState.EMPTY,
-        dish_id="dish001",
+        dsh_id="dish001",
         start_dt=datetime.now(timezone.utc),
         end_dt=datetime.now(timezone.utc),
         last_update=datetime.now(timezone.utc)

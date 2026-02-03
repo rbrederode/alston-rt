@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 from typing import TYPE_CHECKING
 
@@ -21,6 +21,14 @@ def unpack_result(result) -> tuple:
             status, message, value, payload = "error", "Invalid result format", None, None
 
         return status, message, value, payload
+
+def delay_till_hour() -> float:
+    """ Calculate the delay in milliseconds until the start of the next hour.
+    """
+    now = datetime.now()
+    next_hour = (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+    delay = (next_hour - now).total_seconds() * 1000  # in milliseconds
+    return delay
 
 def dict_diff(old_dict, new_dict):
     """

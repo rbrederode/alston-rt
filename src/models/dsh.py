@@ -254,12 +254,12 @@ class DishManagerModel(BaseModel):
         return None
 
     def get_dish_by_dig_id(self, dig_id: str) -> DishModel:
-        """ Retrieve a DishModel from the dish_list by its dig_id.
+        """ Retrieve a DishModel from the dish_store by its dig_id.
             Theoretically, dig_id should be unique across dishes.
         Args: dig_id (str): The digitiser identifier assigned to the dish.
         Returns: DishModel: The DishModel with the specified dig_id. Returns None if not found.
         """
-        for dish in self.dish_list:
+        for dish in self.dish_store.dish_list:
             if dish.dig_id == dig_id:
                 return dish
         return None

@@ -16,6 +16,7 @@ from models.app import AppModel
 from models.comms import InterfaceType
 from models.proc import ProcessorModel
 from models.health import HealthState
+from util.availability import get_app_reliability, get_app_availability
 from util.xbase import XBase, XSoftwareFailure
 from util.timer import Timer, TimerManager
 from env import events
@@ -27,6 +28,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 class App:
+
+    logs_dir = Path("./logs").expanduser()
 
     def __init__(self, app_name: str, app_model: AppModel):
 
@@ -62,6 +65,7 @@ class App:
         self._last_heartbeat = None
         self._lock = threading.Lock()
         self.avail_logger = self.get_availability_logger()
+        self.report_availability()
 
     def __del__(self):
         self.stop()
@@ -121,6 +125,10 @@ class App:
                 
                 # Sends heartbeat to the availability logger (I'm alive!)
                 self.heartbeat()
+                # If we have just passed the hour mark, report app availability
+                now = datetime.now(timezone.utc)
+                if now.minute == 0 and now.second < 30:
+                    self.report_availability()
 
                 if self.status_update_event.is_update_pending():
                     if self.status_update_event.get_dequeued_count() == 0:
@@ -294,7 +302,7 @@ class App:
         """Updates the last heartbeat timestamp to the current time."""
         with self._lock:
             self._last_heartbeat = datetime.now(timezone.utc)
-            self.avail_logger.info("Heartbeat received")
+            self.avail_logger.info("Heartbeat")
 
     def set_health_state(self, health: HealthState):
         """Sets the health state of the application.
@@ -311,14 +319,14 @@ class App:
         """Gets a logger for availability logging.
             : return: A logger instance for availability logging
         """
-        log_dir = Path("~/logs/availability").expanduser()
+        log_dir = Path(App.logs_dir).expanduser() / "availability"
         log_dir.mkdir(parents=True, exist_ok=True)
 
         logger = logging.getLogger(self.app_model.app_name)
         logger.setLevel(logging.INFO)
         logger.propagate = False  # Don't propagate to root logger
 
-        log_file = os.path.join(log_dir, f"{self.app_model.app_name}_availability.log")
+        log_file = os.path.join(log_dir, f"{self.app_model.app_name}.log")
 
         # Rotate monthly (when= 'midnight', interval=1, backupCount=24 handles 2 years)
         handler = TimedRotatingFileHandler(
@@ -329,7 +337,7 @@ class App:
             encoding="utf-8",
             utc=True)
 
-        handler.suffix = "%Y-%m"  # results in e.g. dm_availability.log.2026-02
+        handler.suffix = "%Y-%m"  # results in e.g. dm.log.2026-02
         formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
         handler.setFormatter(formatter)
 
@@ -337,3 +345,25 @@ class App:
             logger.addHandler(handler)
 
         return logger
+
+    def report_availability(self):
+        """Reports the current availability metrics for the last hour."""
+
+        with self._lock:
+            logs_dir = App.logs_dir / "availability"
+            end_period = datetime.now(timezone.utc)
+            start_period = end_period.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+            
+            self.app_model.availability = get_app_availability(
+                logs_dir, 
+                self.app_model.app_name, 
+                start_period, 
+                end_period)
+            
+            self.app_model.reliability = get_app_reliability(
+                logs_dir, 
+                self.app_model.app_name, 
+                start_period, 
+                end_period)
+             
+            

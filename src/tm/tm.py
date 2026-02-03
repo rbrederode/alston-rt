@@ -52,7 +52,7 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 ALSTON_RADIO_TELESCOPE = "1r73N0VZHSQC6RjRv94gzY50pTgRvaQWfctGGOMZVpzc"
 
 TM_UI_API = "TM_UI_API!"            # Range for UI-TM API data
-TM_UI_UPDATE_INTERVAL_S = 30        # Update interval in seconds
+TM_UI_UPDATE_INTERVAL_S = 45        # Update interval in seconds
 
 ODT_OBS_LIST = TM_UI_API + "D2"     # Range for Observation Design Tool
 DIG001_CONFIG = TM_UI_API + "B3"    # Range for Digitiser 001 configuration
@@ -994,19 +994,19 @@ class TelescopeManager(App):
         """
         action = Action() if action is None else action
 
-        dish1 = self.telmodel.dsh_mgr.dsh_store.get_dish_by_id(dsh_id) if dsh_id is not None else None
-        dish2 = self.telmodel.dsh_mgr.dsh_store.get_dish_by_dig_id(dig_id) if dig_id is not None else None
+        dish1 = self.telmodel.dsh_mgr.get_dish_by_id(dsh_id) if dsh_id is not None else None
+        dish2 = self.telmodel.dsh_mgr.get_dish_by_dig_id(dig_id) if dig_id is not None else None
 
         ids = []
         if dish1 is not None:
-            ids.append(dish1.id)
-        if dish2 is not None and dish2.id not in ids:
-            ids.append(dish2.id)
+            ids.append(dish1.dsh_id)
+        if dish2 is not None and dish2.dsh_id not in ids:
+            ids.append(dish2.dsh_id)
 
         for obs in self.telmodel.oda.obs_store.obs_list:
             if obs.obs_state in [ObsState.CONFIGURING, ObsState.READY, ObsState.SCANNING]:
 
-                if obs.dish_id in ids or (dig_id is None and dsh_id is None):
+                if obs.dsh_id in ids or (dig_id is None and dsh_id is None):
                     logger.info(f"Telescope Manager aborting observation {obs.obs_id} due to shutdown")
                     action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
 

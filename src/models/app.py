@@ -19,6 +19,8 @@ class AppModel(BaseModel):
         "processors": And(list, lambda v: isinstance(v, list)),
         "msg_timeout_ms": And(int, lambda v: v >= 0),
         "arguments": Or(None, And(dict, lambda v: isinstance(v, dict))),
+        "reliability": Or(None, And(dict, lambda v: isinstance(v, dict))),              # MTBF, MTTR, Reliability (last hour)
+        "availability": Or(None, And(float, lambda v: 0.0 <= v <= 100.0)),              # Availability percentage (last hour)
         "last_err_msg": Or(None, And(str, lambda v: isinstance(v, str))),               # Last error message from the app
         "last_err_dt": Or(None, And(datetime, lambda v: isinstance(v, datetime))),      # Last error datetime from the app
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
@@ -40,6 +42,8 @@ class AppModel(BaseModel):
             "processors": [],
             "msg_timeout_ms": 10000,
             "arguments": None,
+            "reliability": None,
+            "availability": None,
             "last_err_msg": None,
             "last_err_dt": None,
             "last_update": datetime.now(timezone.utc),
