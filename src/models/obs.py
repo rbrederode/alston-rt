@@ -89,10 +89,10 @@ class Observation(BaseModel):
         "target_configs": And(list, lambda v: isinstance(v, list)),             # List of target configurations (TargetConfig)
         "target_scans": And(list, lambda v: isinstance(v, list)),               # List of target scan sets (TargetScanSet)
 
-        "tgt_idx": And(int, lambda v: isinstance(v, int)),                    # Index of the next target to be observed (0-based)
+        "tgt_idx": And(int, lambda v: isinstance(v, int)),                      # Index of the next target to be observed (0-based)
         "tgt_scan": And(int, lambda v: isinstance(v, int)),                     # Index of the next scan (for the given tgt_idx) to be observed (0-based)
 
-        "dish_id": And(Or(None, str), lambda v: v is None or isinstance(v, str)),# Dish identifier e.g. "dish001"
+        "dsh_id": And(Or(None, str), lambda v: v is None or isinstance(v, str)),# Dish identifier e.g. "dish001"
         "capabilities": And(str, lambda v: isinstance(v, str)),                 # Dish capabilities e.g. "Drift Scan over Zenith"
         "diameter": And(Or(int, float), lambda v: v >= 0.0),                    # Dish diameter (meters)
         "f/d_ratio": And(Or(int, float), lambda v: v >= 0.0),                   # Dish focal length to diameter ratio
@@ -149,7 +149,7 @@ class Observation(BaseModel):
             "target_scans": [],
             "tgt_idx": 0,
             "tgt_scan": 0,
-            "dish_id": None,
+            "dsh_id": None,
             "capabilities": "",
             "diameter": 0.0,
             "f/d_ratio": 0.0,
@@ -313,7 +313,7 @@ if __name__ == "__main__":
     import astropy.units as u
     import pprint
 
-    obs_dict = {'_type': 'Observation', 'dish_id': 'Dish002', 'capabilities': 'Drift Scan over Zenith', 'diameter': 3, 'f/d_ratio': 1.3, 'latitude': 53.2421, 'longitude': -2.3067, 'total_integration_time': 60, 'estimated_slewing_time': 30, 'estimated_observation_duration': '00:01:30', 'scheduling_block_start': {'_type': 'datetime', 'value': '2025-12-07T19:00:00.000Z'}, 'scheduling_block_end': {'_type': 'datetime', 'value': '2025-12-07T20:00:00.000Z'}, 'obs_id': '2025-12-07T19:00Z-Dish002', 'obs_state': {'_type': 'enum.IntEnum', 'instance': 'ObsState', 'value': 'EMPTY'}, 'targets': [{'_type': 'TargetModel', 'sky_coord': {'_type': 'SkyCoord', 'frame': 'icrs', 'ra': 204.2538, 'dec': -29.8658}, 'id': 'M83', 'type': {'_type': 'enum.IntEnum', 'instance': 'PointingType', 'value': 'SIDEREAL_TRACK'}}],'target_configs': [{'_type': 'TargetConfig', 'tgt_idx': 0, 'feed': {'_type': 'enum.IntEnum', 'instance': 'Feed', 'value': 'H3T_1420'}, 'gain': 12, 'center_freq': 1420400000, 'bandwidth': 1000000, 'sample_rate': 2400000, 'integration_time': 60, 'spectral_resolution': 128, 'target_id': 1}], 'user_email': 'ray.brederode@skao.int', 'created': {'_type': 'datetime', 'value': '2025-12-07T18:19:37.503Z'}}
+    obs_dict = {'_type': 'Observation', 'dsh_id': 'Dish002', 'capabilities': 'Drift Scan over Zenith', 'diameter': 3, 'f/d_ratio': 1.3, 'latitude': 53.2421, 'longitude': -2.3067, 'total_integration_time': 60, 'estimated_slewing_time': 30, 'estimated_observation_duration': '00:01:30', 'scheduling_block_start': {'_type': 'datetime', 'value': '2025-12-07T19:00:00.000Z'}, 'scheduling_block_end': {'_type': 'datetime', 'value': '2025-12-07T20:00:00.000Z'}, 'obs_id': '2025-12-07T19:00Z-Dish002', 'obs_state': {'_type': 'enum.IntEnum', 'instance': 'ObsState', 'value': 'EMPTY'}, 'targets': [{'_type': 'TargetModel', 'sky_coord': {'_type': 'SkyCoord', 'frame': 'icrs', 'ra': 204.2538, 'dec': -29.8658}, 'id': 'M83', 'type': {'_type': 'enum.IntEnum', 'instance': 'PointingType', 'value': 'SIDEREAL_TRACK'}}],'target_configs': [{'_type': 'TargetConfig', 'tgt_idx': 0, 'feed': {'_type': 'enum.IntEnum', 'instance': 'Feed', 'value': 'H3T_1420'}, 'gain': 12, 'center_freq': 1420400000, 'bandwidth': 1000000, 'sample_rate': 2400000, 'integration_time': 60, 'spectral_resolution': 128, 'target_id': 1}], 'user_email': 'ray.brederode@skao.int', 'created': {'_type': 'datetime', 'value': '2025-12-07T18:19:37.503Z'}}
     obs000 = Observation().from_dict(obs_dict)
     print("="*40)
     print("Observation Model from Dict Test")

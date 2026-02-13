@@ -20,8 +20,9 @@ _config_to_property = {
     "capability":       tm_dm.PROPERTY_CAPABILITY,
     "mode":             tm_dm.PROPERTY_MODE,
     "target":           tm_dm.PROPERTY_TARGET,
-    "obs_complete":     tm_sdp.PROPERTY_OBS_COMPLETE,
+    "scan_config":      tm_sdp.PROPERTY_SCAN_CONFIG,
     "obs_reset":        tm_sdp.PROPERTY_OBS_RESET,
+    "obs_complete":     tm_sdp.PROPERTY_OBS_COMPLETE,
 }
 
 def get_property_name_value(config_item: str, value) -> (str, Any):
@@ -85,11 +86,19 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
                     logger.error(f"Telescope Manager map: invalid MODE integer value {value} for property {property}")
                     return property, None
 
-        elif property in [tm_dig.PROPERTY_SCANNING, tm_dm.PROPERTY_TARGET]:
+        elif property in [tm_dig.PROPERTY_SCANNING, tm_dm.PROPERTY_TARGET, tm_sdp.PROPERTY_SCAN_CONFIG]:
             if isinstance(value, bool):
                 return property, value
             elif isinstance(value, dict):
-                return property, value
+
+                # Recursively map dictionary keys if needed (e.g., for nested configurations)
+                mapped_dict = {}
+                for k, v in value.items():
+                    mapped_key, mapped_value = get_property_name_value(k, v)
+                    # Use the mapped key if found, otherwise keep the original key
+                    mapped_dict[mapped_key if mapped_key is not None else k] = mapped_value
+                return property, mapped_dict
+
             elif str(value).upper() in ["TRUE", "1", "YES", "ON"]:
                 return property, True
             elif str(value).upper() in ["FALSE", "0", "NO", "OFF"]:

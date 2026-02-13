@@ -1,0 +1,54 @@
+@startuml
+mainframe Successful **Observation** Part 2
+actor ODT
+== ObsState READY ==
+TM -[#blue]> Digitiser: Set Scanning (Obs ID, Tgt IDX, Freq Scan Scan Iter)
+{start} Digitiser -[#blue]> SDP: Samples & Scan Metadata
+note right: Every second
+SDP -> SDP: Create Scan
+SDP -> SDP: Load Samples
+SDP -[#green]> Digitiser: Status SUCCESS
+Digitiser -[#green]> TM: Status SUCCESS
+OET -> OET: Scan Started
+
+== ObsState SCANNING ==
+{end} Digitiser -[#blue]> SDP: Samples @ sample rate
+{start} <-> {end} : 60 seconds
+note right: Every second
+SDP -> SDP: Load Samples
+SDP -[#green]> Digitiser: Status SUCCESS
+...Scan Duration seconds later...
+SDP -[#blue]> TM: Set Scan Complete
+note right: Scan fully loaded
+TM -[#green]> SDP: Status SUCCESS
+TM -> OET: Scan Completed
+== ObsState READY ==
+OET -> OET: Next Scan
+hnote over OET : More Scans
+OET -> OET: Configure Resources
+hnote over OET : No More Scans
+OET -> OET: Stop Scanning
+
+OET -> TM: Dish Config
+OET -> TM: Digitiser Config
+OET -> TM: SDP Config
+
+TM -[#blue]> DM: Set Mode STANDBY_FP
+DM -[#green]> Dish: Set Dish Mode STANDBY_FP
+DM -[#green]> TM: Status SUCCESS
+TM -[#blue]> DM: Clear Target
+DM -[#blue]> Dish: Clear Target
+DM -[#green]> TM: Status SUCCESS
+TM -[#blue]> Digitiser: Set Stop Scanning
+Digitiser -> Digitiser: Stop Scanning
+Digitiser -[#green]> TM: Status SUCCESS
+TM -[#blue]> SDP: Set Obs Complete
+SDP -> SDP: Flush Scan Baselines
+SDP -[#green]> TM: Status SUCCESS
+OET -> OET: Release Resources
+OET -> OET: Save Obs Metadata
+
+== ObsState IDLE ==
+TM -> ODT: Update Observation
+note right: Every UI poll period
+@enduml

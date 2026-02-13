@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 from typing import TYPE_CHECKING
 
@@ -21,6 +21,14 @@ def unpack_result(result) -> tuple:
             status, message, value, payload = "error", "Invalid result format", None, None
 
         return status, message, value, payload
+
+def delay_till_hour() -> float:
+    """ Calculate the delay in milliseconds until the start of the next hour.
+    """
+    now = datetime.now()
+    next_hour = (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+    delay = (next_hour - now).total_seconds() * 1000  # in milliseconds
+    return delay
 
 def dict_diff(old_dict, new_dict):
     """
@@ -84,13 +92,13 @@ def gen_file_prefix(
         :returns: A string representing the file prefix
     """
     return (str(instance_id).replace(':', '') if instance_id is not None else '') + \
-        (dt.strftime("%Y-%m-%dT%H%M%S") if instance_id is None else '') + \
+        (dt.strftime("%Y-%m-%dT%H%M%S") if instance_id is None and dt is not None else '') + \
         ("-" + str(entity_id) if entity_id is not None else '') + \
-        "-g" + str(gain) + \
-        "-du" + str(duration) + \
-        "-bw" + str(round(sample_rate/1e6,2)) + \
-        "-cf" + str(round(center_freq/1e6,2)) + \
-        "-ch" + str(channels) + \
+        ("-g" + str(float(gain)) if gain is not None else '') + \
+        ("-du" + str(duration) if duration is not None else '') + \
+        ("-bw" + str(round(sample_rate/1e6,2)) if sample_rate is not None else '') + \
+        ("-cf" + str(round(center_freq/1e6,2)) if center_freq is not None else '') + \
+        ("-ch" + str(channels) if channels is not None else '') + \
         ("-" + filetype if filetype is not None else '')
 
 def find_json_object_end(data:bytes) -> int:

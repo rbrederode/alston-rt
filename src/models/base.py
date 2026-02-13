@@ -261,7 +261,7 @@ class BaseModel:
         from models.app import AppModel
         from models.comms import CommunicationStatus, InterfaceType
         from models.dig import DigitiserList, DigitiserModel
-        from models.dsh import DishMode, DishModel, DishList, DishManagerModel, Feed, PointingState, Capability, DriverType
+        from models.dsh import DishMode, DishModel, DishList, DishManagerModel, Feed, PointingState, Capability, DriverType, PECModel
         from models.health import HealthState
         from models.obs import ObsState, Observation
         from models.oda import ObsList, ScanStore, ODAModel
@@ -354,6 +354,9 @@ class BaseModel:
             elif model_type == "ODAModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ODAModel(**deserialized_fields)
+            elif model_type == "PECModel":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return PECModel(**deserialized_fields)
             elif model_type == "ProcessorModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ProcessorModel(**deserialized_fields)

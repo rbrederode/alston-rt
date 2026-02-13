@@ -33,7 +33,7 @@ def _collect_log_files(log_dir: str, app_name: str, start: datetime, end: dateti
     Returns:
         List[str]: List of log file paths.
     """
-    base_log = os.path.join(log_dir, f"{app_name}_availability.log")
+    base_log = os.path.join(log_dir, f"{app_name}.log")
     files = []
 
     for month in _month_iter(start, end):
@@ -57,10 +57,12 @@ def _parse_logs(log_files: List[str], app_name: str, heartbeat_timeout_sec: int,
         List[Event]: List of events (timestamp, state).
     """
     state_pattern = re.compile(rf"App {re.escape(app_name)} health state transition .* -> (\w+)")
-    heartbeat_pattern = re.compile(r"Heartbeat received")
+    heartbeat_pattern = re.compile(r"Heartbeat")
 
     transitions = []
     heartbeats = []
+
+    end_tz = end_period.tzinfo
 
     for logfile in log_files:
         with open(logfile, "r", encoding="utf-8") as f:
@@ -71,6 +73,12 @@ def _parse_logs(log_files: List[str], app_name: str, heartbeat_timeout_sec: int,
                 except ValueError:
                     logging.warning(f"Bad timestamp in {logfile}: {line.strip()}")
                     continue
+
+                # Normalize timezone to match end_period to avoid naive/aware mixing
+                if end_tz is not None and ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=end_tz)
+                elif end_tz is None and ts.tzinfo is not None:
+                    ts = ts.replace(tzinfo=None)
 
                 if m := state_pattern.search(line):
                     transitions.append((ts, m.group(1)))
@@ -180,23 +188,23 @@ def get_app_reliability(log_dir: str, app_name: str, start_period: datetime, end
     events = _parse_logs(logs, app_name, heartbeat_timeout_sec, end_period)
     intervals = _build_state_intervals(events, start_period, end_period)
 
-   # Only "OK" is UP, everything else is DOWN
-    up_durations = [duration for state, duration in intervals if state == "OK"]
-    down_durations = [duration for state, duration in intervals if state != "OK"]
+   # Only "OK" and "DEGRADED" are UP, everything else is DOWN
+    up_durations = [duration for state, duration in intervals if state in ["OK", "DEGRADED"]]
+    down_durations = [duration for state, duration in intervals if state not in ["OK", "DEGRADED"]]
 
     mtbf = sum(up_durations) / len(up_durations) if up_durations else 0.0
     mttr = sum(down_durations) / len(down_durations) if down_durations else 0.0
 
-    availability = (mtbf / (mtbf + mttr) * 100) if (mtbf + mttr) > 0 else 100.0
+    reliability = (mtbf / (mtbf + mttr) * 100) if (mtbf + mttr) > 0 else 100.0
 
     return {
         "mtbf_sec": mtbf,
         "mttr_sec": mttr,
-        "reliability_availability": availability
+        "reliability": reliability
     }
 
-def compute_rolling_metrics(log_dir: str, app_name: str, start_period: datetime, end_period: datetime, bucket_minutes: int = 60, heartbeat_timeout_sec: int = 60,
-                            state_weights: dict = None,  output_csv: str = "app_metrics.csv") -> None:
+def generate_report(log_dir: str, app_name: str, start_period: datetime, end_period: datetime, bucket_minutes: int = 60, heartbeat_timeout_sec: int = 60,
+                            state_weights: dict = None,  output_csv: str = None) -> None:
     """
     Compute rolling availability and reliability for an app, split into time buckets.
 
@@ -208,7 +216,7 @@ def compute_rolling_metrics(log_dir: str, app_name: str, start_period: datetime,
         bucket_minutes (int, optional): Duration of each bucket in minutes. Defaults to 60.
         heartbeat_timeout_sec (int, optional): Heartbeat timeout in seconds. Defaults to 60.
         state_weights (dict, optional): Weights for states. Defaults to OK=1.0, DEGRADED=0.5, FAILED=0.0.
-        output_csv (str, optional): CSV file path to write results. Defaults to "app_metrics.csv".
+        output_csv (str, optional): CSV file path to write results. Defaults to None.
     """
     if state_weights is None:
         state_weights = {"OK": 1.0, "DEGRADED": 0.5, "FAILED": 0.0, "UNKNOWN": 0.0}
@@ -252,6 +260,9 @@ def compute_rolling_metrics(log_dir: str, app_name: str, start_period: datetime,
 
         bucket_start = bucket_end
 
+    if output_csv is None:
+        output_csv = f"{app_name}_{start_period.strftime('%Y%m%d%H%M')}_{end_period.strftime('%Y%m%d%H%M')}.csv"
+
     # Write CSV
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(results[0].keys()))
@@ -263,15 +274,15 @@ def compute_rolling_metrics(log_dir: str, app_name: str, start_period: datetime,
 
 if __name__ == "__main__":
     # Example usage
-    log_directory = os.path.expanduser("~/logs/availability")
+    log_directory = os.path.expanduser("./logs/availability")
     app = "dm"
     start = datetime(2026, 2, 2, 18, 48, 0)
-    end = datetime(2026, 2, 2, 21, 40, 0)
+    end = datetime(2026, 2, 3, 21, 40, 0)
 
     availability_percentage = get_app_availability(log_directory, app, start, end)
     reliability_metrics = get_app_reliability(log_directory, app, start, end)
-    compute_rolling_metrics(log_directory, app, start, end)
-    
+    generate_report(log_directory, app, start, end)
+
     print(f"Reliability metrics for {app} from {start} to {end}:")
     print(reliability_metrics)
     print(f"Availability for {app} from {start} to {end}: {availability_percentage:.2f}%")

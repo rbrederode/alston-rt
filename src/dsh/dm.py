@@ -65,11 +65,11 @@ class DM(App):
         arg_parser.add_argument("--tm_host", type=str, required=False, help="TCP host to listen on for Telescope Manager commands", default="localhost")
         arg_parser.add_argument("--tm_port", type=int, required=False, help="TCP port for Telescope Manager commands", default=50002)
 
-    def _get_dish_lock(self, dish_id: str) -> threading.RLock:
+    def _get_dish_lock(self, dsh_id: str) -> threading.RLock:
         """Get or create a threading lock for a specific dish."""
-        if dish_id not in self.dish_locks:
-            self.dish_locks[dish_id] = threading.RLock()
-        return self.dish_locks[dish_id]
+        if dsh_id not in self.dish_locks:
+            self.dish_locks[dsh_id] = threading.RLock()
+        return self.dish_locks[dsh_id]
 
     def process_init(self) -> Action:
         """ Processes initialisation event on startup once all app processors are running.

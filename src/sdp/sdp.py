@@ -1,8 +1,10 @@
-import logging
-import json
-from queue import Queue
-import numpy as np
 from datetime import datetime, timezone
+import json
+import logging
+import numpy as np
+import os
+from pathlib import Path
+from queue import Queue
 import re
 import time
 import threading
@@ -22,10 +24,10 @@ from models.sdp import ScienceDataProcessorModel
 from obs.scan import Scan
 from signal_display import SignalDisplay
 from util import log, util
-from util.xbase import XBase, XStreamUnableToExtract
+from util.xbase import XBase, XStreamUnableToExtract, XSoftwareFailure
 
-#OUTPUT_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
-OUTPUT_DIR = '/Users/r.brederode/samples'  # Directory to store samples
+#SAMPLES_DIR = '/Volumes/DATA SDD/Alston Radio Telescope/Samples/Home'  # Directory to store samples
+SAMPLES_DIR = '/Users/r.brederode/samples'  # Directory to store samples
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +60,12 @@ class SDP(App):
         self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint, InterfaceType.ENTITY_DRIVER)
         # Entity drivers maintain comms status per entity, so no need to initialise comms status here
 
-        # Queue to hold scans to be processed
-        self.scan_q = Queue()            # Queue of scans to load and process
+        self.scan_q = Queue()            # Queue of sky scans being processed and displayed
+        self.load_q = Queue()            # Queue of load scans (baselines) to apply to sky scans
+        self.signal_displays = {}        # Dictionary to hold SignalDisplay objects for each digitiser
+
         self._rlock = threading.RLock()  # Lock for thread-safe access to shared resources
         self._dig_locks = {}             # Dictionary of threading locks, one per digitiser ID
-        self.capture = True              # Flag to enable/disable sample capture
-
-        self.signal_displays = {}        # Dictionary to hold SignalDisplay objects for each digitiser
 
     def add_args(self, arg_parser): 
         """ Specifies the science data processors command line arguments.
@@ -77,13 +78,15 @@ class SDP(App):
         arg_parser.add_argument("--dig_host", type=str, required=False, help="TCP host to listen on for Digitiser commands", default="localhost")
         arg_parser.add_argument("--dig_port", type=int, required=False, help="TCP server port for upstream Digitiser transport", default=60000)
 
-        arg_parser.add_argument("--output_dir", type=str, required=False, help="Directory to store captured samples", default=OUTPUT_DIR)
+        arg_parser.add_argument("--scan_store_dir", type=str, required=False, help="Directory to store captured scan samples", default=SAMPLES_DIR)
 
     def process_init(self) -> Action:
         """ Processes initialisation event on startup once all app processors are running.
             Runs in single threaded mode and switches to multi-threading mode after this method completes.
         """
         logger.debug(f"SDP initialisation event")
+
+        action = Action()
 
         # Load Digitiser configuration from disk
         # Config file is located in ./config/<profile>/<model>.json
@@ -95,14 +98,11 @@ class SDP(App):
             dig_store = self.sdp_model.dig_store.load_from_disk(input_dir=input_dir, filename=filename)
         except FileNotFoundError:
             dig_store = None
+            logger.warning(f"Science Data Processor could not load Digitiser configuration from directory {input_dir} file {filename}. File not found.")
 
-        if dig_store is not None:
-            self.sdp_model.dig_store = dig_store
-            logger.info(f"Science Data Processor loaded Digitiser configuration from directory {input_dir} file {filename}")
-        else:
-            logger.warning(f"Science Data Processor could not load Digitiser configuration from directory {input_dir} file {filename}")
+        self.sdp_model.dig_store = dig_store if dig_store is not None else DigitiserList()
+        logger.info(f"Science Data Processor loaded {len(self.sdp_model.dig_store.dig_list)} digitiser configurations from directory {input_dir} file {filename}")
 
-        action = Action()
         return action
 
     def _get_dig_lock(self, dig_id: str) -> threading.RLock:
@@ -242,7 +242,8 @@ class SDP(App):
                         channels=channels,
                         center_freq=center_freq,
                         gain=gain,
-                        load=load)
+                        load=load,
+                        status=ScanState.EMPTY)
 
                     scan = Scan(scan_model=scan_model)
                     self.scan_q.put(scan)
@@ -431,8 +432,111 @@ class SDP(App):
 
         return True
 
+    def set_scan_config(self, value: dict) -> bool:
+        """ Sets the scan configuration for a digitiser.
+            This is needed to prepare the correct load (baseline) scan before samples for a sky scan start arriving.      
+            params:     value is a dictionary with keys dig_id, center_freq, sample_rate, bandwidth, gain, duration, 
+                        load, channels, obs_id, tgt_idx, freq_scan, scan_iter.
+            returns:    True if the scan config was successfully applied, False otherwise
+        """
+        logger.info(f"Science Data Processor setting scan config with value: {value}")
+
+        dig_id = value.get('dig_id') if value is not None and isinstance(value, dict) else None
+        dig = self.sdp_model.dig_store.get_dig_by_id(dig_id) if dig_id is not None else None
+
+        obs_id = value.get('obs_id') if value is not None and isinstance(value, dict) else None
+        tgt_idx = value.get('tgt_idx') if value is not None and isinstance(value, dict) else None
+        freq_scan = value.get('freq_scan') if value is not None and isinstance(value, dict) else None
+
+        if dig is None or obs_id is None or tgt_idx is None:
+            logger.error(f"Science Data Processor could not set scan config for digitiser {'None' if dig_id is None else dig_id}\n{value}")
+            return False
+
+        # Loop through the key value pairs in value dict
+        for key, val in value.items():
+            if key in ['dig_id', 'obs_id', 'tgt_idx', 'freq_scan', 'scan_iter']:
+                continue  # skip these keys as they are part of the observation, not the digitiser
+
+            if hasattr(dig, key):
+                setattr(dig, key, val)
+                logger.info(f"Science Data Processor set digitiser {dig_id} attribute {key} to {val}")
+            else:
+                logger.warning(f"Science Data Processor received unknown scan config key {key} for digitiser {dig_id} in value: {value}")
+
+        load_found = False
+
+        # Check if we already have an equivalent load scan in the load queue for this digitiser
+        load_scans = [s for s in list(self.load_q.queue) if s.get_dig_id() == dig_id]
+        purge = True if len(load_scans) > 5 else False  # Purge load scans from the load queue if there are more than 5 in the queue
+
+        for load in load_scans:
+
+            if load.scan_model.center_freq == dig.center_freq and load.scan_model.sample_rate == dig.sample_rate and \
+               load.scan_model.channels == dig.channels and load.scan_model.duration == dig.scan_duration and load.scan_model.gain == dig.gain:
+                load_found = True
+                logger.info(f"Science Data Processor found equivalent load scan in load queue for digitiser {dig_id} and observation {obs_id}:\n{load}")
+                break  # we already have an equivalent load scan in the load queue, so we can keep it and skip preparing a new one
+            else:
+                if purge:
+                    self.load_q.queue.remove(load)  # remove non-equivalent load scans from the load queue to prevent build up of stale load scans
+                    self.load_q.task_done()
+                    logger.info(f"Science Data Processor purged non-equivalent load scan from load queue for digitiser {dig_id} and observation {obs_id}:\n{load}")
+
+        if not load_found:
+            # Check whether a previous load scan is available in the sample store that matches the digitiser's scan parameters
+            scan_store_dir = os.path.expanduser(self.get_args().scan_store_dir)
+
+            file_prefix = util.gen_file_prefix(
+                dt=None,
+                entity_id=dig_id,
+                gain=dig.gain,
+                duration=dig.scan_duration,
+                sample_rate=dig.sample_rate,
+                center_freq=dig.center_freq,
+                channels=dig.channels)
+
+            load_files = [f for f in os.listdir(scan_store_dir) if file_prefix in f and f.endswith('load.csv')]
+            logger.info(f"Science Data Processor found {len(load_files)} load scan files in sample store matching prefix {file_prefix} for digitiser {dig_id} and observation {obs_id}")
+            load_files = sorted(load_files, key=lambda f: os.path.getctime(os.path.join(scan_store_dir, f)), reverse=True) if len(load_files) > 0 else []
+            load_file = load_files[0].removesuffix('load.csv') if len(load_files) > 0 else None
+
+            if load_file is not None:
+                load_scan = Scan.from_disk(file_prefix=load_file, input_dir=scan_store_dir, include_iq=False)
+                
+                if load_scan is not None and load_scan.is_load_scan():
+                    load_found = True
+                    self.load_q.put(load_scan)
+                    logger.info(f"Science Data Processor found equivalent load scan in {self.get_args().scan_store_dir} for digitiser {dig_id} and observation {obs_id}:\n{load_scan}")
+
+        if not load_found:
+            # Create a default load scan model based on the digitiser metadata and the observation parameters 
+            # This load scan will default to a baseline of ones so will not affect the sky scan when applied
+            load_model = ScanModel(
+                dig_id=dig.dig_id,
+                obs_id=obs_id,             
+                tgt_idx=tgt_idx,                
+                freq_scan=freq_scan,
+                start_idx=0,                    # default load scans start at index 0
+                duration=dig.scan_duration,
+                sample_rate=dig.sample_rate,
+                channels=dig.channels,
+                center_freq=dig.center_freq,
+                gain=dig.gain,
+                load=True,
+                status=ScanState.COMPLETE)
+
+            load_scan = Scan(scan_model=load_model)
+            Scan.reset_scan_iter_counter(obs_id, tgt_idx, freq_scan)  # reset the scan iteration counter for this observation, target, and frequency scan so that the load scan is applied to the correct sky scan iteration
+            self.load_q.put(load_scan)
+            load_found = True
+            logger.info(f"Science Data Processor created default load scan for digitiser {dig_id} and observation {obs_id}:\n{load_scan}")
+
+        return load_found
+
     def set_obs_reset(self, value: str) -> bool:
         """ Handles observation reset notification from Telescope Manager.
+            params:     value is the observation ID (obs_id) of the observation that is being reset.
+            returns:    True if the observation reset was successfully processed, False otherwise
         """
         logger.info(f"Science Data Processor received observation reset notification with value: {value}")
 
@@ -449,9 +553,19 @@ class SDP(App):
 
     def set_obs_complete(self, value: str) -> bool:
         """ Handles observation complete notification from Telescope Manager.
+            params:     value is the observation ID (obs_id) of the observation that is complete.
+            returns:    True if the observation complete notification was successfully processed, False otherwise
         """
         logger.info(f"Science Data Processor received observation complete notification with value: {value}")
-        # Do nothing for now, allows the scan iter counter to roll-over naturally
+
+        # Flush the load queue for the relevant digitiser and observation
+        obs_id = value if value is not None and isinstance(value, str) else None
+        load_scans = [s for s in list(self.load_q.queue) if s.get_obs_id() == obs_id]
+        for load in load_scans:
+            self.load_q.queue.remove(load)
+            self.load_q.task_done()
+            logger.info(f"Science Data Processor removed load scan from load queue for completed observation {obs_id}:\n{load}")
+
         return True
 
     def handle_field_get(self, api_call):
@@ -584,30 +698,47 @@ class SDP(App):
         scan.del_iq()
 
         self.sdp_model.scans_aborted += 1
-
-        # Remove this specific scan from the underlying queue 
-        try:
-            self.scan_q.queue.remove(scan)
-            # Balance the unfinished task count for the removed item
-            self.scan_q.task_done()
-        except ValueError:
-            logger.warning(f"Science Data Processor while aborting attempted to remove scan {scan} from queue but it was not found")
+        self._remove_from_queue(scan=scan, queue=self.scan_q)  # Remove the aborted scan from the scan processing queue
 
     def _complete_scan(self, scan: Scan):
         """ Completes a scan and performs necessary cleanup.
         """
-        scan.save_to_disk(output_dir=self.get_args().output_dir, include_iq=False)
+        scan.save_to_disk(output_dir=self.get_args().scan_store_dir, include_iq=False)
         scan.del_iq()
 
         self.sdp_model.scans_completed += 1
+        self._remove_from_queue(scan=scan, queue=self.scan_q) # Remove the completed scan from the scan processing queue
 
-        # Remove this specific scan from the underlying queue 
+        if scan.is_load_scan():
+            self._merge_into_queue(scan, self.load_q) # Add load scan to the load queue and replace equivalent items (not needed anymore)
+
+        return
+
+    def _merge_into_queue(self, scan: Scan, queue: Queue = None):
+        """ Adds a scan t o the specified queue, replacing any equivalent scans that are already in the queue.
+            :params scan: the scan to add to the queue
+            :params queue: the queue to add the scan to, defaults to the load (baseline) queue if not specified
+        """
+        queue = queue if queue is not None else self.load_q
+        queue.put(scan)  # Add this scan to the queue
+        
+        equivalent_items = [s for s in list(queue.queue) if s != scan and s.equivalent(scan)]
+
+        for item in equivalent_items:  
+            logger.info(f"Science Data Processor removing equivalent scan {item} from queue for digitiser {item.get_dig_id()} with same parameters as {scan}")
+            self._remove_from_queue(item, queue=queue)
+
+    def _remove_from_queue(self, scan: Scan, queue: Queue = None):
+        """ Removes a scan from the queue without marking it as aborted or completed.
+            Used for cleanup of pending scans on startup or observation reset.
+        """
+        queue = queue if queue is not None else self.scan_q
+
         try:
-            self.scan_q.queue.remove(scan)
-            # Balance the unfinished task count for the removed item
-            self.scan_q.task_done()
+            queue.queue.remove(scan) # Remove this scan from the underlying queue
+            queue.task_done() # Balance the unfinished task count for the removed item
         except ValueError:
-            logger.warning(f"Science Data Processor while completing attempted to remove scan {scan} from queue but it was not found")
+            logger.warning(f"Science Data Processor could not find scan while attempting to remove scan {scan} from queue. It may have already been removed.")
 
 def main():
     sdp = SDP()
@@ -615,7 +746,7 @@ def main():
 
     try:
         while True:
-
+          
             # If there are no scans to process, sleep and continue
             if sdp.scan_q.qsize() == 0:
                 time.sleep(0.1)
@@ -637,7 +768,7 @@ def main():
                 # DEBUG CODE TO DISABLE SIGNAL DISPLAY FOR FIRST SCAN ITERATION
                 #if scan.scan_model.scan_iter == 1:
                 #    sdp.set_signal_display({'dig_id': 'dig001', 'active': False})
-                # NOTE: There is something wrong with this code. It causes the signal display to hang shortly after this call.abs
+                # NOTE: There is something wrong with this code. It causes the signal display to hang shortly after this call.
                 # The signal display attempts to close the figure from within the main loop (below) on the next call to display or set_scan.
                 # END DEBUG CODE
 
@@ -646,7 +777,7 @@ def main():
                     logger.info(f"Science Data Processor creating new SignalDisplay for digitiser {dig_id} because none exists")
                     sdp.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
                 elif sdp.signal_displays[dig_id] is None:
-                    logger.info(f"Science Data Processor creating new SignalDisplay for digitiser {dig_id} because existing is None")
+                    logger.info(f"Science Data Processor creating new SignalDisplay for digitiser {dig_id} because existing display is None")
                     sdp.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
 
                 # If the signal display is not active, continue to next scan
@@ -654,6 +785,8 @@ def main():
                     continue  
 
                 sig_display_scan = sdp.signal_displays[dig_id].get_scan()
+
+                logger.info(f"Science Data Processor processing signal display scan:\n{scan}\n")
                 
                 # If the signal display is not set to the current scan
                 if sig_display_scan != scan:
@@ -661,10 +794,18 @@ def main():
                     # If the previously displayed scan completed, display and save its figure for posterities sake
                     if sig_display_scan and sig_display_scan.get_status() == ScanState.COMPLETE:
                         sdp.signal_displays[dig_id].display()
-                        sdp.signal_displays[dig_id].save_scan_figure(output_dir=sdp.get_args().output_dir)
+                        sdp.signal_displays[dig_id].save_scan_figure(output_dir=sdp.get_args().scan_store_dir)
 
+                    # Find the euqivalent load scan for this scan if it exists in the load queue
+                    load_scans = [s for s in list(sdp.load_q.queue) if s.equivalent(scan) and s.is_load_scan() == True]
+
+                    logger.info(f"Science Data Processor found {len(load_scans)} equivalent load scans in load queue for digitiser {dig_id} and observation {scan.get_obs_id()} to apply to signal display")
+
+                    for load in load_scans:
+                        logger.info(f"Science Data Processor found equivalent load scan in load queue for digitiser {dig_id} and observation {load.get_obs_id()} to apply to signal display:\n{load}")
+  
                     # Set the signal display to the current scan
-                    sdp.signal_displays[dig_id].set_scan(scan)
+                    sdp.signal_displays[dig_id].set_scan(scan=scan, load=load_scans[0] if len(load_scans) > 0 else None)
                 
                 # Update the signal display
                 sdp.signal_displays[dig_id].display()

@@ -40,6 +40,7 @@ class SignalDisplay:
         self.dig_id = dig_id    # Current digitiser signal being displayed
         
         self.scan = None        # Current digitiser scan being displayed
+        self.load = None         # Current digitiser scan baseline being applied
         self.sec = None         # Current scan second being displayed
 
         self.fig = None         # Figure for the digitiser signal display
@@ -125,7 +126,7 @@ class SignalDisplay:
         """ Set whether this signal display instance is active """
         self.is_active = active
     
-    def set_scan(self, scan : Scan):
+    def set_scan(self, scan : Scan, load: Scan):
         """ # Initialize the figure and axes of the signal displays for a given scan
             :param scan: The Scan object containing the data to display
         """
@@ -134,15 +135,16 @@ class SignalDisplay:
             self._close_figure() # Close the figure if it exists
             return
 
-        if scan is None:
-            logger.warning(f"Signal display for {self.dig_id} cannot set_scan when scan is None")
+        if scan is None or load is None:
+            logger.warning(f"Signal display for {self.dig_id} cannot set_scan when {'scan' if scan is None else 'baseline'} is None")
             return
 
-        if not scan.scan_model.dig_id == self.dig_id:
-            logger.warning(f"Signal display for {self.dig_id} cannot set_scan for scan with different dig_id {scan.scan_model.dig_id}")
-            return
-        
+        if not scan.scan_model.dig_id == self.dig_id or not load.scan_model.dig_id == self.dig_id:
+            logger.warning(f"Signal display for {self.dig_id} cannot set_scan for scan or baseline from different dig_id {scan.scan_model.dig_id}")
+            return         
+
         self.scan = scan
+        self.load = load
         self.sec = None
 
         # If the figure doesn't exist 
@@ -206,7 +208,7 @@ class SignalDisplay:
         if self.sec is None:
 
             self.sig[2].cla()
-            self.pwr_im = self.sig[2].imshow(self.scan.spr / self.scan.bsl, aspect='auto', extent=self.extent)
+            self.pwr_im = self.sig[2].imshow(self.scan.spr / self.load.mpr, aspect='auto', extent=self.extent)
             self.sig[4].plot([1], [np.sum(self.scan.spr[0, :])], color='red', label='Total Power')  # Plot total power across all channels for the first second
             self.sec = 0
 
@@ -219,9 +221,9 @@ class SignalDisplay:
 
             # Update the existing power spectrum image with new data
             if self.pwr_im is not None:
-                self.pwr_im.set_data(self.scan.spr / self.scan.bsl)
+                self.pwr_im.set_data(self.scan.spr / self.load.mpr)
             else:
-                self.pwr_im = self.sig[2].imshow(self.scan.spr / self.scan.bsl, aspect='auto', extent=self.extent)
+                self.pwr_im = self.sig[2].imshow(self.scan.spr / self.load.mpr, aspect='auto', extent=self.extent)
 
         # Plot total power across all channels for each second up to the current second
         self.sig[4].plot(
@@ -244,7 +246,7 @@ class SignalDisplay:
 
         self.sig[0].plot(
             np.linspace(self.extent[0], self.extent[1], self.scan.scan_model.channels), 
-            self.scan.bsl, 
+            self.load.mpr, 
             color='black', 
             label=label
         )
@@ -252,7 +254,7 @@ class SignalDisplay:
 
         self.sig[1].plot(
             np.linspace(self.extent[0], self.extent[1], self.scan.scan_model.channels), 
-            self.scan.spr.flatten()[(l_sec-1)*self.scan.scan_model.channels:(l_sec)*self.scan.scan_model.channels] / self.scan.bsl, 
+            self.scan.spr.flatten()[(l_sec-1)*self.scan.scan_model.channels:(l_sec)*self.scan.scan_model.channels] / self.load.mpr, 
             color='orange', 
             label='Signal (SPR/BSL)'
         )
