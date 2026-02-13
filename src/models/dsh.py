@@ -30,14 +30,14 @@ class PointingState(enum.IntEnum):
     UNKNOWN = 4
 
 class DishMode(enum.IntEnum):
-    STARTUP = 0             # Transitional: Reported when power is restored to the dish, perform initial checks and generally transition to STANDBY
+    STARTUP = 0             # Transitional: Reported when power is restored to the dish, perform initial checks and generally auto-transition to STANDBY
     SHUTDOWN = 1            # Non-transitional: To ensure dish is safe before power loss (for a planned outage or UPS trigger), power on should set to STARTUP
     STANDBY_LP = 2          # Non-transitional: Dish is paritally powered e.g. running on a UPS, generally transition to SHUTDOWN or STANDBY_FP from here
     STANDBY_FP = 3          # Non-transitional: Dish is fully powered and can prepare for an observation, generally transition to CONFIG from here
     MAINTENANCE = 4         # Non-transitional: Stow the dish to make it safe for maintenance activities, remain in maintenance until explicitly changed to another mode
     STOW = 5                # Non-transitional: Stow the dish to a safe position, generally transition to STANDBY after stowing
-    CONFIG = 6              # Transitional: Configure the dish before observations e.g. switching a feed, generally transition to OPERATE (by TM)
-    OPERATE = 7             # Transitional: Actively observe targets as directed by TM, generally transition to STANDBY after observations
+    CONFIG = 6              # Transitional: Configure the dish before observations e.g. switching a feed, generally auto-transition to OPERATE (by TM)
+    OPERATE = 7             # Transitional: Actively observe targets as directed by TM, generally auto-transition to STANDBY after observations
     UNKNOWN = 8
 
 class Capability(enum.IntEnum):
@@ -64,6 +64,35 @@ class DriverType(enum.IntEnum):
     INDI = 6            # INDI Standard Driver  
     UNKNOWN = 7
 
+class PECModel(BaseModel):
+    """A class representing the periodic error correction (PEC) model for a dish target."""
+
+    schema = Schema({
+        "_type": And(str, lambda v: v == "PECModel"),
+        "tgt_id": Or(None, And(str, lambda v: isinstance(v, str))),   # Target identifier in the form {obs_id}_{obs.tgt_idx}
+        "alt_rms": And(Or(int, float), lambda v: v >= 0.0),           # RMS periodic error correction in altitude (arcseconds)
+        "az_rms": And(Or(int, float), lambda v: v >= 0.0),            # RMS periodic error correction in azimuth (arcseconds)
+        "last_update": And(datetime, lambda v: isinstance(v, datetime)),
+    })
+
+    def __init__(self, **kwargs):
+
+        # Default values
+        defaults = {
+            "_type": "PECModel",
+            "tgt_id": None,
+            "alt_rms": 0.0,
+            "az_rms": 0.0,
+            "last_update": datetime.now(timezone.utc),
+        }
+
+        # Apply defaults if not provided in kwargs
+        for key, value in defaults.items():
+            if key not in kwargs:
+                kwargs.setdefault(key, value)
+
+        super().__init__(**kwargs)
+
 class DishModel(BaseModel):
     """A class representing the dish model."""
 
@@ -80,10 +109,11 @@ class DishModel(BaseModel):
         "dig_id": Or(None, And(str, lambda v: isinstance(v, str))),                               # Current digitiser id assigned to the dish
         "mode": And(DishMode, lambda v: isinstance(v, DishMode)),
         "pointing_state": And(PointingState, lambda v: isinstance(v, PointingState)),
-        "tgt_id": Or(None, And(str, lambda v: isinstance(v, str))),                               # Current target id assigned to the dish in the form {obs_id}_{obs.tgt_idx}
-        "target": Or(None, lambda v: v is None or isinstance(v, BaseModel)),                      # Current target model assigned to the dish
         "desired_altaz": Or(None, dict, lambda v: v is None or isinstance(v, (dict, SkyCoord))),  # Desired alt-az position of dish
         "pointing_altaz": Or(None, dict, lambda v: v is None or isinstance(v, (dict, SkyCoord))), # Current alt-az pointing direction of dish
+        "target": Or(None, lambda v: v is None or isinstance(v, BaseModel)),                      # Current target model assigned to the dish
+        "tgt_id": Or(None, And(str, lambda v: isinstance(v, str))),                               # Current target id assigned to the dish in the form {obs_id}_{obs.tgt_idx}
+        "tgt_pec": And(list, lambda v: isinstance(v, list)),                                      # Current periodic error correction (PEC) list of PECModel instances 
         "capability": And(Capability, lambda v: isinstance(v, Capability)),
         "driver_type": And(DriverType, lambda v: isinstance(v, DriverType)),                      # Dish driver type e.g. "ASCOM", "INDI", "MD-01", "MD-02"
         "driver_config": Or(None, lambda v: v is None or isinstance(v, BaseModel)),               # Dish driver configuration instance e.g. MD01Config
@@ -139,10 +169,11 @@ class DishModel(BaseModel):
             "dig_id": None,
             "mode": DishMode.UNKNOWN,
             "pointing_state": PointingState.UNKNOWN,
-            "tgt_id": None,
-            "target": None,
             "desired_altaz": None,
             "pointing_altaz": None,
+            "target": None,
+            "tgt_id": None,
+            "tgt_pec": [],
             "capability": Capability.UNKNOWN,
             "driver_type": DriverType.UNKNOWN,
             "driver_config": None,                          # Initialize with None, will be set based on driver_type
@@ -171,6 +202,16 @@ class DishModel(BaseModel):
         """
         self.driver_failures = 0
         self.last_update = datetime.now(timezone.utc)
+
+    def get_pec_by_tgt_id(self, tgt_id: str) -> PECModel:
+        """ Retrieve a PECModel from the tgt_pec list by its tgt_id.
+        Args: tgt_id (str): The identifier of the target to retrieve.
+        Returns: PECModel: The PECModel with the specified tgt_id. Returns None if not found.
+        """
+        for pec in self.tgt_pec:
+            if pec.tgt_id == tgt_id:
+                return pec
+        return None
 
 class DishList(BaseModel):
     """A class representing a list of dishes."""

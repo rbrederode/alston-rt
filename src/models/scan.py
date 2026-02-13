@@ -3,12 +3,15 @@
 import enum
 import time
 from datetime import datetime, timezone
+import logging
 from schema import Schema, And, Or, Use, SchemaError
 
 from models.base import BaseModel
 from models.comms import CommunicationStatus
 from models.dsh import Feed
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
+
+logger = logging.getLogger(__name__)
 
 class ScanState(enum.IntEnum):
     EMPTY = 0       # Scan has been created but no data loaded
@@ -55,6 +58,7 @@ class ScanModel(BaseModel):
         "tgt_idx": -1,
         "freq_scan": -1,
         "scan_iter": -1,
+        "dig_id": None,
         "created": datetime.now(timezone.utc),
         "read_start": None,
         "read_end": None,
@@ -109,6 +113,24 @@ class ScanModel(BaseModel):
                         updated = True
 
         self.last_update = datetime.now(timezone.utc) if updated else self.last_update
+
+    def equivalent(self, other) -> bool:
+        """Check if this scan is equivalent to another scan.
+            Equivalence is defined as covering the same scan parameters on the same digitiser.
+        """
+        if not isinstance(other, ScanModel):
+            return False
+
+        equivalent = str(self.dig_id) == str(other.dig_id) and \
+                     float(self.center_freq) == float(other.center_freq) and \
+                     float(self.sample_rate) == float(other.sample_rate) and \
+                     int(self.channels) == int(other.channels) and \
+                     int(self.duration) == int(other.duration) and \
+                     float(self.gain) == float(other.gain)
+
+        logger.info(f"Scan equivalence is {equivalent} between:\n{self}\nand\n{other}\n")
+
+        return equivalent
 
     def __eq__(self, other):
         if not isinstance(other, ScanModel):

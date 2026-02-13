@@ -188,9 +188,9 @@ def get_app_reliability(log_dir: str, app_name: str, start_period: datetime, end
     events = _parse_logs(logs, app_name, heartbeat_timeout_sec, end_period)
     intervals = _build_state_intervals(events, start_period, end_period)
 
-   # Only "OK" is UP, everything else is DOWN
-    up_durations = [duration for state, duration in intervals if state == "OK"]
-    down_durations = [duration for state, duration in intervals if state != "OK"]
+   # Only "OK" and "DEGRADED" are UP, everything else is DOWN
+    up_durations = [duration for state, duration in intervals if state in ["OK", "DEGRADED"]]
+    down_durations = [duration for state, duration in intervals if state not in ["OK", "DEGRADED"]]
 
     mtbf = sum(up_durations) / len(up_durations) if up_durations else 0.0
     mttr = sum(down_durations) / len(down_durations) if down_durations else 0.0

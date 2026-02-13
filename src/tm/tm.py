@@ -473,6 +473,22 @@ class TelescopeManager(App):
             if api_call.get('property','') == tm_sdp.PROPERTY_STATUS:
                 self.telmodel.sdp = ScienceDataProcessorModel.from_dict(api_call['value'])
 
+            elif api_call.get('property','') == tm_sdp.PROPERTY_SCAN_CONFIG:
+                logger.info(f"Telescope Manager received Science Data Processor SCAN_CONFIG update: {api_call['value']}")
+
+                dig_config = api_call['value']
+
+                # Copy key value pairs from scan config rsp msg into SDP model digitiser store configuration for the related digitiser
+                dig_id = dig_config.get('dig_id', None) if dig_config is not None and isinstance(dig_config, dict) else None
+                dig_model = self.telmodel.sdp.dig_store.get_dig_by_id(dig_id) if dig_id is not None else None
+
+                if dig_model is not None:
+                    for key in dig_config.keys():
+                        if key in dig_model.schema.schema.keys():
+                            setattr(dig_model, key, dig_config[key])
+                else:
+                    logger.warning(f"Telescope Manager received Science Data Processor SCAN_CONFIG rsp for unknown digitiser {dig_id}\n{api_call}")
+
             elif api_call.get('property','') == tm_sdp.PROPERTY_OBS_RESET:
                 logger.info(f"Telescope Manager received Science Data Processor OBS_RESET response: {api_call['value']}")
 
@@ -530,7 +546,7 @@ class TelescopeManager(App):
                     logger.error(self.set_last_err(f"Telescope Manager error setting attribute {api_call.get('property','')} on Science Data Processor: {e}"))
                     return action
             else:
-                logger.warning(f"Telescope Manager received unknown Science Data Processor property update: {api_call['property']}")
+                logger.warning(f"Telescope Manager received unknown Science Data Processor property update:\n{api_call}")
                 return action
 
         # Update Telescope Model timestamps based on received Science Data Processor api_call
@@ -829,7 +845,7 @@ class TelescopeManager(App):
         """
         status = self.get_app_processor_state()
 
-        scan_store_dir = self.telmodel.sdp.app.arguments.get('output_dir','~/') if self.telmodel.sdp.app.arguments is not None else '~/'
+        scan_store_dir = self.telmodel.sdp.app.arguments.get('scan_store_dir','~/') if self.telmodel.sdp.app.arguments is not None else '~/'
         scan_store_dir = os.path.expanduser(scan_store_dir)
 
         if Path(scan_store_dir).exists():
@@ -1007,7 +1023,14 @@ class TelescopeManager(App):
             if obs.obs_state in [ObsState.CONFIGURING, ObsState.READY, ObsState.SCANNING]:
 
                 if obs.dsh_id in ids or (dig_id is None and dsh_id is None):
-                    logger.info(f"Telescope Manager aborting observation {obs.obs_id} due to shutdown")
+                    
+                    dish = self.telmodel.dsh_mgr.get_dish_by_id(obs.dsh_id)
+                    dig_id = dish.dig_id if dish is not None else None
+
+                    logger.info(f"Telescope Manager aborting observation {obs.obs_id}.\nConnection status:\n" + \
+                        f"- Dish Manager {obs.dsh_id}: {self.telmodel.dsh_mgr.tm_connected.name}\n" + \
+                        f"- Digitiser {dig_id}: {self.telmodel.dig_store.get_dig_by_id(dig_id).tm_connected.name if dig_id is not None else 'N/A'}\n" + \
+                        f"- Science Data Processor: {self.telmodel.sdp.tm_connected.name}")
                     action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
 
         return action

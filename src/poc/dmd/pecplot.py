@@ -164,6 +164,8 @@ class PECPlot:
         # Clear previous plot
         self.ax.cla()
 
+        # [:, 0] : selects all rows, and 0 selects column 0 (the timestamp column)
+        # pec_hist_copy[:, 0] > 0 — creates a boolean mask array (True/False for each row) based on whether column 0 (timestamp) is greater than zero.
         dates = [datetime.datetime.fromtimestamp(ts) for ts in pec_hist_copy[:, 0] if ts > 0]
         alt_pec = pec_hist_copy[pec_hist_copy[:, 0] > 0, 1]
         az_pec = pec_hist_copy[pec_hist_copy[:, 0] > 0, 2]

@@ -18,15 +18,21 @@ class Scan:
     _scan_iter_counter = {}
 
     @staticmethod
-    def reset_scan_iter_counter(obs_id: str):
+    def reset_scan_iter_counter(obs_id: str, tgt_idx: int = None, freq_scan: int = None):
         """ Reset the scan iteration counter that is used to assign unique scan_iter values to scans with the same (obs_id, tgt_idx, freq_scan).
             This is needed when a digitiser restarted (scan_iter starts at 0 again) AND the observation id remains the same (it was reset).
+
+            Matching behaviour:
+                - All three provided: match on (obs_id, tgt_idx, freq_scan)
+                - freq_scan is None:  match on (obs_id, tgt_idx)
+                - tgt_idx and freq_scan are None: match on obs_id only
         """
-        if obs_id is None or obs_id == '':
-            return
 
         with Scan._id_lock:
-            keys_to_remove = [key for key in Scan._scan_iter_counter if key[0] == obs_id]
+            keys_to_remove = [key for key in Scan._scan_iter_counter
+                              if key[0] == obs_id
+                              and (tgt_idx is None or key[1] == tgt_idx)
+                              and (freq_scan is None or key[2] == freq_scan)]
             for key in keys_to_remove:
                 del Scan._scan_iter_counter[key]
 
@@ -47,18 +53,20 @@ class Scan:
 
         # Compose a key from obs_id, tgt_idx, freq_scan
         # Obs_id is unique per observation and per dish (and hence digitiser)
-        key = (scan_model.obs_id, scan_model.tgt_idx, scan_model.freq_scan)
+        key = (scan_model.obs_id, scan_model.tgt_idx, scan_model.freq_scan) if scan_model.status != ScanState.COMPLETE else None
 
-        with Scan._id_lock:
-           # If the key is new or changed, start at 0
-            if key not in Scan._scan_iter_counter:
-                scan_iter = 0
-            else:
-                scan_iter = Scan._scan_iter_counter[key] + 1
+        if key is not None:
 
-             # Set the scan_iter in the model and update the counter
-            scan_model.scan_iter = scan_iter
-            Scan._scan_iter_counter[key] = scan_iter
+            with Scan._id_lock:
+            # If the key is new or changed, start at 0, otherwise increment the scan_iter for this key
+                if key not in Scan._scan_iter_counter:
+                    scan_iter = 0
+                else:
+                    scan_iter = Scan._scan_iter_counter[key] + 1
+
+                # Set the scan_iter in the model and update the counter
+                scan_model.scan_iter = scan_iter
+                Scan._scan_iter_counter[key] = scan_iter
 
         self._rlock = threading.RLock()  # Lock for thread-safe access to shared resources
 
@@ -66,7 +74,6 @@ class Scan:
 
             self.scan_model = scan_model
             self.scan_model.created = datetime.now(timezone.utc)     # Timestamp when the scan was created
-            self.scan_model.status = ScanState.EMPTY                 # Status of the scan: EMPTY, WIP, COMPLETE
 
             self.loaded_secs = self.scan_model.duration * [False]    # List of seconds for which samples have been loaded
             self.prev_read_end = None                                # Timestamp of the previous read end
@@ -75,7 +82,7 @@ class Scan:
             self.raw = None  # Raw IQ samples for the duration of the scan
             self.pwr = None  # Power spectrum for the duration of the scan
             self.spr = None  # Summed power spectrum for each second in the duration of the scan
-            self.bsl = None  # Baseline power spectrum over duration of the scan
+            self.mpr = None  # Mean power spectrum over duration of the scan
 
             self.mean_real = 0.0  # Mean of real value of the raw samples (I)
             self.mean_imag = 0.0  # Mean of imaginary value of the raw samples (Q)
@@ -89,6 +96,21 @@ class Scan:
         total_time = (self.scan_model.read_end - self.scan_model.read_start).total_seconds() if self.scan_model.read_start is not None and self.scan_model.read_end is not None else None
 
         return f"Scan(id={self.scan_model.scan_id}, created={created}, scan model {self.scan_model}, total_time={total_time})\n"
+
+    def __eq__(self, other):
+        if not isinstance(other, Scan):
+            return False
+
+        return self.scan_model.scan_id == other.scan_model.scan_id
+
+    def equivalent(self, other):
+        """ Check if this scan is equivalent to another scan (i.e. they have the same scan parameters).
+            This is used to identify scans that are essentially the same and should be replaced in the processing queue when a new scan with the same parameters arrives.
+        """
+        if not isinstance(other, Scan):
+            return False
+
+        return self.scan_model.equivalent(other.scan_model)
     
     def get_start_end_idx(self) -> (int, int):
         """ Get the starting and ending index of the digitiser read counter for this scan.
@@ -100,7 +122,7 @@ class Scan:
 
     def init_data_arrays(self):
         """
-        Initialize data arrays for raw samples, power spectrum, summed power & baseline
+        Initialize data arrays for raw samples, power spectrum, summed power & mean power spectrum based on the scan parameters.
         The data arrays are flushed every time a new scan is started.
             :param sample_rate: Sample rate in Hz
             :param duration: Duration of the scan in seconds
@@ -114,7 +136,7 @@ class Scan:
             self.raw = np.zeros((num_rows, self.scan_model.channels), dtype=np.complex64)   # complex64 for raw IQ samples i.e. 8 bytes per sample (4 bytes for real and 4 bytes for imaginary parts)
             self.pwr = np.zeros((num_rows, self.scan_model.channels), dtype=np.float64)     # float64 for power spectrum data
             self.spr = np.zeros((self.scan_model.duration, self.scan_model.channels), dtype=np.float64)     # float64 for summed pwr for each second in duration
-            self.bsl = np.ones((self.scan_model.channels,), dtype=np.float64)               # float64 for baseline power spectrum over duration
+            self.mpr = np.ones((self.scan_model.channels,), dtype=np.float64)               # float64 for mean power spectrum over duration for each channel (fft bin)
 
     def get_dig_id(self) -> str:
         """
@@ -145,6 +167,13 @@ class Scan:
         """
         with self._rlock:
             self.scan_model.status = status
+
+    def is_load_scan(self) -> bool:
+        """
+        Check if this scan is a load scan (i.e. load flag is True in the scan model).
+            :returns: True if this is a load scan, False otherwise
+        """
+        return self.scan_model.load
 
     def get_loaded_seconds(self) -> int:
         """
@@ -226,6 +255,8 @@ class Scan:
             self.set_status(ScanState.WIP)
         elif actual_rows >= expected_rows:
             self.set_status(ScanState.COMPLETE)
+            # Populate mean power spectrum (mpr) with the mean of the summed power spectrum (spr) across the duration for each channel
+            self.mpr = np.mean(self.spr, axis=0)
 
         return True
 
@@ -276,94 +307,94 @@ class Scan:
         logger.info(f"Scan {self} - Saved to {output_dir}/{prefix}-*")
         return True
 
-    def load_from_disk(self, read_start: str, input_dir: str, include_iq: bool = False) -> bool:
+    @classmethod
+    def from_disk(cls, file_prefix: str, input_dir: str, include_iq: bool = False) -> 'Scan':
         """
-        Load the IQ sample data of the scan from a file on disk.
-            :param read_start: The start time of the read operation formatted as "YYYYMMDDTHHMMSS"
-            :param input_dir: Directory where the IQ data file is located
+        Static constructor that creates a Scan instance by loading scan data from files on disk.
+            :param file_prefix: The file prefix to match against filenames in the input directory
+            :param input_dir: Directory where the scan data files are located
             :param include_iq: Whether to load the IQ data or not (default is False)
-            :returns: True if the data was loaded successfully, False otherwise
+            :returns: A Scan instance if loaded successfully, None otherwise
         """
 
-        if read_start is None or read_start == '':
-            logger.warning("Scan - read_start parameter is required to load scan from disk.")
-            return False
-
-        try:
-            read_start = datetime.strptime(read_start, "%Y-%m-%dT%H%M%S")
-        except ValueError:
-            logger.warning(f"Scan - Invalid scan start date/time provided while loading scan from disk. Expected 'YYYY-MM-DDTHHMMSS', got {read_start}.")
-            return False
+        if file_prefix is None or file_prefix == '':
+            logger.warning("Scan - file_prefix parameter is required to load scan from disk.")
+            return None
 
         if input_dir is None or input_dir == '':
-            input_dir = "./"
+            input_dir = os.path.expanduser("./")
 
-        logger.info(f"Scan - Looking for scan files in dir {input_dir} matching scan start date/time {read_start.strftime('%Y-%m-%dT%H%M%S')}")
-        read_files = [f for f in os.listdir(input_dir) if read_start.strftime("%Y-%m-%dT%H%M%S") in f and f.endswith('meta.json')]
+        logger.info(f"Scan - Looking for scan files in dir {input_dir} matching file prefix {file_prefix}")
+        read_files = [f for f in os.listdir(input_dir) if file_prefix in f and f.endswith('meta.json')]
 
         if read_files is None or len(read_files) == 0:
-            logger.warning(f"Scan - No scan files found in dir {input_dir} matching scan start date/time {read_start}")
-            return False
+            logger.warning(f"Scan - No meta data ({file_prefix}*meta.json) scan files found in dir {input_dir} matching prefix.")
+            return None
 
-        read_file = sorted(read_files)[-1]  # Identify the most recent file and use that one
+        read_files = sorted(read_files, key=lambda f: os.path.getctime(os.path.join(input_dir, f)), reverse=True)
+        read_file = read_files[0]
+
         logger.info(f"Scan - Reading scan data from {input_dir}/{read_file}")
 
         try:
             with open(f"{input_dir}/{read_file}", 'r') as f:
                 meta = json.load(f)
-                self.scan_model.from_dict(meta)
+                scan_model = ScanModel().from_dict(meta)
 
         except Exception as e:
             logger.error(f"Scan - Failed to read metadata from {input_dir}/{read_file}: {e}")
-            return False
+            return None
 
-        if self.scan_model.status != ScanState.COMPLETE:
-            logger.warning(f"Scan - Loading an incomplete scan from disk: {self}.")
+        if scan_model.status.value != ScanState.COMPLETE:
+            logger.warning(f"Scan - Loading an incomplete scan from disk with status: {scan_model.status.name}.\n{scan_model.to_dict()}")
+
+        # Create the Scan instance (this initialises data arrays via __init__)
+        scan = cls(scan_model)
 
         try:
-            self.init_data_arrays()
-
-            prefix = gen_file_prefix(dt=self.scan_model.read_start, load=self.scan_model.load, gain=self.scan_model.gain, 
-                duration=self.scan_model.duration, sample_rate=self.scan_model.sample_rate, center_freq=self.scan_model.center_freq, 
-                channels=self.scan_model.channels, entity_id=self.scan_model.scan_id)
+            prefix = gen_file_prefix(dt=scan.scan_model.read_start, entity_id=scan.scan_model.dig_id, gain=scan.scan_model.gain, 
+                duration=scan.scan_model.duration, sample_rate=scan.scan_model.sample_rate, center_freq=scan.scan_model.center_freq, 
+                channels=scan.scan_model.channels, instance_id=scan.scan_model.scan_id)
 
             if include_iq:
                 # Load raw IQ samples 
                 filename = prefix + "-raw" + ".iq"
                 with open(f"{input_dir}/{filename}", 'rb') as f:
-                    self.raw = np.fromfile(f, dtype=np.complex64)
-                    self.raw = self.raw.reshape(-1, self.scan_model.channels)
+                    scan.raw = np.fromfile(f, dtype=np.complex64)
+                    scan.raw = scan.raw.reshape(-1, scan.scan_model.channels)
 
-                # Recalculate power spectrum (self.pwr)
-                num_rows = self.raw.shape[0]
+                # Recalculate power spectrum (scan.pwr)
+                num_rows = scan.raw.shape[0]
                 for row in range(num_rows):
-                    self.pwr[row,:] = np.abs(np.fft.fftshift(np.fft.fft(self.raw[row,:])))**2 # The power spectrum is the absolute value of the signal squared
+                    scan.pwr[row,:] = np.abs(np.fft.fftshift(np.fft.fft(scan.raw[row,:])))**2 # The power spectrum is the absolute value of the signal squared
 
-                # Recalculate the summed power spectrum (self.spr)
-                for sec in range(self.scan_model.duration):
-                    row_start = sec * (num_rows // self.scan_model.duration)
-                    row_end = (sec + 1) * (num_rows // self.scan_model.duration) if sec < self.scan_model.duration - 1 else num_rows  # Ensure we cover all rows
+                # Recalculate the summed power spectrum (scan.spr)
+                for sec in range(scan.scan_model.duration):
+                    row_start = sec * (num_rows // scan.scan_model.duration)
+                    row_end = (sec + 1) * (num_rows // scan.scan_model.duration) if sec < scan.scan_model.duration - 1 else num_rows  # Ensure we cover all rows
 
                     # Calculate the sum of the power spectrum for each frequency bin in a given second
-                    self.spr[sec,:] = np.sum(self.pwr[row_start:row_end,:], axis=0)  # Sum the power spectrum in a given sec for each frequency bin (in columns)
-                    remove_dc_spike(self.scan_model.channels, self.spr[sec,:])
+                    scan.spr[sec,:] = np.sum(scan.pwr[row_start:row_end,:], axis=0)  # Sum the power spectrum in a given sec for each frequency bin (in columns)
+                    remove_dc_spike(scan.scan_model.channels, scan.spr[sec,:])
 
-                self.loaded_secs = [True] * self.scan_model.duration
+                scan.loaded_secs = [True] * scan.scan_model.duration
             else:
                 # Load summed power spectrum only
-                filename = prefix + "-load" + ".csv" if self.scan_model.load else prefix + "-spr" + ".csv"
+                filename = prefix + "-load" + ".csv" if scan.scan_model.load else prefix + "-spr" + ".csv"
                 with open(f"{input_dir}/{filename}", 'r') as f:
-                    self.spr = np.loadtxt(f, delimiter=",")
-                    self.spr = self.spr.reshape(-1, self.scan_model.channels)
+                    scan.spr = np.loadtxt(f, delimiter=",")
+                    scan.spr = scan.spr.reshape(-1, scan.scan_model.channels)
 
-                self.scan_model.loaded_secs = [True] * self.spr.shape[0]
+                scan.loaded_secs = [True] * scan.spr.shape[0]
+
+            scan.mpr = np.mean(scan.spr, axis=0)  # Populate mean power spectrum (mpr) with the mean of the summed power spectrum (spr) across the duration for each channel
 
         except Exception as e:
             logger.error(f"Scan - Failed to load data from {input_dir}: {e}")
-            return False
+            return None
 
-        logger.info(f"Scan - Loaded scan from {input_dir} with start date/time {self.scan_model.read_start}: {self}")
-        return True
+        logger.info(f"Scan - Loaded scan from {input_dir} with id: {scan.scan_model.scan_id}\n{scan.scan_model.to_dict()}")
+        return scan
 
     def del_iq(self):
         """ Flush the iq data to the bin """

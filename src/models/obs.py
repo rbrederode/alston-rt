@@ -89,7 +89,7 @@ class Observation(BaseModel):
         "target_configs": And(list, lambda v: isinstance(v, list)),             # List of target configurations (TargetConfig)
         "target_scans": And(list, lambda v: isinstance(v, list)),               # List of target scan sets (TargetScanSet)
 
-        "tgt_idx": And(int, lambda v: isinstance(v, int)),                    # Index of the next target to be observed (0-based)
+        "tgt_idx": And(int, lambda v: isinstance(v, int)),                      # Index of the next target to be observed (0-based)
         "tgt_scan": And(int, lambda v: isinstance(v, int)),                     # Index of the next scan (for the given tgt_idx) to be observed (0-based)
 
         "dsh_id": And(Or(None, str), lambda v: v is None or isinstance(v, str)),# Dish identifier e.g. "dish001"

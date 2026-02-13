@@ -50,15 +50,16 @@ TO = (
 # Allowable properties to get or set on the system
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
 PROPERTY_STATUS         = 'status'           # Get system status
+PROPERTY_SCAN_CONFIG    = 'scan_config'      # Set scan configuration (e.g. center frequency etc.) for a digitiser
 PROPERTY_SCAN_COMPLETE  = 'scan_complete'    # Notify Telescope Manager that a scan has completed
-PROPERTY_OBS_COMPLETE   = 'obs_complete'     # Notify Science Data Processor that an observation has completed
 PROPERTY_OBS_RESET      = 'obs_reset'        # Notify Science Data Processor to reset observation data
+PROPERTY_OBS_COMPLETE   = 'obs_complete'     # Notify Science Data Processor that an observation has completed
 PROPERTY_SIGNAL_DISPLAY = 'signal_display'   # Control the signal display (show/hide) for a digitiser
-
 
 PROPERTIES = (
     PROPERTY_DEBUG,
     PROPERTY_STATUS,
+    PROPERTY_SCAN_CONFIG,
     PROPERTY_SCAN_COMPLETE,
     PROPERTY_OBS_COMPLETE,
     PROPERTY_OBS_RESET,

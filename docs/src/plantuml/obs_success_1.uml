@@ -1,0 +1,42 @@
+@startuml
+mainframe Successful **Observation** Part 1
+actor ODT
+
+== ObsState EMPTY ==
+ODT -> TM: Observation
+TM -> TM: Start Obs Timer
+TM -> OET: Start Observation
+
+== ObsState IDLE ==
+OET -> OET: Determine Scans
+OET -> OET: Assign Resources
+OET -> OET: Configure Resources
+
+== ObsState CONFIGURING ==
+OET -> TM: Dish Config
+OET -> TM: Digitiser Config
+OET -> TM: SDP Config
+
+TM -[#blue]> DM: Set Mode CONFIG
+DM -[#green]> Dish: Set Dish Mode CONFIG
+DM -[#green]> TM: Status SUCCESS
+TM -[#blue]> DM: Set Target
+DM -[#blue]> Dish: Set Target
+DM -[#blue]> Dish: Set Dish Mode OPERATE
+Dish -[#blue]> Driver: Slew
+DM -[#green]> TM: Status SUCCESS
+
+TM -[#blue]> Digitiser: Set Center Freq, Bandwidth, Sample Rate, Gain, Channels, Scan Duration
+Digitiser -[#green]> TM: Status SUCCESS
+
+TM -[#blue]> SDP: Set Center Freq, Bandwidth, Sample Rate, Gain, Channels, Scan Duration, Target Index, Freq Scan
+SDP -> SDP: Prepare Scan Baseline
+SDP -[#green]> TM: Status SUCCESS
+Driver -[#green]> Dish: Ready
+Dish -[#green]> DM: Ready
+DM -> TM: Status UPDATE
+DM -[#blue]> Dish: Track
+note right: Every second
+Dish -[#blue]> Driver: Track
+
+@enduml
