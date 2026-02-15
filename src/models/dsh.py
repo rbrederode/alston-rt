@@ -135,7 +135,7 @@ class DishModel(BaseModel):
             DishMode.STOW:        {DishMode.UNKNOWN, DishMode.STOW, DishMode.STANDBY_LP, DishMode.STANDBY_FP, DishMode.MAINTENANCE, DishMode.SHUTDOWN},
             DishMode.MAINTENANCE: {DishMode.UNKNOWN, DishMode.MAINTENANCE, DishMode.STOW, DishMode.SHUTDOWN},
             DishMode.OPERATE:     {DishMode.UNKNOWN, DishMode.OPERATE, DishMode.STANDBY_FP, DishMode.STANDBY_LP, DishMode.CONFIG, DishMode.STOW, DishMode.SHUTDOWN},
-            DishMode.UNKNOWN:     {DishMode.UNKNOWN, DishMode.STARTUP, DishMode.STOW, DishMode.MAINTENANCE, DishMode.SHUTDOWN},
+            DishMode.UNKNOWN:     {DishMode.UNKNOWN, DishMode.STARTUP, DishMode.STOW, DishMode.MAINTENANCE, DishMode.SHUTDOWN, DishMode.STANDBY_FP},
         },
         "pointing_state": { 
             PointingState.UNKNOWN:  {PointingState.UNKNOWN, PointingState.READY},

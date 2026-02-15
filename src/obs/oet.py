@@ -220,35 +220,35 @@ class ObservationExecutionTool:
 
         if dsh_model is None:
 
-            logger.error(
+            logger.warning(
                 f"Observation Execution Tool could not find Dish {obs.dsh_id} in Dish Manager model. "
                 f"Cannot assign dish for observation {obs.obs_id}. Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
             return False
 
         elif dsh_model.capability not in [Capability.OPERATE_FULL, Capability.OPERATE_DEGRADED]:
-            logger.error(
+            logger.warning(
                 f"Observation Execution Tool found Dish {obs.dsh_id}, but it is not currently operational. Capability {dsh_model.capability.name}. "
                 f"Cannot assign dish for observation {obs.obs_id}. Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
             return False
 
         elif dsh_model.mode not in [DishMode.STANDBY_LP, DishMode.STANDBY_FP, DishMode.OPERATE, DishMode.CONFIG]:
-            logger.error(
+            logger.warning(
                 f"Observation Execution Tool found Dish {obs.dsh_id}, but it is not in an operational mode. Current mode {dsh_model.mode.name}. "
                 f"Cannot assign dish for observation {obs.obs_id}. Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
             return False
 
         if self.telmodel.dsh_mgr.tm_connected != CommunicationStatus.ESTABLISHED:
-            logger.error(
+            logger.warning(
                 f"Observation Execution Tool is not connected to Dish Manager. "
                 f"Cannot assign dish for observation {obs.obs_id}. Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
             return False
 
         elif self.telmodel.dsh_mgr.app.health not in [HealthState.OK, HealthState.DEGRADED]:
-            logger.error(
+            logger.warning(
                 f"Observation Execution Tool found Dish Manager, but it is not currently healthy. Health state {self.telmodel.dsh_mgr.app.health.name}. "
                 f"Cannot assign resources to observation {obs.obs_id}. Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
@@ -258,14 +258,14 @@ class ObservationExecutionTool:
         dig_model = next((dig for dig in self.telmodel.dig_store.dig_list if dig.dig_id == dsh_model.dig_id), None)
 
         if dig_model is None:
-            logger.error(
+            logger.warning(
                 f"Observation Execution Tool found Dish {obs.dsh_id}, but it is not associated with a Digitiser. "
                 f"Cannot assign digitiser to observation {obs.obs_id}. Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
             return False
 
         elif dig_model.app.health not in [HealthState.OK, HealthState.DEGRADED]:
-            logger.error(
+            logger.warning(
                 f"Observation Execution Tool found Digitiser {dig_model.dig_id}, but it is not currently healthy. Health state {dig_model.app.health.name}. "
                 f"Cannot assign digitiser to observation {obs.obs_id}. Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
@@ -273,14 +273,14 @@ class ObservationExecutionTool:
 
         sdp = self.telmodel.sdp
         if self.telmodel.sdp.tm_connected != CommunicationStatus.ESTABLISHED:
-            logger.error(
+            logger.warning(
                 f"Observation Execution Tool is not connected to Science Data Processor. "
                 f"Cannot assign resources to observation {obs.obs_id}. Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
             return False
 
         elif sdp.app.health not in [HealthState.OK, HealthState.DEGRADED]:
-            logger.error(
+            logger.warning(
                 f"Observation Execution Tool found Science Data Processor, but it is not currently healthy. Health state {sdp.app.health.name}. "
                 f"Cannot assign resources to observation {obs.obs_id}. Aborting observation.")
             action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)

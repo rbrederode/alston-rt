@@ -11,6 +11,7 @@ from models.comms import CommunicationStatus
 from models.base import BaseModel
 from models.health import HealthState
 from models.proc import ProcessorModel
+from models.ui import UIDriver, UIDriverType
 from util import log, util
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
 
@@ -192,7 +193,8 @@ class ResourceAllocations(BaseModel):
         # Enforce exclusivity: no other active allocations allowed, however allow re-requesting for the same allocated resource
         active_allocs = [alloc for alloc in existing_allocs if alloc.state == AllocationState.ACTIVE and not (alloc.allocated_id == allocated_id and alloc.allocated_type == allocated_type)]
         if len(active_allocs) > 0:
-            raise XSoftwareFailure(f"Resource Allocation for {resource_type}:{resource_id} cannot be requested as this resource is already actively allocated to another entity")
+            logger.warning(f"Resource Allocation for {resource_type}:{resource_id} cannot be requested as this resource is already actively allocated to another entity")
+            return None
         
         # Return previous allocation when re-requesting the same allocated resource
         previous_alloc = [alloc for alloc in existing_allocs if alloc.state in [AllocationState.REQUESTED, AllocationState.ACTIVE] and (alloc.allocated_id == allocated_id and alloc.allocated_type == allocated_type)]
@@ -255,6 +257,10 @@ class ResourceAllocations(BaseModel):
         Returns True if the resource is granted, False otherwise.
         """
 
+        if resource_req is None:
+            logger.error(f"Resource Allocation request is None for {resource_type} {resource_id}, and cannot be allocated")
+            return False
+
         # Resource is available
         if resource_alloc is None:
             try:
@@ -300,8 +306,8 @@ class TelescopeManagerModel(BaseModel):
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
         "allocations": And(ResourceAllocations, lambda v: isinstance(v, ResourceAllocations)),
         "sdp_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
-        "dig_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "dm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
+        "ui_drivers": Or(None, And(list, lambda v: isinstance(v, list) and all(isinstance(item, UIDriver) for item in v))),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -325,8 +331,8 @@ class TelescopeManagerModel(BaseModel):
             "id": "<undefined>",
             "allocations": ResourceAllocations(),
             "sdp_connected": CommunicationStatus.NOT_ESTABLISHED,
-            "dig_connected": CommunicationStatus.NOT_ESTABLISHED,
             "dm_connected": CommunicationStatus.NOT_ESTABLISHED,
+            "ui_drivers": [],
             "last_update": datetime.now(timezone.utc)
         }
 
@@ -430,7 +436,6 @@ if __name__ == "__main__":
             last_update=datetime.now(timezone.utc)
         ),
         sdp_connected=CommunicationStatus.NOT_ESTABLISHED,
-        dig_connected=CommunicationStatus.NOT_ESTABLISHED,
         dm_connected=CommunicationStatus.NOT_ESTABLISHED,
         last_update=datetime.now(timezone.utc)
     )
@@ -448,3 +453,25 @@ if __name__ == "__main__":
     print("tm002 Model with Defaults Initialized")
     print("="*40)
     pprint.pprint(tm002.to_dict())
+
+    gsheets_driver = UIDriver(
+        driver_type=UIDriverType.GSHEETS,
+        driver_config={
+            "sheet_id": "1234567890",
+            "tm_range": "TM_UI_API++!A2",
+            "dig_range": "TM_UI_API++!D2",
+            "dsh_range": "TM_UI_API++!G2",
+            "sdp_range": "TM_UI_API++!J2",
+            "odt_range": "TM_UI_API++!M2",
+            "oda_range": "TM_UI_API++!P2",
+        },  
+        poll_period=30,
+        last_update=datetime.now(timezone.utc)
+    )
+
+    tm002.ui_drivers = [gsheets_driver]
+    tm002.save_to_disk("./config/test", filename=tm002._type + ".json")
+
+
+
+

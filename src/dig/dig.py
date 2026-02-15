@@ -371,7 +371,7 @@ class Digitiser(App):
                 logger.error(f"Digitiser property setter for {prop_name} with value {prop_value} is not callable")
                 return tm_dig.STATUS_ERROR, f"Digitiser property {prop_name} is not callable", None, None
         
-        except XSoftwareFailure as e:
+        except Exception as e:
             logger.exception(f"Digitiser failed to set property {prop_name} to {prop_value}: {e}")
             return tm_dig.STATUS_ERROR, f"Digitiser failed to set property {prop_name} to {prop_value}: {e}", None, None
 
@@ -413,7 +413,7 @@ class Digitiser(App):
 
         try:  # Call the getter method
             value = getter() if callable(getter) else getter
-        except XSoftwareFailure as e:
+        except Exception as e:
             logger.error(f"Digitiser failed to get property {prop_name}: {e}")
             return tm_dig.STATUS_ERROR, f"Digitiser failed to get property {prop_name}: {e}", None, None
 

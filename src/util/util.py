@@ -68,6 +68,113 @@ def dict_diff(old_dict, new_dict):
         }
     }
 
+def dict_flatten(d, parent_key="", sep="."):
+    """ Flatten a nested dictionary into a single level dictionary with compound keys.
+        For example, {'a': {'b': 1}} becomes {'a.b': 1}.
+    """
+    items = []
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+
+        if isinstance(v, dict):
+            items.extend(dict_flatten(v, new_key, sep=sep).items())
+        elif isinstance(v, list):
+            for i, item in enumerate(v):
+                items.extend(
+                    dict_flatten({f"{new_key}[{i}]": item}, sep=sep).items()
+                )
+        else:
+            items.append((new_key, v))
+
+    return dict(items)
+
+import re
+
+def dict_unflatten(flat_dict) -> dict:
+    """
+    Convert a flattened dict with dot notation and [index] lists
+    back into a nested dictionary/list structure.
+    String values that look like numbers, booleans, or None are coerced
+    to their native Python types.
+    """
+
+    def _coerce(value):
+        """Attempt to coerce a string value to its native Python type."""
+        if not isinstance(value, str):
+            return value
+        # Boolean
+        if value.lower() == 'true':
+            return True
+        if value.lower() == 'false':
+            return False
+        # None
+        if value.lower() in ('none', 'null', ''):
+            return None
+        # Integer
+        try:
+            int_val = int(value)
+            # Only convert if round-tripping preserves the string exactly
+            # (avoids converting "01" or "00123" to int)
+            if str(int_val) == value:
+                return int_val
+        except ValueError:
+            pass
+        # Float
+        try:
+            float_val = float(value)
+            return float_val
+        except ValueError:
+            pass
+        return value
+
+    result = {}
+
+    for flat_key, value in flat_dict.items():
+        # Split key into tokens: words or [index]
+        tokens = re.findall(r'[^.\[\]]+|\[\d+\]', flat_key)
+
+        current = result
+
+        for i, token in enumerate(tokens):
+            is_last = i == len(tokens) - 1
+
+            # Handle list index
+            if token.startswith('['):
+                index = int(token[1:-1])
+
+                if not isinstance(current, list):
+                    raise TypeError(f"Unexpected list index in key: {flat_key}")
+
+                # Extend list if needed
+                while len(current) <= index:
+                    current.append({})
+
+                if is_last:
+                    current[index] = _coerce(value)
+                else:
+                    if not isinstance(current[index], (dict, list)):
+                        current[index] = {}
+                    current = current[index]
+
+            else:
+                # Normal dict key
+                next_token = tokens[i + 1] if not is_last else None
+
+                if is_last:
+                    current[token] = _coerce(value)
+                else:
+                    # Decide if next should be list or dict
+                    if next_token and next_token.startswith('['):
+                        if token not in current:
+                            current[token] = []
+                    else:
+                        if token not in current:
+                            current[token] = {}
+
+                    current = current[token]
+
+    return result
+
 def gen_file_prefix(
     dt:datetime,
     entity_id:str,

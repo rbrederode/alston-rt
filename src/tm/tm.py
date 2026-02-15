@@ -36,7 +36,8 @@ from models.health import HealthState
 from models.scan import ScanModel, ScanState
 from models.sdp import ScienceDataProcessorModel
 from models.telescope import TelescopeModel
-from models.tm import ResourceType, AllocationState
+from models.tm import ResourceType, AllocationState, ResourceAllocations, Allocation
+from models.ui import UIDriver, UIDriverType
 from obs.oet import ObservationExecutionTool
 from util import log, util
 from util.timer import Timer, TimerManager
@@ -125,10 +126,25 @@ class TelescopeManager(App):
         """
         logger.debug(f"TM initialisation event")
 
-        # Load Digitiser configuration from disk
-        # Config file is located in ./config/<profile>/<model>.json
-        # Config file defines initial list of digitisers to be processed by the TM
+        # Config files located in ./config/<profile>/<model>.json
         input_dir = f"./config/{self.get_args().profile}"
+
+        # Load Telescope Manager configuration from disk
+        filename = "TelescopeManagerModel.json"
+
+        try:
+            tm = self.telmodel.tel_mgr.load_from_disk(input_dir=input_dir, filename=filename)
+        except FileNotFoundError:
+            tm = None
+
+        if tm is not None:
+            self.telmodel.tel_mgr.ui_drivers = tm.ui_drivers if tm.ui_drivers is not None else []
+            logger.info(f"Telescope Manager loaded TM configuration from directory {input_dir} file {filename}")
+        else:
+            logger.warning(f"Telescope Manager could not load TM configuration from directory {input_dir} file {filename}")
+
+        # Load Digitiser configuration from disk
+        # Config file defines initial list of digitisers to be processed by the TM
         filename = "DigitiserList.json"
 
         try:
@@ -268,6 +284,7 @@ class TelescopeManager(App):
         if api_call.get('status','') == tm_dm.STATUS_ERROR:
             
             logger.error(f"Telescope Manager received error response from Dish Manager for dish {dsh_id}.\n{api_call}")
+            dsh_model.mode = DishMode.UNKNOWN # Set dish mode to UNKNOWN to force safe recovery
             dsh_model.last_err_msg = api_call['message'] if 'message' in api_call else dsh_model.last_err_msg
             dsh_model.last_err_dt = datetime.fromisoformat(dt) if dt is not None else datetime.now(timezone.utc)
 
@@ -712,7 +729,8 @@ class TelescopeManager(App):
             (property, value) = map.get_property_name_value(config_key, config_value)
 
             if property is None:
-                logger.warning(f"Telescope Manager ignoring science data processor configuration item: {config_key}")
+                if config_key not in ["obs_id", "sdp_id"]: # obs_id and sdp_id are used for internal tracking
+                    logger.warning(f"Telescope Manager ignoring science data processor configuration item: {config_key}")
                 continue
         
             sdp_req = self._construct_req_to_sdp(property=property, value=value, message="")
@@ -762,7 +780,8 @@ class TelescopeManager(App):
             (property, value) = map.get_property_name_value(config_key, config_value) if method is None else (None, config_value)
 
             if method is None and property is None:
-                logger.warning(f"Telescope Manager ignoring digitiser configuration item: {config_key}")
+                if config_key not in ["obs_id", "dig_id"]: # obs_id and dig_id are used for internal tracking
+                    logger.warning(f"Telescope Manager ignoring digitiser configuration item: {config_key}")
                 continue
         
             dig_req = self._construct_req_to_dig(entity=dig_id, property=property, method=method, value=value, message="")
@@ -809,7 +828,8 @@ class TelescopeManager(App):
             (property, value) = map.get_property_name_value(config_key, config_value)
 
             if property is None:
-                logger.warning(f"Telescope Manager ignoring dish configuration item: {config_key}")
+                if config_key not in ["obs_id", "dsh_id"]: # obs_id and dsh_id are used for internal tracking
+                    logger.warning(f"Telescope Manager ignoring dish configuration item: {config_key}")
                 continue
         
             dm_req = self._construct_req_to_dm(entity=dsh_id, property=property, value=value, message="")
@@ -1117,6 +1137,65 @@ def main():
     try:
         while True:
 
+            now = datetime.now(timezone.utc)
+
+            for driver in tm.telmodel.tel_mgr.ui_drivers:
+
+                # If the driver instance is not yet initialized, initialize it based on its type and config
+                if driver.instance is None:
+
+                    if driver.type == UIDriverType.GSHEETS:
+                        from ui.drivers.gsheets.gsheets_driver import GoogleSheetsDriver
+                        from ui.drivers.gsheets.gsheets_model import GSheetConfig
+                        config = GSheetConfig(**driver.config) if isinstance(driver.config, dict) else driver.config
+                        driver.instance = GoogleSheetsDriver(config)
+                        logger.info(f"Telescope Manager initialised Google Sheets driver for UI integration with config:\n" + \
+                            f"{json.dumps(driver.config, indent=2)}")
+                    else:
+                        logger.warning(f"Telescope Manager UI driver {driver.type} not supported, skipping UI integration for this driver")
+
+                # Else check if a model push is due based on the poll period defined for the driver
+                else:
+                    # Check if the driver's poll period is due
+                    if (now - driver.last_update).total_seconds() >= driver.poll_period:
+
+                        logger.info(f"Telescope Manager pushing Telescope Model update to UI driver {driver.type.name} {driver.short_desc}")
+
+                        try:
+                            driver.last_update = now
+
+                            dig_dict = tm.telmodel.dig_store.to_dict()
+                            driver.instance.publish(dig_dict)
+                        
+                            dm_dict = tm.telmodel.dsh_mgr.to_dict() 
+                            driver.instance.publish(dm_dict)
+
+                            sdp_dict = tm.telmodel.sdp.to_dict()
+                            driver.instance.publish(sdp_dict)
+
+                            oda_dict = tm.telmodel.oda.to_dict()
+                            driver.instance.publish(oda_dict)
+
+                            tm_dict = tm.telmodel.tel_mgr.to_dict()
+                            driver.instance.publish(tm_dict)
+
+                            odt = driver.instance.read_config("ObsList") if hasattr(driver.instance, "read_config") else None
+                            if odt:
+                                logger.debug(f"Telescope Manager read ODT configuration from UI driver {driver.type.name}:\n{json.dumps(odt, indent=2)}")
+                                if odt != last_odt_config_snapshot:
+                                    config = ConfigEvent(
+                                        category="ODT",
+                                        old_config=last_odt_config_snapshot,
+                                        new_config=odt,
+                                        timestamp=now
+                                    )
+                                    tm.get_queue().put(config)
+
+                                    last_odt_config_snapshot = odt
+ 
+                        except Exception as e:
+                            logger.error(f"Error publishing to UI driver {driver.type.name}: {e}")
+
             # If we do not have an ODT config snapshot, pull ODT observation list from Google Sheets
             if last_odt_config_snapshot is None or (datetime.now(timezone.utc) - last_odt_config_pull).total_seconds() >= 30:
 
@@ -1146,7 +1225,7 @@ def main():
                         json_config = None
        
                     if json_config != last_odt_config_snapshot:
-
+                        """
                         config = ConfigEvent(
                             category="ODT",
                             old_config=last_odt_config_snapshot,
@@ -1156,119 +1235,11 @@ def main():
                         tm.get_queue().put(config)
 
                         last_odt_config_snapshot = json_config
+                        """
+         
+            # Sleep before checking whether drivers are due for an update
+            time.sleep(1) 
 
-            # If comms to the Dish Manager is established then exchange Dish Manager model data with the UI 
-            if tm.telmodel.dsh_mgr.tm_connected == CommunicationStatus.ESTABLISHED:
-
-                dm_latest_update = tm.telmodel.dsh_mgr.last_update if tm.telmodel.dsh_mgr.last_update else datetime.now(timezone.utc)
-
-                # Push updated Dish Manager model to Google Sheets if there are updates
-                if dm_latest_update > last_dm_model_push:
-
-                    dm_dict = tm.telmodel.dsh_mgr.to_dict()
-                    dm_str = json.dumps(dm_dict, indent=4)
-                    try:    
-                        execute_sheets_request(sheet.values().update(
-                            spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                            range=TM_UI_API + "F2",                      
-                            valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                            body={"values": [[dm_str]]}
-                        ))
-                    except Exception as err:
-                        logger.error(f"Error updating Dish Manager model in Google Sheets: {err}")
-
-                    last_dm_model_push = dm_latest_update
-
-            else:
-                # Reset the snapshot such that config is re-read upon reconnection
-                last_dm_config_snapshot = None
-
-            # If comms to the SDP is established then exchange SDP model data with the UI 
-            if tm.telmodel.sdp.tm_connected == CommunicationStatus.ESTABLISHED:
-
-                sdp_latest_update = tm.telmodel.sdp.last_update if tm.telmodel.sdp.last_update else datetime.now(timezone.utc)
-
-                # Push updated SDP model to Google Sheets if there are updates
-                if sdp_latest_update > last_sdp_model_push:
-
-                    sdp_dict = tm.telmodel.sdp.to_dict()
-                    sdp_str = json.dumps(sdp_dict, indent=4)
-
-                    try:    
-                        execute_sheets_request(sheet.values().update(
-                            spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                            range=TM_UI_API + "C2",
-                            valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                            body={"values": [[sdp_str]]}
-                        ))
-                    except Exception as err:
-                        logger.error(f"Error updating SDP model in Google Sheets: {err}")
-                    
-                    last_sdp_model_push = sdp_latest_update
-
-            # Exchange DIG model data with the UI
-            dig_latest_update = tm.telmodel.dig_store.last_update if tm.telmodel.dig_store.last_update else datetime.now(timezone.utc)
-
-            if dig_latest_update > last_dig_model_push:
-
-                dig_dict = tm.telmodel.dig_store.to_dict()
-                dig_str = json.dumps(dig_dict, indent=4)
-                try:    
-                    execute_sheets_request(sheet.values().update(
-                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                        range=TM_UI_API + "B2",                      
-                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                        body={"values": [[dig_str]]}
-                    ))
-                except Exception as err:
-                    logger.error(f"Error updating Digitiser model in Google Sheets: {err}")
-
-                last_dig_model_push = dig_latest_update
-
-            # Exchange ODA model data with the UI
-            oda_latest_update = tm.telmodel.oda.last_update if tm.telmodel.oda.last_update else datetime.now(timezone.utc)
-
-            if oda_latest_update > last_oda_model_push:
-
-                oda_dict = tm.telmodel.oda.to_dict()
-                oda_str = json.dumps(oda_dict, indent=4)
-
-                try:    
-                    execute_sheets_request(sheet.values().update(
-                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                        range=TM_UI_API + "E2",
-                        valueInputOption="USER_ENTERED", # allow Sheets to parse as datetime
-                        body={"values": [[oda_str]]}
-                    ))
-                except Exception as err:
-                    logger.error(f"Error updating ODA models in Google Sheets: {err}")
-
-                last_oda_model_push = oda_latest_update
-
-            # Exchange TM model data with the UI
-
-            tm_latest_update = tm.telmodel.tel_mgr.last_update if tm.telmodel.tel_mgr.last_update else datetime.now(timezone.utc)
-
-            if tm_latest_update > last_tm_model_push:
-
-                # Update TM model in Google Sheets
-                tm_dict = tm.telmodel.tel_mgr.to_dict()
-                tm_str = json.dumps(tm_dict, indent=4)
-
-                try:
-                    execute_sheets_request(sheet.values().update(
-                        spreadsheetId=ALSTON_RADIO_TELESCOPE,
-                        range=TM_UI_API + "A2",
-                        valueInputOption="USER_ENTERED",  # allow Sheets to parse as datetime
-                        body={"values": [[tm_str]]}
-                    ))
-                except Exception as err:
-                    logger.error(f"Error updating TM model in Google Sheets: {err}")
-
-                last_tm_model_push = tm_latest_update
-
-            # TM to UI Poll interval
-            time.sleep(TM_UI_UPDATE_INTERVAL_S) 
     except KeyboardInterrupt:
         pass
     finally:

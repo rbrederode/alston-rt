@@ -271,10 +271,13 @@ class DM(App):
                     rsp_msg = self._construct_rsp_to_tm(status=tm_dm.STATUS_ERROR, message=msg, api_msg=api_msg, api_call=api_call)
                     action.set_msg_to_remote(rsp_msg)
                     return action
+                finally:
+                    # Clearing the target tuple in the dish model does not call the driver subclass
+                    dish_driver.clear_target_tuple()
 
             msg = f"DM set new target {target_id if target_id is not None else 'None'} for Dish {dish_id}."
             logger.info(msg + f"\n{target.to_dict() if target is not None else 'No Target'}")
-            rsp_msg = self._construct_rsp_to_tm(status=tm_dm.STATUS_SUCCESS, message=msg, api_msg=api_msg, api_call=api_call)
+            rsp_msg = self._construct_rsp_to_tm(status=tm_dm.STATUS_SUCCESS, message=msg, api_msg=api_msg, api_call=api_call)            
             action.set_msg_to_remote(rsp_msg)
 
         return action
@@ -421,8 +424,6 @@ class DM(App):
         # Prepare rsp msg to tm containing result of an api call
         tm_rsp = APIMessage(api_msg=api_msg, api_version=self.tm_api.get_api_version())
 
-        tm_rsp.set_echo_data({})
-
         tm_rsp.switch_from_to()
         tm_rsp_api_call = {
             "msg_type": "rsp", 
@@ -434,6 +435,11 @@ class DM(App):
 
         if api_call.get('value') is not None:
             tm_rsp_api_call["value"] = api_call['value']
+
+        # Only include obs_data if the status indicates an Error
+        # This will trigger an OET workflow transition and review
+        if status == tm_dm.STATUS_ERROR and api_call.get('obs_data') is not None:
+            tm_rsp_api_call["obs_data"] = api_call['obs_data']
 
         if message is not None:
             tm_rsp_api_call["message"] = message

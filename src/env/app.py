@@ -70,6 +70,15 @@ class App:
     def __del__(self):
         self.stop()
 
+    def set_app_model(self, app_model: AppModel):
+        if app_model is None:
+            raise XSoftwareFailure("App model cannot be set to None")
+
+        self.app_model = app_model
+        self.app_model.num_processors = max(1, self.get_args().num_processors)
+        self.app_model.health = HealthState.UNKNOWN
+        self.app_model.last_update = datetime.now(timezone.utc)
+
     def get_args(self):
         # Use parse_known_args to avoid pytest's extra CLI arguments causing failures
         args, _ = self.arg_parser.parse_known_args()
