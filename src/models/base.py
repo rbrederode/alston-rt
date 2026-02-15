@@ -271,6 +271,7 @@ class BaseModel:
         from models.sdp import ScienceDataProcessorModel
         from models.target import TargetModel, PointingType, TargetConfig, TargetScanSet
         from models.tm import TelescopeManagerModel, ResourceAllocations, Allocation, AllocationState
+        from models.ui import UIDriverType, UIDriver
         
         if isinstance(v, dict) and "_type" in v:
 
@@ -324,6 +325,7 @@ class BaseModel:
                     "PointingType": PointingType,
                     "PointingState": PointingState,
                     "ScanState": ScanState, 
+                    "UIDriverType": UIDriverType,
                 }.get(enum_class_name)
                 if enum_class is not None:
                     return enum_class[enum_value_name]
@@ -411,6 +413,9 @@ class BaseModel:
                 return TelescopeManagerModel(**deserialized_fields)
             elif model_type == "Time":
                 return Time(v["value"], scale=v["scale"])
+            elif model_type == "UIDriver":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return UIDriver(**deserialized_fields)
         elif isinstance(v, (list, tuple)):
             return type(v)(BaseModel._deserialise(item) for item in v)
         elif isinstance(v, dict):
