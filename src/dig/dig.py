@@ -19,6 +19,7 @@ from models.dig import DigitiserModel
 from models.health import HealthState
 from sdr.sdr import SDR
 from util import log, util
+from util.timer import Timer, TimerManager
 from util.xbase import XBase, XStreamUnableToExtract, XSoftwareFailure, XAPIValidationFailed
 
 logger = logging.getLogger(__name__)
