@@ -277,7 +277,8 @@ class Digitiser(App):
 
                 # Start the same scan_samples timer immediately if it was successful, else wait 1000 milliseconds before retrying
                 wait = 200 if status == tm_dig.STATUS_SUCCESS else 1000 
-                action.set_timer_action(Action.Timer(name=event.name, timer_action=wait)) 
+                if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(event.name)):
+                    action.set_timer_action(Action.Timer(name=event.name, timer_action=wait)) 
 
             if self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
                 # Prepare adv msg to send samples to sdp

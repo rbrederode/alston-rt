@@ -220,6 +220,8 @@ class SDP(App):
                 pending_scans = [s for s in list(self.scan_q.queue) if s.get_status() in [ScanState.EMPTY, ScanState.WIP] and s.get_dig_id() == dig_id]
                 abort_scans = []
 
+                self.sdp_model.scans_wip = len(pending_scans)
+
                 for scan in pending_scans:
                     start_idx, end_idx = scan.get_start_end_idx()
                     if read_counter >= start_idx and read_counter <= end_idx:
