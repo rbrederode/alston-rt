@@ -73,7 +73,6 @@ class Scan:
         with self._rlock:
 
             self.scan_model = scan_model
-            self.scan_model.created = datetime.now(timezone.utc)     # Timestamp when the scan was created
 
             self.loaded_secs = self.scan_model.duration * [False]    # List of seconds for which samples have been loaded
             self.prev_read_end = None                                # Timestamp of the previous read end
@@ -245,7 +244,7 @@ class Scan:
         self.scan_model.read_end = read_end if self.scan_model.read_end is None else max(self.scan_model.read_end, read_end)  # Update read end time
         self.scan_model.gap = (read_start - self.prev_read_end).total_seconds() if self.prev_read_end is not None else None
         if self.scan_model.gap is not None:
-            logger.info(f"Scan {self.scan_model.scan_id} - Gap of {self.scan_model.gap:.3f} seconds detected between last read end {self.prev_read_end} and current read start {read_start}.")
+            logger.debug(f"Scan {self.scan_model.scan_id} - Gap of {self.scan_model.gap:.3f} seconds detected between last read end {self.prev_read_end} and current read start {read_start}.")
         self.prev_read_end = read_end  # Update last read end time
 
         # Update scan status based on loaded rows
@@ -393,7 +392,8 @@ class Scan:
             logger.error(f"Scan - Failed to load data from {input_dir}: {e}")
             return None
 
-        logger.info(f"Scan - Loaded scan from {input_dir} with id: {scan.scan_model.scan_id}\n{scan.scan_model.to_dict()}")
+        logger.info(f"Scan - Loaded scan from {input_dir} with id: {scan.scan_model.scan_id}")
+        logger.debug(f"Scan metadata: {scan.scan_model.to_dict()}")
         return scan
 
     def del_iq(self):
@@ -471,7 +471,7 @@ if __name__ == "__main__":
 
     scan = Scan(scan_model=scan_model)
     print(scan)
-    scan.load_from_disk(read_start="2025-06-24T130440", input_dir=INPUT_DIR, include_iq=True)
+    scan.from_disk(read_start="2025-06-24T130440", input_dir=INPUT_DIR, include_iq=True)
     print(scan)
 
     from sdp.signal_display import SignalDisplay

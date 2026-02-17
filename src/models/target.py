@@ -221,7 +221,7 @@ class TargetScanSet(BaseModel):
         self.freq_min = tgt_config.center_freq - tgt_config.bandwidth / 2 - tgt_config.sample_rate * (1-USABLE_BANDWIDTH)/2  # Start of frequency scanning
         self.freq_max = tgt_config.center_freq + tgt_config.bandwidth / 2 + tgt_config.sample_rate * (1-USABLE_BANDWIDTH)/2  # End of frequency scanning
 
-        logger.info(f"Target determining scans for TargetConfig idx={self.tgt_idx} from {self.freq_min/1e6:.2f} MHz to {self.freq_max/1e6:.2f} MHz with Sample Rate: {tgt_config.sample_rate/1e6:.2f} MHz and Duration: {tgt_config.integration_time} sec(s)")
+        logger.info(f"Target in {obs_id} determining scans for TargetConfig idx={self.tgt_idx} from {self.freq_min/1e6:.2f} MHz to {self.freq_max/1e6:.2f} MHz with Sample Rate: {tgt_config.sample_rate/1e6:.2f} MHz and Duration: {tgt_config.integration_time} sec(s)")
 
         # Calculate the number of frequency scans to cover the bandwidth (ceiling of bandwidth/sample_rate)
         self.freq_scans = int(-((self.freq_max-self.freq_min)) // -(tgt_config.sample_rate * USABLE_BANDWIDTH))  # Ceiling division
@@ -229,8 +229,8 @@ class TargetScanSet(BaseModel):
         self.scan_iterations = int(np.ceil(tgt_config.integration_time / MAX_SCAN_DURATION_SEC))  # Number of iterations of a frequency scan, # e.g. 5 minutes of data will be 5 scans of 1 minute each
         self.scan_duration = math.ceil(tgt_config.integration_time / self.scan_iterations) if self.scan_iterations > 1 else tgt_config.integration_time  # Duration of each scan in seconds
 
-        logger.info(f"Target Frequency-Iteration Scans: {self.freq_scans}-{self.scan_iterations} each of Scan Duration: {self.scan_duration} sec(s)")
-        logger.info(f"Target Sample Rate: {tgt_config.sample_rate} Hz, Overlap: {self.freq_overlap:.2f} Hz")
+        logger.info(f"Target in {obs_id} Frequency-Iteration Scans: {self.freq_scans}-{self.scan_iterations} each of Scan Duration: {self.scan_duration} sec(s)")
+        logger.info(f"Target in {obs_id} Sample Rate: {tgt_config.sample_rate} Hz, Overlap: {self.freq_overlap:.2f} Hz")
         
         # Initialise the scans list
         self.scans = []

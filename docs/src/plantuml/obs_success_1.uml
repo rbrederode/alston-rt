@@ -17,26 +17,29 @@ OET -> TM: Dish Config
 OET -> TM: Digitiser Config
 OET -> TM: SDP Config
 
-TM -[#blue]> DM: Set Mode CONFIG
+TM -[#blue]> DM: Set Mode CONFIG (Obs Data)
 DM -[#green]> Dish: Set Dish Mode CONFIG
-DM -[#green]> TM: Status SUCCESS
-TM -[#blue]> DM: Set Target
+DM -[#green]> TM: Status SUCCESS (Obs Data)
+TM -[#blue]> DM: Set Target (Obs Data)
 DM -[#blue]> Dish: Set Target
 DM -[#blue]> Dish: Set Dish Mode OPERATE
 Dish -[#blue]> Driver: Slew
-DM -[#green]> TM: Status SUCCESS
+note right: To Desired Alt Az
+DM -[#green]> TM: Status SUCCESS (**NO Obs Data**)
 
-TM -[#blue]> Digitiser: Set Center Freq, Bandwidth, Sample Rate, Gain, Channels, Scan Duration
-Digitiser -[#green]> TM: Status SUCCESS
+TM -[#blue]> Digitiser: Set Center Freq, Bandwidth, Sample Rate, Gain, Channels, Scan Duration (Obs Data)
+Digitiser -[#green]> TM: Status SUCCESS (Obs Data)
 
-TM -[#blue]> SDP: Set Center Freq, Bandwidth, Sample Rate, Gain, Channels, Scan Duration, Target Index, Freq Scan
+TM -[#blue]> SDP: Set Center Freq, Bandwidth, Sample Rate, Gain, Channels, Scan Duration, Target Index, Freq Scan (Obs Data)
 SDP -> SDP: Prepare Scan Baseline
-SDP -[#green]> TM: Status SUCCESS
+SDP -[#green]> TM: Status SUCCESS (Obs Data)
 Driver -[#green]> Dish: Ready
+note right: Reaches Desired Alt Az
 Dish -[#green]> DM: Ready
-DM -> TM: Status UPDATE
+DM -> TM: Status UPDATE (**Obs Data**)
 DM -[#blue]> Dish: Track
 note right: Every second
 Dish -[#blue]> Driver: Track
+
 
 @enduml

@@ -270,12 +270,10 @@ class DM(App):
                     logger.error(msg + f"\n{target.to_dict() if target is not None else 'No Target'}")
                     rsp_msg = self._construct_rsp_to_tm(status=tm_dm.STATUS_ERROR, message=msg, api_msg=api_msg, api_call=api_call)
                     action.set_msg_to_remote(rsp_msg)
-                    return action
-                finally:
-                    # Clearing the target tuple in the dish model does not call the driver subclass
                     dish_driver.clear_target_tuple()
+                    return action
 
-            msg = f"DM set new target {target_id if target_id is not None else 'None'} for Dish {dish_id}."
+            msg = f"DM set target {target_id if target_id is not None else 'None'} for Dish {dish_id}."
             logger.info(msg + f"\n{target.to_dict() if target is not None else 'No Target'}")
             rsp_msg = self._construct_rsp_to_tm(status=tm_dm.STATUS_SUCCESS, message=msg, api_msg=api_msg, api_call=api_call)            
             action.set_msg_to_remote(rsp_msg)

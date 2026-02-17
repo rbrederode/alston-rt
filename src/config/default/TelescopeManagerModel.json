@@ -56,7 +56,7 @@
                 "instance": "UIDriverType",
                 "value": "GSHEETS"
             },
-            "short_desc":"G Sheets Engineering Console",
+            "short_desc":"Engineering Console",
             "config": {
                 "sheet_id": "1r73N0VZHSQC6RjRv94gzY50pTgRvaQWfctGGOMZVpzc",
                 "tm_range": "TM_UI_API++!A2:B",
@@ -79,7 +79,7 @@
                 "instance": "UIDriverType",
                 "value": "GSHEETS"
             },
-            "short_desc":"G Sheets Test Console",
+            "short_desc":"Test Console",
             "config": {
                 "sheet_id": "1OJ2wobPrwsQgeRW9gHgiMZ4fu8NKcpYYLGnwjv8Gt5M",
                 "tm_range": "TM_UI_API++!A2:B",

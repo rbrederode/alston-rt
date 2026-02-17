@@ -121,6 +121,14 @@ class DigitiserList(BaseModel):
                 return dig
         return None
 
+    def get_dig_by_obs_id(self, obs_id: str) -> DigitiserModel:
+        """ Retrieve a DigitiserModel object from the dig_list that is currently scanning for a given obs_id.
+        """
+        for dig in self.dig_list:
+            if isinstance(dig.scanning, dict) and dig.scanning.get("obs_id") == obs_id:
+                return dig
+        return None
+
 if __name__ == "__main__":
     
     dig001 = DigitiserModel(

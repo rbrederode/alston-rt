@@ -517,7 +517,8 @@ class Digitiser(App):
             {"property": "obs_id", "value": self.dig_model.scanning.get('obs_id', '<undefined>') if isinstance(self.dig_model.scanning, dict) else '<undefined>'},  
             {"property": "tgt_idx", "value": self.dig_model.scanning.get('tgt_idx', -1) if isinstance(self.dig_model.scanning, dict) else -1},
             {"property": "freq_scan", "value": self.dig_model.scanning.get('freq_scan', -1) if isinstance(self.dig_model.scanning, dict) else -1},
-            {"property": "scan_iter", "value": self.dig_model.scanning.get('scan_iter', -1) if isinstance(self.dig_model.scanning, dict) else -1}
+            #{"property": "scan_iter", "value": self.dig_model.scanning.get('scan_iter', -1) if isinstance(self.dig_model.scanning, dict) else -1}
+            # Commented out scan_iter as it does not get advanced for every scan, only freq_scans are advanced when the config needs to change.
          ]   
 
         sdp_adv.set_api_call({
@@ -547,6 +548,9 @@ class Digitiser(App):
 
         if value is not None:
             tm_rsp_api_call["value"] = value
+        
+        if api_call.get('obs_data') is not None:
+            tm_rsp_api_call["obs_data"] = api_call['obs_data']
 
         if message is not None:
             tm_rsp_api_call["message"] = message

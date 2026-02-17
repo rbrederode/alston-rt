@@ -128,7 +128,7 @@ class ScanModel(BaseModel):
                      int(self.duration) == int(other.duration) and \
                      float(self.gain) == float(other.gain)
 
-        logger.info(f"Scan equivalence is {equivalent} between:\n{self}\nand\n{other}\n")
+        logger.debug(f"Scan equivalence is {equivalent} between:\n{self}\nand\n{other}\n")
 
         return equivalent
 

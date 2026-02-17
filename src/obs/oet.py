@@ -101,7 +101,7 @@ class ObservationExecutionTool:
 
                 # Start configuration timer for this observation if not already active
                 if not any(timer.active for timer in Timer.manager.get_timers_by_name(timer_name)):
-                    
+                   
                     action.set_timer_action(Action.Timer(
                         name=timer_name, 
                         timer_action=event.obs.timeout_ms_config, 
@@ -456,6 +456,11 @@ class ObservationExecutionTool:
 
                 already_configured = False
 
+                # If digitiser is aready scanning, update the observation and scan parameters
+                if dig_model.scanning is not False:
+                    old_dig_config['scanning'] = dig_model.scanning
+                    new_dig_config['scanning'] = {'obs_id': obs.obs_id, 'tgt_idx': obs.tgt_idx, 'freq_scan': target_scan.freq_scan } 
+
                 # Needed to direct the config to the correct digitiser and 
                 # To transition the appropriate observation state once configuration is applied
                 old_dig_config['dig_id'] = dig_model.dig_id 
@@ -484,6 +489,19 @@ class ObservationExecutionTool:
                     old_scan_config[dig_attr] = current
                     new_scan_config[dig_attr] = desired
 
+            scanning = {'obs_id': obs.obs_id, 'tgt_idx': obs.tgt_idx, 'freq_scan': target_scan.freq_scan } if sdp_dig is not None else False
+
+            if sdp_dig is not None and sdp_dig.scanning != scanning:
+                old_scan_config['scanning'] = sdp_dig.scanning
+                new_scan_config['scanning'] = scanning
+
+            if target_config.feed == Feed.LOAD and sdp_dig.load != True:
+                old_scan_config['load'] = sdp_dig.load
+                new_scan_config['load'] = True
+            elif target_config.feed != Feed.LOAD and sdp_dig.load != False:
+                old_scan_config['load'] = sdp_dig.load
+                new_scan_config['load'] = False
+
             if len(new_scan_config) > 0:
 
                 already_configured = False
@@ -491,8 +509,6 @@ class ObservationExecutionTool:
                 # SDP needs to know about additional parameters to prepare for incoming scan samples
                 new_scan_config['dig_id'] = dig_model.dig_id if dig_model is not None else None
                 new_scan_config['obs_id'] = obs.obs_id
-                new_scan_config['tgt_idx'] = obs.tgt_idx
-                new_scan_config['freq_scan'] = target_scan.freq_scan
  
                 old_sdp_config = {}
                 new_sdp_config = {}
@@ -543,7 +559,6 @@ class ObservationExecutionTool:
                 "obs_id": obs.obs_id,
                 "tgt_idx": obs.tgt_idx,
                 "freq_scan": (obs.tgt_scan // target_scan_set.scan_iterations) if target_scan_set is not None else -1,
-                "scan_iter": (obs.tgt_scan % target_scan_set.scan_iterations) if target_scan_set is not None else -1
             }
 
             # Instruct the digitiser to start scanning 
