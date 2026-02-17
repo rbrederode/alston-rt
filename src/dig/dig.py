@@ -283,7 +283,7 @@ class Digitiser(App):
                 # Prepare adv msg to send samples to sdp
                 sdp_adv = self._construct_adv_to_sdp(status, message, value, payload.tobytes())
                 action.set_msg_to_remote(sdp_adv)
-                action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=sdp_adv))
+                #action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=sdp_adv))
 
             elif payload is None:
                 # Wait for scan_samples timer to trigger again

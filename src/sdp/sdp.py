@@ -207,9 +207,9 @@ class SDP(App):
                     msg = f"Science Data Processor received samples from {digitiser.dig_id} that do not match the SDP scan configuration."
                     logger.warning(msg + f"\n{diff}")
                     
-                    status, message = sdp_dig.STATUS_SUCCESS, msg
-                    dig_rsp = self._construct_rsp_to_dig(status, message, api_msg, api_call)
-                    action.set_msg_to_remote(dig_rsp)
+                    #status, message = sdp_dig.STATUS_SUCCESS, msg
+                    #dig_rsp = self._construct_rsp_to_dig(status, message, api_msg, api_call)
+                    #action.set_msg_to_remote(dig_rsp)
                     return action
                 
                 logger.debug(f"Science Data Processor received digitiser samples message with metadata:\n{metadata}")
@@ -306,8 +306,8 @@ class SDP(App):
                             action.set_msg_to_remote(tm_adv)
                             action.set_timer_action(Action.Timer(name=f"tm_adv_timer_retry:{tm_adv.get_timestamp()}", timer_action=self.sdp_model.app.msg_timeout_ms, echo_data=tm_adv))
                     
-        dig_rsp = self._construct_rsp_to_dig(status, message, api_msg, api_call)
-        action.set_msg_to_remote(dig_rsp)
+        #dig_rsp = self._construct_rsp_to_dig(status, message, api_msg, api_call)
+        #action.set_msg_to_remote(dig_rsp)
 
         return action
 
