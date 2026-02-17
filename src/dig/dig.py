@@ -165,7 +165,7 @@ class Digitiser(App):
                         # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
                         for i in range(1, 3):
                             if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"scan_samples_{i}")):
-                                action.set_timer_action(Action.Timer(name=f"scan_samples_{i}", timer_action=0))
+                                action.set_timer_action(Action.Timer(name=f"scan_samples_{i}", timer_action=200))
                     else:    
                         # Stop all scan_samples timers
                         for timer in Timer.manager.get_timers_by_keyword(f"scan_samples"):
@@ -276,7 +276,7 @@ class Digitiser(App):
             if self.dig_model.scanning:
 
                 # Start the same scan_samples timer immediately if it was successful, else wait 1000 milliseconds before retrying
-                wait = 0 if status == tm_dig.STATUS_SUCCESS else 1000 
+                wait = 200 if status == tm_dig.STATUS_SUCCESS else 1000 
                 action.set_timer_action(Action.Timer(name=event.name, timer_action=wait)) 
 
             if self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
