@@ -159,13 +159,16 @@ class Digitiser(App):
 
                     logger.info(f"Digitiser scanning state changed to: {value}")
 
-                    # Timer action 0 to start reading samples immediately, TIMER_STOP to stop reading samples
-                    timer_action = 0 if self.dig_model.scanning else Action.Timer.TIMER_STOP
-                        
-                    # Start reading samples immediately (timer_action=0) else stop timers (timer_action=TIMER_STOP)
-                    # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
-                    for i in range(1, 3):
-                        action.set_timer_action(Action.Timer(name=f"scan_samples_{i}", timer_action=timer_action))
+                    # If scanning was turned on, start reading samples immediately (timer_action=0) 
+                    if self.dig_model.scanning:
+                        # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
+                        for i in range(1, 3):
+                            if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"scan_samples_{i}")):
+                                action.set_timer_action(Action.Timer(name=f"scan_samples_{i}", timer_action=0))
+                    else:    
+                        # Stop all scan_samples timers
+                        for timer in Timer.manager.get_timers_by_keyword(f"scan_samples"):
+                            action.set_timer_action(Action.Timer(name=timer.name, timer_action=Action.Timer.TIMER_STOP))
 
                 # Else if the API call is a "method" action for reading samples
                 elif api_call['action_code'] == tm_dig.ACTION_CODE_METHOD and api_call['method'] in ("read_samples", "read_bytes"):
