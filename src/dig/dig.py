@@ -140,6 +140,8 @@ class Digitiser(App):
 
         # Else if api call is a req or adv msg from the TM
         elif api_call['msg_type'] in ['req', 'adv']:
+
+            scanning = self.dig_model.scanning
             
             # Dispatch the API Call to a handler method
             dispatch = {
@@ -161,13 +163,13 @@ class Digitiser(App):
                     logger.info(f"Digitiser scanning state changed to: {value}")
 
                     # If scanning was turned on, start reading samples immediately (timer_action=0) 
-                    if self.dig_model.scanning:
+                    if not scanning and self.dig_model.scanning:
                         # Two timers (1,2) run in parallel, reading samples one after the other, blocking only on the SDR
                         for i in range(1, 3):
-                            if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"scan_samples_{i}")):
-                                action.set_timer_action(Action.Timer(name=f"scan_samples_{i}", timer_action=200))
+                            action.set_timer_action(Action.Timer(name=f"scan_samples_{i}", timer_action=0))
+                                
                     else:    
-                        # Stop all scan_samples timers
+                        # Stop all scan_samples timers (not really necesary since they have a zero timeout)
                         for timer in Timer.manager.get_timers_by_keyword(f"scan_samples"):
                             action.set_timer_action(Action.Timer(name=timer.name, timer_action=Action.Timer.TIMER_STOP))
 
@@ -276,15 +278,14 @@ class Digitiser(App):
             if self.dig_model.scanning:
 
                 # Start the same scan_samples timer immediately if it was successful, else wait 1000 milliseconds before retrying
-                wait = 200 if status == tm_dig.STATUS_SUCCESS else 1000 
-                if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(event.name)):
-                    action.set_timer_action(Action.Timer(name=event.name, timer_action=wait)) 
+                wait = 0 if status == tm_dig.STATUS_SUCCESS else 1000 
+                action.set_timer_action(Action.Timer(name=event.name, timer_action=wait)) 
 
             if self.dig_model.sdp_connected == CommunicationStatus.ESTABLISHED and payload is not None:
                 # Prepare adv msg to send samples to sdp
                 sdp_adv = self._construct_adv_to_sdp(status, message, value, payload.tobytes())
                 action.set_msg_to_remote(sdp_adv)
-                #action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=sdp_adv))
+                action.set_timer_action(Action.Timer(name=f"sdp_adv_timer:{sdp_adv.get_timestamp()}", timer_action=self.dig_model.app.msg_timeout_ms, echo_data=sdp_adv))
 
             elif payload is None:
                 # Wait for scan_samples timer to trigger again

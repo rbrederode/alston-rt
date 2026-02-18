@@ -207,9 +207,9 @@ class SDP(App):
                     msg = f"Science Data Processor received samples from {digitiser.dig_id} that do not match the SDP scan configuration."
                     logger.warning(msg + f"\n{diff}")
                     
-                    #status, message = sdp_dig.STATUS_SUCCESS, msg
-                    #dig_rsp = self._construct_rsp_to_dig(status, message, api_msg, api_call)
-                    #action.set_msg_to_remote(dig_rsp)
+                    status, message = sdp_dig.STATUS_SUCCESS, msg
+                    dig_rsp = self._construct_rsp_to_dig(status, message, api_msg, api_call)
+                    action.set_msg_to_remote(dig_rsp)
                     return action
                 
                 logger.debug(f"Science Data Processor received digitiser samples message with metadata:\n{metadata}")
@@ -308,8 +308,8 @@ class SDP(App):
                             action.set_msg_to_remote(tm_adv)
                             action.set_timer_action(Action.Timer(name=f"tm_adv_timer_retry:{tm_adv.get_timestamp()}", timer_action=self.sdp_model.app.msg_timeout_ms, echo_data=tm_adv))
                     
-        #dig_rsp = self._construct_rsp_to_dig(status, message, api_msg, api_call)
-        #action.set_msg_to_remote(dig_rsp)
+        dig_rsp = self._construct_rsp_to_dig(status, message, api_msg, api_call)
+        action.set_msg_to_remote(dig_rsp)
 
         return action
 
@@ -773,6 +773,7 @@ class SDP(App):
         scan.del_iq()
 
         self.sdp_model.scans_completed += 1
+        self.sdp_model.scans_wip -= 1
         self._remove_from_queue(scan=scan, queue=self.scan_q) # Remove the completed scan from the scan processing queue
 
         if scan.is_load_scan():
