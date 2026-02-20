@@ -43,9 +43,9 @@ class TelescopeModel:
     def get_scan_store_dir(self) -> str:
         # Determine the scan storage directory from SDP arguments
 
-        if self.sdp.app.arguments and 'output_dir' in self.sdp.app.arguments:
+        if self.sdp.app.arguments and 'scan_store_dir' in self.sdp.app.arguments:
 
-            scan_store_dir = self.sdp.app.arguments.get('output_dir','~/') if self.sdp.app.arguments is not None else '~/'
+            scan_store_dir = self.sdp.app.arguments.get('scan_store_dir','~/') if self.sdp.app.arguments is not None else '~/'
             return os.path.expanduser(scan_store_dir)
         
         return os.path.expanduser('~/')

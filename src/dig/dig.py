@@ -142,6 +142,15 @@ class Digitiser(App):
         elif api_call['msg_type'] in ['req', 'adv']:
 
             scanning = self.dig_model.scanning
+            obs_id = scanning.get('obs_id', None) if isinstance(scanning, dict) else None
+
+            # If we are busy scanning samples for an observation and receive a new unrelated set / method api call, reject it
+            if obs_id and obs_id !=api_call.get('obs_data', {}).get('obs_id'):
+                if api_call['action_code'] in ["set", "method"]:
+                    msg = f"Digitiser busy scanning for observation {obs_id} and cannot process unrelated API call until observation is complete"               
+                    logger.error(msg + f"\n{json.dumps(api_call, indent=2)}")
+                    action.set_msg_to_remote(self._construct_rsp_to_tm(tm_dig.STATUS_ERROR, msg, None, api_msg, api_call))
+                    return action
             
             # Dispatch the API Call to a handler method
             dispatch = {
@@ -515,17 +524,10 @@ class Digitiser(App):
             {"property": "sample_rate", "value": self.dig_model.sample_rate},     # Hz
             {"property": "bandwidth", "value": self.dig_model.bandwidth},         # MHz
             {"property": "gain", "value": self.dig_model.gain},                   # dB
-            {"property": "channels", "value": self.dig_model.channels},           # Number of spectral channels
-            {"property": "scan_duration", "value": self.dig_model.scan_duration}, # Scan duration in seconds
-            {"property": "read_counter", "value": read_counter},
+             {"property": "read_counter", "value": read_counter},
             {"property": "read_start", "value": datetime.fromtimestamp(read_start, timezone.utc).isoformat()},
             {"property": "read_end", "value": datetime.fromtimestamp(read_end, timezone.utc).isoformat()},
-            {"property": "obs_id", "value": self.dig_model.scanning.get('obs_id', '<undefined>') if isinstance(self.dig_model.scanning, dict) else '<undefined>'},  
-            {"property": "tgt_idx", "value": self.dig_model.scanning.get('tgt_idx', -1) if isinstance(self.dig_model.scanning, dict) else -1},
-            {"property": "freq_scan", "value": self.dig_model.scanning.get('freq_scan', -1) if isinstance(self.dig_model.scanning, dict) else -1},
-            #{"property": "scan_iter", "value": self.dig_model.scanning.get('scan_iter', -1) if isinstance(self.dig_model.scanning, dict) else -1}
-            # Commented out scan_iter as it does not get advanced for every scan, only freq_scans are advanced when the config needs to change.
-         ]   
+           ]   
 
         sdp_adv.set_api_call({
             "msg_type": "adv", 

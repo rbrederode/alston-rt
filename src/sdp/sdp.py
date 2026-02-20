@@ -178,8 +178,6 @@ class SDP(App):
             sample_rate   = meta_dict.get(sdp_dig.PROPERTY_SAMPLE_RATE, 0.0)
             gain          = meta_dict.get(sdp_dig.PROPERTY_SDR_GAIN, 0.0)
             load          = meta_dict.get(sdp_dig.PROPERTY_LOAD, False)
-            channels      = meta_dict.get(sdp_dig.PROPERTY_CHANNELS,1024)               # default to 1024 channels
-            scan_duration = meta_dict.get(sdp_dig.PROPERTY_SCAN_DURATION,60)            # default to 60 seconds scan duration
 
             read_counter  = meta_dict.get(sdp_dig.PROPERTY_READ_COUNTER, 0)
             read_start    = datetime.fromisoformat(meta_dict.get(sdp_dig.PROPERTY_READ_START))
@@ -199,11 +197,10 @@ class SDP(App):
 
                 # Discard digitiser samples if the SDP scan configuration does not match the sample metadata
                 # Respond with success to avoid triggering retries from the digitiser, but log a warning and discard the samples
-                if not digitiser.scanning or center_freq != digitiser.center_freq or channels != digitiser.channels or \
-                    sample_rate != digitiser.sample_rate or gain != digitiser.gain or load != digitiser.load or \
-                    scan_duration != digitiser.scan_duration:
-
-                    diff = self._diff_dig_metadata(digitiser, scanning, center_freq, sample_rate, gain, load, channels, scan_duration)
+                if not digitiser.scanning or center_freq != digitiser.center_freq or sample_rate != digitiser.sample_rate or \
+                    gain != digitiser.gain or load != digitiser.load:
+                    
+                    diff = self._diff_dig_metadata(digitiser, center_freq, sample_rate, gain, load)
                     msg = f"Science Data Processor received samples from {digitiser.dig_id} that do not match the SDP scan configuration."
                     logger.warning(msg + f"\n{diff}")
                     
@@ -228,7 +225,7 @@ class SDP(App):
 
                         # Verify that the digitiser metadata still matches the scan parameters
                         if scan.scan_model.center_freq == center_freq and scan.scan_model.sample_rate == sample_rate and scan.scan_model.load == load and \
-                                scan.scan_model.channels == channels and scan.scan_model.duration == scan_duration:
+                           scan.scan_model.channels == digitiser.channels and scan.scan_model.duration == digitiser.scan_duration:
                             match = scan
                             break
                         else:
@@ -260,9 +257,9 @@ class SDP(App):
                         tgt_idx=tgt_idx,
                         freq_scan=freq_scan,
                         start_idx=read_counter,
-                        duration=scan_duration,
+                        duration=digitiser.scan_duration,
+                        channels=digitiser.channels,
                         sample_rate=sample_rate,
-                        channels=channels,
                         center_freq=center_freq,
                         gain=gain,
                         load=load,
@@ -531,8 +528,8 @@ class SDP(App):
 
         if not load_found:
             # Extract target index and frequency scan index from the digitiser scanning metadata if available, else default to -1 for both
-            tgt_idx = dig.scanning.get("tgt_idx", -1) if dig.scanning is not None else -1
-            freq_scan = dig.scanning.get("freq_scan", -1) if dig.scanning is not None else -1
+            tgt_idx = dig.scanning.get("tgt_idx", -1) if dig.scanning is not None and isinstance(dig.scanning, dict) else -1
+            freq_scan = dig.scanning.get("freq_scan", -1) if dig.scanning is not None and isinstance(dig.scanning, dict) else -1
 
             # Create a default load scan model based on the digitiser metadata and the observation parameters 
             # This load scan will default to a baseline of ones so will not affect the sky scan when applied
@@ -657,21 +654,17 @@ class SDP(App):
 
         return tm_sdp.STATUS_SUCCESS, f"Science Data Processor set property {prop_name} to {prop_value}", prop_value, None
 
-    def _diff_dig_metadata(self, digitiser, scanning: dict, center_freq: float, sample_rate: float, 
-                           gain: float, load: bool, channels: int, scan_duration: int) -> str:
+    def _diff_dig_metadata(self, digitiser, center_freq: float, sample_rate: float, gain: float, load: bool) -> str:
         """ Compares digitiser model attributes against incoming sample metadata values.
             Returns a formatted string listing only the fields that differ, one per line.
             Each line shows: field_name: model=<model_value> metadata=<metadata_value>
         """
         diffs = []
         comparisons = [
-            ("scanning",      digitiser.scanning,      scanning),
-            ("center_freq",   digitiser.center_freq,   center_freq),
+            ("center_freq",   digitiser.center_freq,    center_freq),
             ("sample_rate",   digitiser.sample_rate,    sample_rate),
             ("gain",          digitiser.gain,           gain),
             ("load",          digitiser.load,           load),
-            ("channels",      digitiser.channels,       channels),
-            ("scan_duration", digitiser.scan_duration,  scan_duration),
         ]
         if not digitiser.scanning:
             diffs.append(f" - scanning: model={digitiser.scanning} (not scanning)")
@@ -770,14 +763,15 @@ class SDP(App):
         """ Completes a scan and performs necessary cleanup.
         """
         scan.save_to_disk(output_dir=self.get_args().scan_store_dir, include_iq=False)
-        scan.del_iq()
 
         self.sdp_model.scans_completed += 1
         self.sdp_model.scans_wip -= 1
-        self._remove_from_queue(scan=scan, queue=self.scan_q) # Remove the completed scan from the scan processing queue
 
+        self._remove_from_queue(scan=scan, queue=self.scan_q) # Remove older completed scans from the scan processing queue
+        
+        # Add load scan to the load queue and replace equivalent items (not needed anymore)
         if scan.is_load_scan():
-            self._merge_into_queue(scan, self.load_q) # Add load scan to the load queue and replace equivalent items (not needed anymore)
+            self._merge_into_queue(scan, self.load_q) 
 
         return
 
@@ -815,12 +809,8 @@ def main():
     try:
         while True:
           
-            # If there are no scans to process, sleep and continue
-            if sdp.scan_q.qsize() == 0:
-                time.sleep(0.1)
-                continue
-
-            # For each scan in the queue, update its signal display if applicable
+            # For each processing scan in the scan queue, allocate it to a signal display
+            # We are expecting one processing scan per digitiser to be in the scan queue
             for i in range(sdp.scan_q.qsize()):
 
                 try:
@@ -828,55 +818,39 @@ def main():
                 except IndexError:
                     continue  # Scan index not valid, continue to next scan
 
-                if scan.get_status() == ScanState.EMPTY:
-                    continue  # Scan is empty, nothing to display, continue to next scan
+                dig_id = scan.get_dig_id() # Identify the digitiser associated with the scan
 
-                dig_id = scan.get_dig_id()
-
-                # DEBUG CODE TO DISABLE SIGNAL DISPLAY FOR FIRST SCAN ITERATION
-                #if scan.scan_model.scan_iter == 1:
-                #    sdp.set_signal_display({'dig_id': 'dig001', 'active': False})
-                # NOTE: There is something wrong with this code. It causes the signal display to hang shortly after this call.
-                # The signal display attempts to close the figure from within the main loop (below) on the next call to display or set_scan.
-                # END DEBUG CODE
-
-                # If there is no signal display for this digitiser or it is None, create a new signal display
-                if dig_id not in sdp.signal_displays:
-                    logger.info(f"Science Data Processor creating new SignalDisplay for digitiser {dig_id} because none exists")
-                    sdp.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
-                elif sdp.signal_displays[dig_id] is None:
-                    logger.info(f"Science Data Processor creating new SignalDisplay for digitiser {dig_id} because existing display is None")
+                # If there is no signal display for this digitiser, create a new active signal display
+                if dig_id not in sdp.signal_displays or sdp.signal_displays[dig_id] is None:
+                    logger.info(f"Science Data Processor creating new SignalDisplay for digitiser {dig_id}")
                     sdp.signal_displays[dig_id] = SignalDisplay(dig_id=dig_id)
 
-                # If the signal display is not active, continue to next scan
-                if not (sdp.signal_displays[dig_id]).get_is_active():
-                    continue  
+                if not (sdp.signal_displays[dig_id].get_is_active()):
+                    continue # Signal display for digitiser has been deactivated, continue to next scan 
 
-                sig_display_scan = sdp.signal_displays[dig_id].get_scan()
-
-                logger.debug(f"Science Data Processor processing signal display scan:\n{scan}\n")
+                sig_display_scan = sdp.signal_displays[dig_id].get_scan() 
                 
-                # If the signal display is not set to the current scan
+                # If the scan allocated to the signal display differs from the current scan
                 if sig_display_scan != scan:
 
-                    # If the previously displayed scan completed, display and save its figure for posterities sake
-                    if sig_display_scan and sig_display_scan.get_status() == ScanState.COMPLETE:
+                    # If the previous displayed scan completed, update display and save its figure
+                    if sig_display_scan and sig_display_scan.get_status() == ScanState.COMPLETE:    
                         sdp.signal_displays[dig_id].display()
                         sdp.signal_displays[dig_id].save_scan_figure(output_dir=sdp.get_args().scan_store_dir)
+                        
+                    #sig_display_scan.del_iq()
 
-                    # Find the euqivalent load scan for this scan if it exists in the load queue
+                    # Find the equivalent load scan for this scan if it exists in the load queue
                     load_scans = [s for s in list(sdp.load_q.queue) if s.equivalent(scan) and s.is_load_scan() == True]
+                    logger.debug(f"Science Data Processor found {len(load_scans)} equivalent load scans in load queue for digitiser {dig_id} and observation {scan.get_obs_id()} to apply to signal display")
 
-                    logger.info(f"Science Data Processor found {len(load_scans)} equivalent load scans in load queue for digitiser {dig_id} and observation {scan.get_obs_id()} to apply to signal display")
-
-                    for load in load_scans:
-                        logger.debug(f"Science Data Processor found equivalent load scan in load queue for digitiser {dig_id} and observation {load.get_obs_id()} to apply to signal display:\n{load}")
-  
                     # Set the signal display to the current scan
                     sdp.signal_displays[dig_id].set_scan(scan=scan, load=load_scans[0] if len(load_scans) > 0 else None)
-                
-                # Update the signal display
-                sdp.signal_displays[dig_id].display()
+
+            for sig_display in sdp.signal_displays.values():
+                # If the signal display has a scan and is active, display the scan
+                if sig_display.get_scan() and sig_display.get_is_active():
+                    sig_display.display()
 
             time.sleep(1)  # Update displays every second                
                 

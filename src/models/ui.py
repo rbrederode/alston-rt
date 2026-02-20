@@ -10,9 +10,10 @@ logger = logging.getLogger(__name__)
 
 class UIDriverType(enum.IntEnum):
     GSHEETS = 1         # Google Sheets
-    REST_API = 2        # REST API
-    CUSTOM_UI = 3       # Custom UI implementation
-    UNKNOWN = 4
+    EXCEL = 2           # M365 Excel
+    REST_API = 3        # REST API
+    CUSTOM_UI = 4       # Custom UI implementation
+    UNKNOWN = 5
 
 class UIDriver(BaseModel):
     """A class representing a UI driver for the telescope manager."""

@@ -19,6 +19,7 @@ OET -> TM: SDP Config
 
 TM -[#blue]> DM: Set Mode CONFIG (Obs Data)
 DM -[#green]> Dish: Set Dish Mode CONFIG
+note right: Dish must be in CONFIG\nmode to Set Target
 DM -[#green]> TM: Status SUCCESS (Obs Data)
 TM -[#blue]> DM: Set Target (Obs Data)
 DM -[#blue]> Dish: Set Target
@@ -27,10 +28,10 @@ Dish -[#blue]> Driver: Slew
 note right: To Desired Alt Az
 DM -[#green]> TM: Status SUCCESS (**NO Obs Data**)
 
-TM -[#blue]> Digitiser: Set Center Freq, Bandwidth, Sample Rate, Gain, Channels, Scan Duration (Obs Data)
+TM -[#blue]> Digitiser: Set Center Freq, Bandwidth, Sample Rate, Gain (Obs Data)
 Digitiser -[#green]> TM: Status SUCCESS (Obs Data)
 
-TM -[#blue]> SDP: Set Center Freq, Bandwidth, Sample Rate, Gain, Channels, Scan Duration, Target Index, Freq Scan (Obs Data)
+TM -[#blue]> SDP: Set Center Freq, Bandwidth, Sample Rate, Gain, Channels, Scan Duration, Obs Id, Target Index, Freq Scan (Obs Data)
 SDP -> SDP: Prepare Scan Baseline
 SDP -[#green]> TM: Status SUCCESS (Obs Data)
 Driver -[#green]> Dish: Ready

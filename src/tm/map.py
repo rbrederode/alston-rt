@@ -15,8 +15,8 @@ _config_to_property = {
     "freq_correction":  tm_dig.PROPERTY_FREQ_CORRECTION,
     "gain":             tm_dig.PROPERTY_GAIN,
     "scanning":         tm_dig.PROPERTY_SCANNING,
-    "channels":         tm_dig.PROPERTY_CHANNELS,
-    "scan_duration":    tm_dig.PROPERTY_SCAN_DURATION,
+    "channels":         tm_sdp.PROPERTY_CHANNELS,
+    "scan_duration":    tm_sdp.PROPERTY_SCAN_DURATION,
     "capability":       tm_dm.PROPERTY_CAPABILITY,
     "mode":             tm_dm.PROPERTY_MODE,
     "target":           tm_dm.PROPERTY_TARGET,
@@ -112,12 +112,12 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
             tm_dig.PROPERTY_CENTER_FREQ,
             tm_dig.PROPERTY_BANDWIDTH,
             tm_dig.PROPERTY_FREQ_CORRECTION,
-            tm_dig.PROPERTY_CHANNELS,
-            tm_dig.PROPERTY_SCAN_DURATION
+            tm_sdp.PROPERTY_CHANNELS,
+            tm_sdp.PROPERTY_SCAN_DURATION
         ]:
             try:
                 # These properties expect numeric values
-                if property in [tm_dig.PROPERTY_FREQ_CORRECTION, tm_dig.PROPERTY_CHANNELS, tm_dig.PROPERTY_SCAN_DURATION]:
+                if property in [tm_dig.PROPERTY_FREQ_CORRECTION, tm_sdp.PROPERTY_CHANNELS, tm_sdp.PROPERTY_SCAN_DURATION]:
                     return property, int(value)
                 else:
                     return property, float(value)

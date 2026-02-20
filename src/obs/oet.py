@@ -396,11 +396,15 @@ class ObservationExecutionTool:
 
             # If we are not on the correct target, set the dish to CONFIG mode and provide the new target
             if not self.is_on_target(obs, target, dsh_model): 
-                old_dsh_config['mode'] = dsh_model.mode
-                new_dsh_config['mode'] = DishMode.CONFIG
 
-                old_dsh_config['target'] = dsh_model.pointing_altaz
-                new_dsh_config['target'] = target.to_dict()
+                # Dish can only set target if in CONFIG mode
+                if dsh_model.mode != DishMode.CONFIG:
+
+                    old_dsh_config['mode'] = dsh_model.mode
+                    new_dsh_config['mode'] = DishMode.CONFIG
+                else:
+                    old_dsh_config['target'] = dsh_model.pointing_altaz
+                    new_dsh_config['target'] = target.to_dict()
 
             if len(new_dsh_config) > 0:
 
@@ -428,8 +432,6 @@ class ObservationExecutionTool:
             ('bandwidth',     target_config,   'bandwidth'),
             ('sample_rate',   target_config,   'sample_rate'),
             ('gain',          target_config,   'gain'),
-            ('channels',      target_config,   'spectral_resolution'),
-            ('scan_duration', target_scan_set, 'scan_duration'),
         ]
 
         # If we found a valid digitiser, check if it needs to be configured
@@ -473,6 +475,12 @@ class ObservationExecutionTool:
                     action = self.tm.update_dig_configuration(old_dig_config, new_dig_config, action)
             else:
                 logger.info(f"Observation Execution Tool found Digitiser already configured for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}")
+  
+        # Append additional config parameters
+        config_params.extend([
+            ('channels',      target_config,   'spectral_resolution'),
+            ('scan_duration', target_scan_set, 'scan_duration'),
+        ])
   
         sdp = self.telmodel.sdp
         if sdp is not None:

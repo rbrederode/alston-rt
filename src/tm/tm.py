@@ -169,7 +169,58 @@ class TelescopeManager(App):
         action = Action()
 
         if event.category.upper() == "DIG": # Digitiser Config Event
+
             action = self.update_dig_configuration(event.old_config, event.new_config, action)
+
+            # Prepare SDP update as digitiser and SDP scan config need to be in sync to exchange samples
+            old_scan_config = {}
+            new_scan_config = {}
+
+            # List of key value pairs to copy from the incoming digitiser config event to SDP scan configuration
+            config_params = [
+                tm_dig.PROPERTY_CENTER_FREQ, 
+                tm_dig.PROPERTY_BANDWIDTH,  
+                tm_dig.PROPERTY_SAMPLE_RATE,
+                tm_dig.PROPERTY_GAIN,       
+                tm_dig.PROPERTY_LOAD,       
+                tm_sdp.PROPERTY_CHANNELS,   
+                tm_sdp.PROPERTY_SCAN_DURATION,
+            ]
+
+            # Copy DIG key value pairs to SDP scan configuration
+            for param in config_params:
+                if param in event.new_config:
+                    new_scan_config[param] = event.new_config[param]
+            
+            # Append and pop additional config parameters as needed
+            if tm_sdp.PROPERTY_SCAN_DURATION not in new_scan_config:
+                new_scan_config[tm_sdp.PROPERTY_SCAN_DURATION] = 60       # Default scan duration in seconds if not specified
+            if tm_sdp.PROPERTY_CHANNELS not in new_scan_config:
+                new_scan_config[tm_sdp.PROPERTY_CHANNELS] = 1024          # Default number of spectral channels if not specified
+            if tm_dig.PROPERTY_FREQ_CORRECTION in event.new_config:       
+                event.new_config.pop(tm_dig.PROPERTY_FREQ_CORRECTION)     # freq_correction is a digitiser specific property, pop it
+
+            dig_id = event.new_config.get("dig_id", None) if event.new_config is not None else None
+            dsh = self.telmodel.dsh_mgr.get_dish_by_dig_id(dig_id) if dig_id is not None else None
+            obs_id = f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H%MZ')}-{dsh.dsh_id}" if dsh is not None else None
+            
+            dig_scanning = event.new_config.get(tm_dig.PROPERTY_SCANNING, None) if event.new_config is not None else None    
+            scanning = map.get_property_name_value(tm_dig.PROPERTY_SCANNING, dig_scanning)[1] if dig_scanning is not None else None
+
+            if scanning and obs_id is not None:
+                scanning = {"obs_id": obs_id, "tgt_idx": 0, "freq_scan": 0} # Default to target index 0 and frequency scan index 0 for new scans triggered by digitiser scanning if not specified in the digitiser config
+            
+            new_scan_config["dig_id"] = dig_id
+            new_scan_config["obs_id"] = obs_id
+            new_scan_config["scanning"] = scanning
+
+            old_sdp_config = {}
+            new_sdp_config = {}
+   
+            new_sdp_config['scan_config'] = new_scan_config
+            new_sdp_config['sdp_id'] = self.telmodel.sdp.sdp_id
+
+            action = self.update_sdp_configuration(old_sdp_config, new_sdp_config, action) 
 
         elif event.category.upper() == "DSH": # Scheduler Config Event
             action = self.update_dsh_configuration(event.old_config, event.new_config, action)

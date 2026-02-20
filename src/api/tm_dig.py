@@ -57,8 +57,6 @@ PROPERTY_BANDWIDTH      = 'bandwidth'        # Bandwidth in Hz
 PROPERTY_GAIN           = 'gain'             # Gain in dB
 PROPERTY_FREQ_CORRECTION= 'freq_correction'  # Frequency correction in ppm
 PROPERTY_SCANNING       = 'scanning'         # Scanning status True/False or Observation Id (same as True)
-PROPERTY_CHANNELS       = 'channels'         # Number of spectral channels
-PROPERTY_SCAN_DURATION  = 'scan_duration'    # Scan duration in seconds
 PROPERTY_STATUS         = 'status'           # Status update interval in seconds
 PROPERTY_SDP_COMMS      = 'sdp_comms'        # SDP communication status (established/not established)
 PROPERTY_DEBUG          = 'debug'            # Enable/disable debug mode (on/off)
@@ -71,8 +69,6 @@ PROPERTIES = (
     PROPERTY_GAIN,
     PROPERTY_FREQ_CORRECTION,
     PROPERTY_SCANNING,
-    PROPERTY_CHANNELS,
-    PROPERTY_SCAN_DURATION,
     PROPERTY_STATUS,
     PROPERTY_SDP_COMMS,
     PROPERTY_DEBUG,
