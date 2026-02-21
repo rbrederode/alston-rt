@@ -89,7 +89,7 @@ class WebhookHandler:
                 
                 event_type = data.get('event', 'unknown')
                 
-                if event_type == 'alston-rt.ui.dig' or event_type == 'alston-rt.ui.odt' or event_type == 'alston-rt.ui.dsh':
+                if event_type in ['alston-rt.ui.dig', 'alston-rt.ui.odt', 'alston-rt.ui.dsh', 'alston-rt.ui.oet']:
                     message_data = data.get('message', '')
                     
                     # Extract rightmost 3 characters and convert to uppercase

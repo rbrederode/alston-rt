@@ -102,6 +102,11 @@ class Scan:
 
         return self.scan_model.scan_id == other.scan_model.scan_id
 
+    def __del__(self):
+        """ Destructor to clean up resources when a Scan instance is deleted. """
+        logger.info(f"Scan {self.scan_model.scan_id} - Deleting scan instance and cleaning up resources.")
+        self.del_iq()  # Flush IQ data from memory
+
     def equivalent(self, other):
         """ Check if this scan is equivalent to another scan (i.e. they have the same scan parameters).
             This is used to identify scans that are essentially the same and should be replaced in the processing queue when a new scan with the same parameters arrives.

@@ -66,10 +66,11 @@ PROPERTY_SCAN_DURATION   = 'scan_duration'    # Scan duration in seconds
 PROPERTY_READ_COUNTER    = 'read_counter'     # Read counter
 PROPERTY_READ_START      = 'read_start'       # Epoch seconds corresponding to start timestamp of sample read
 PROPERTY_READ_END        = 'read_end'         # Epoch seconds corresponding to end timestamp of sample read
-PROPERTY_OBS_ID          = 'obs_id'           # Observation Id
-PROPERTY_TGT_IDX         = 'tgt_idx'          # Target index
-PROPERTY_FREQ_SCAN       = 'freq_scan'        # Frequency scan index
-PROPERTY_SCAN_ITER       = 'scan_iter'        # Scan iteration index
+PROPERTY_SCANNING        = 'scanning'         # Scanning parameters (obs_id, tgt_idx, freq_scan) to allow SDP to match samples to the correct scan configuration and discard samples that do not match these parameters
+#PROPERTY_OBS_ID          = 'obs_id'           # Observation Id
+#PROPERTY_TGT_IDX         = 'tgt_idx'          # Target index
+#PROPERTY_FREQ_SCAN       = 'freq_scan'        # Frequency scan index
+#PROPERTY_SCAN_ITER       = 'scan_iter'        # Scan iteration index
 
 PROPERTIES = (
     PROPERTY_DIG_ID,
@@ -83,10 +84,11 @@ PROPERTIES = (
     PROPERTY_READ_COUNTER,
     PROPERTY_READ_START,
     PROPERTY_READ_END,
-    PROPERTY_OBS_ID,
-    PROPERTY_TGT_IDX,
-    PROPERTY_FREQ_SCAN,
-    PROPERTY_SCAN_ITER,
+    PROPERTY_SCANNING,
+    #PROPERTY_OBS_ID,
+    #PROPERTY_TGT_IDX,
+    #PROPERTY_FREQ_SCAN,
+    #PROPERTY_SCAN_ITER,
 )
 
 # Allowable msg fields and types defining their format     

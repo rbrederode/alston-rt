@@ -18,6 +18,7 @@ from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.base import BaseModel
 from models.comms import CommunicationStatus, InterfaceType
+from models.dig import DigitiserModel, DigitiserList
 from models.health import HealthState
 from models.scan import ScanModel, ScanState
 from models.sdp import ScienceDataProcessorModel
@@ -178,29 +179,22 @@ class SDP(App):
             sample_rate   = meta_dict.get(sdp_dig.PROPERTY_SAMPLE_RATE, 0.0)
             gain          = meta_dict.get(sdp_dig.PROPERTY_SDR_GAIN, 0.0)
             load          = meta_dict.get(sdp_dig.PROPERTY_LOAD, False)
-
+            scanning      = meta_dict.get(sdp_dig.PROPERTY_SCANNING)
             read_counter  = meta_dict.get(sdp_dig.PROPERTY_READ_COUNTER, 0)
             read_start    = datetime.fromisoformat(meta_dict.get(sdp_dig.PROPERTY_READ_START))
             read_end      = datetime.fromisoformat(meta_dict.get(sdp_dig.PROPERTY_READ_END))
-
+ 
             # Get the threading lock specific to this digitiser
             dig_lock = self._get_dig_lock(dig_id)
 
             with dig_lock:   
 
-                # Extract scanning parameters from the digitiser model (populated by Telescope Manager)
-                obs_id       = digitiser.scanning.get('obs_id') if isinstance(digitiser.scanning, dict) else None
-                tgt_idx      = digitiser.scanning.get('tgt_idx') if isinstance(digitiser.scanning, dict) else None
-                freq_scan    = digitiser.scanning.get('freq_scan') if isinstance(digitiser.scanning, dict) else None
-
-                scanning = {"obs_id": obs_id, "tgt_idx": tgt_idx, "freq_scan": freq_scan}
-
                 # Discard digitiser samples if the SDP scan configuration does not match the sample metadata
                 # Respond with success to avoid triggering retries from the digitiser, but log a warning and discard the samples
-                if not digitiser.scanning or center_freq != digitiser.center_freq or sample_rate != digitiser.sample_rate or \
-                    gain != digitiser.gain or load != digitiser.load:
+                if not digitiser.scanning or digitiser.scanning != scanning or center_freq != digitiser.center_freq or \
+                    sample_rate != digitiser.sample_rate or gain != digitiser.gain or load != digitiser.load:
                     
-                    diff = self._diff_dig_metadata(digitiser, center_freq, sample_rate, gain, load)
+                    diff = self._diff_dig_metadata(digitiser, meta_dict)
                     msg = f"Science Data Processor received samples from {digitiser.dig_id} that do not match the SDP scan configuration."
                     logger.warning(msg + f"\n{diff}")
                     
@@ -467,9 +461,14 @@ class SDP(App):
         dig = self.sdp_model.dig_store.get_dig_by_id(dig_id) if dig_id is not None else None
   
         if dig is None or obs_id is None:
-            logger.error(f"Science Data Processor could not set scan config with None for digitiser {'None' if dig_id is None else dig_id}\n{value}")
+            logger.error(f"Science Data Processor could not set scan config for digitiser {'None' if dig_id is None else dig_id}" + \
+                f" and observation {'None' if obs_id is None else obs_id}\n{value}")
             return False
 
+        if dig.scanning and isinstance(dig.scanning, dict) and dig.scanning.get('obs_id') is not None and str(obs_id)[:3] != str(dig.scanning.get('obs_id'))[:3]:
+            logger.warning(f"Science Data Processor declining scan config for digitiser {dig_id} because the digitiser is already scanning samples for obs_id {dig.scanning.get('obs_id')}.\n{value}")
+            return False
+            
         # Loop through the key value pairs in value dict
         for key, val in value.items():
             if key in ['dig_id', 'obs_id']:
@@ -654,21 +653,17 @@ class SDP(App):
 
         return tm_sdp.STATUS_SUCCESS, f"Science Data Processor set property {prop_name} to {prop_value}", prop_value, None
 
-    def _diff_dig_metadata(self, digitiser, center_freq: float, sample_rate: float, gain: float, load: bool) -> str:
+    def _diff_dig_metadata(self, digitiser: DigitiserModel, meta_dict: dict) -> str:
         """ Compares digitiser model attributes against incoming sample metadata values.
             Returns a formatted string listing only the fields that differ, one per line.
             Each line shows: field_name: model=<model_value> metadata=<metadata_value>
         """
         diffs = []
-        comparisons = [
-            ("center_freq",   digitiser.center_freq,    center_freq),
-            ("sample_rate",   digitiser.sample_rate,    sample_rate),
-            ("gain",          digitiser.gain,           gain),
-            ("load",          digitiser.load,           load),
-        ]
         if not digitiser.scanning:
             diffs.append(f" - scanning: model={digitiser.scanning} (not scanning)")
-        for field, model_val, meta_val in comparisons:
+        for field in [sdp_dig.PROPERTY_CENTER_FREQ, sdp_dig.PROPERTY_SAMPLE_RATE, sdp_dig.PROPERTY_GAIN, sdp_dig.PROPERTY_LOAD, sdp_dig.PROPERTY_SCANNING]:
+            model_val = getattr(digitiser, field, None)
+            meta_val = meta_dict.get(field)
             if model_val != meta_val:
                 diffs.append(f" - {field}: model={model_val} metadata={meta_val}")
         return "\n".join(diffs) if diffs else "no differences found"

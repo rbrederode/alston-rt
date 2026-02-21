@@ -434,9 +434,9 @@ class DM(App):
         if api_call.get('value') is not None:
             tm_rsp_api_call["value"] = api_call['value']
 
-        # Only include obs_data if the status indicates an Error
-        # This will trigger an OET workflow transition and review
-        if status == tm_dm.STATUS_ERROR and api_call.get('obs_data') is not None:
+        # Exclude obs_data on Sucessful Set Target as this will trigger an OET workflow transition and review
+        # Set Target takes time to slew and acquire the target, so a status update is initiated to communicate this event
+        if status == tm_dm.STATUS_ERROR or api_call.get('property') != tm_dm.PROPERTY_TARGET:
             tm_rsp_api_call["obs_data"] = api_call['obs_data']
 
         if message is not None:

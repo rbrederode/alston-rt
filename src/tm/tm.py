@@ -170,56 +170,48 @@ class TelescopeManager(App):
 
         if event.category.upper() == "DIG": # Digitiser Config Event
 
-            action = self.update_dig_configuration(event.old_config, event.new_config, action)
-
-            # Prepare SDP update as digitiser and SDP scan config need to be in sync to exchange samples
-            old_scan_config = {}
-            new_scan_config = {}
-
-            # List of key value pairs to copy from the incoming digitiser config event to SDP scan configuration
-            config_params = [
-                tm_dig.PROPERTY_CENTER_FREQ, 
-                tm_dig.PROPERTY_BANDWIDTH,  
-                tm_dig.PROPERTY_SAMPLE_RATE,
-                tm_dig.PROPERTY_GAIN,       
-                tm_dig.PROPERTY_LOAD,       
-                tm_sdp.PROPERTY_CHANNELS,   
-                tm_sdp.PROPERTY_SCAN_DURATION,
-            ]
-
-            # Copy DIG key value pairs to SDP scan configuration
-            for param in config_params:
-                if param in event.new_config:
-                    new_scan_config[param] = event.new_config[param]
-            
-            # Append and pop additional config parameters as needed
-            if tm_sdp.PROPERTY_SCAN_DURATION not in new_scan_config:
-                new_scan_config[tm_sdp.PROPERTY_SCAN_DURATION] = 60       # Default scan duration in seconds if not specified
-            if tm_sdp.PROPERTY_CHANNELS not in new_scan_config:
-                new_scan_config[tm_sdp.PROPERTY_CHANNELS] = 1024          # Default number of spectral channels if not specified
-            if tm_dig.PROPERTY_FREQ_CORRECTION in event.new_config:       
-                event.new_config.pop(tm_dig.PROPERTY_FREQ_CORRECTION)     # freq_correction is a digitiser specific property, pop it
-
+            # Identify the digitiser related to this configuration update
             dig_id = event.new_config.get("dig_id", None) if event.new_config is not None else None
-            dsh = self.telmodel.dsh_mgr.get_dish_by_dig_id(dig_id) if dig_id is not None else None
-            obs_id = f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H%MZ')}-{dsh.dsh_id}" if dsh is not None else None
+            if dig_id is None:
+                logger.error(f"Telescope Manager received digitiser configuration update with no digitiser ID specified in the new configuration: {event.new_config}")
+                return action
             
+            # Extract DIG specific properties (all properties except Scan Duration and Channels)
+            old_dig_config = {k: v for k, v in (event.old_config or {}).items() 
+                if k not in (tm_sdp.PROPERTY_SCAN_DURATION, tm_sdp.PROPERTY_CHANNELS)}
+            new_dig_config = {k: v for k, v in (event.new_config or {}).items() 
+                if k not in (tm_sdp.PROPERTY_SCAN_DURATION, tm_sdp.PROPERTY_CHANNELS)}
+
+            # Update the digitiser configuration based on the received config event and trigger any necessary actions
+            action = self.update_dig_configuration(old_dig_config, new_dig_config, action)
+
+            # Extract SDP scan specific properties (all properties except Frequency Correction)
+            # Scanning will be prepared seperately based on the scanning property in the DIG config
+            old_scan_config = {k: v for k, v in (event.old_config or {}).items() 
+                if k not in (tm_dig.PROPERTY_FREQ_CORRECTION, tm_dig.PROPERTY_SCANNING)}
+            new_scan_config = {k: v for k, v in (event.new_config or {}).items() 
+                if k not in (tm_dig.PROPERTY_FREQ_CORRECTION, tm_dig.PROPERTY_SCANNING)}
+            
+            dish = self.telmodel.dsh_mgr.get_dish_by_dig_id(dig_id)
+            dsh_id = dish.dsh_id if dish is not None else None
+
             dig_scanning = event.new_config.get(tm_dig.PROPERTY_SCANNING, None) if event.new_config is not None else None    
             scanning = map.get_property_name_value(tm_dig.PROPERTY_SCANNING, dig_scanning)[1] if dig_scanning is not None else None
 
-            if scanning and obs_id is not None:
-                scanning = {"obs_id": obs_id, "tgt_idx": 0, "freq_scan": 0} # Default to target index 0 and frequency scan index 0 for new scans triggered by digitiser scanning if not specified in the digitiser config
-            
-            new_scan_config["dig_id"] = dig_id
+            # Generate an observation ID flagged as user-initiated (USR) for this scan based on the current datetime and dish/digitiser id
+            obs_id = f"USR-{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H%MZ')}-" + f"{dsh_id if dsh_id is not None else dig_id}"
             new_scan_config["obs_id"] = obs_id
-            new_scan_config["scanning"] = scanning
 
+            # If scanning is turned on we need to provide the observation id and tgt_idx and freq_scan
+            new_scan_config["scanning"] = {'obs_id': obs_id, 'tgt_idx': 0, 'freq_scan': 0} if scanning else scanning
+            
             old_sdp_config = {}
             new_sdp_config = {}
    
             new_sdp_config['scan_config'] = new_scan_config
             new_sdp_config['sdp_id'] = self.telmodel.sdp.sdp_id
 
+            # Update the SDP configuration based on the received config event and trigger any necessary actions
             action = self.update_sdp_configuration(old_sdp_config, new_sdp_config, action) 
 
         elif event.category.upper() == "DSH": # Scheduler Config Event
@@ -282,6 +274,17 @@ class TelescopeManager(App):
             # Start timer to initiate the next scheduled observation if applicable
             self.oet.start_next_obs_timer(action)
 
+        elif event.category.upper() == "OET": # Observation Execution Tool Event
+            _type = event.new_config.get("_type", None) if event.new_config is not None else None
+
+            if _type == "ObservationReset":
+                obs_id = event.new_config.get("obs_id", None) if event.new_config is not None else None
+                obs = self.telmodel.oda.obs_store.get_obs_by_id(obs_id) if obs_id is not None else None
+                logger.info(f"Reset observation requested for observation ID: {obs_id}\n{event.new_config}")
+                
+                # If the related observation was identified, trigger the workflow to move to ABORT
+                if obs is not None:
+                    action.set_obs_transition(obs=obs, transition=ObsTransition.RESET)
         else:
             logger.info(f"Telescope Manager updated configuration received for {event.category}.")
 
@@ -364,16 +367,15 @@ class TelescopeManager(App):
                 logger.debug(f"Telescope Manager received Dish Manager STATUS update: {api_call['value']}")
                 self.telmodel.dsh_mgr = DishManagerModel.from_dict(api_call['value'])
 
-                # If the status update message contains additional observation data, trigger the observation workflow
-                obs_data = api_call.get('obs_data', None)
-                obs_id = obs_data.get('obs_id', None) if obs_data is not None and isinstance(obs_data, dict) else None
-                obs = self.telmodel.oda.obs_store.get_obs_by_id(obs_id) if obs_id is not None else None
+            # If the status update message contains additional observation data, trigger the observation workflow
+            obs_data = api_call.get('obs_data', None)
+            obs_id = obs_data.get('obs_id', None) if obs_data is not None and isinstance(obs_data, dict) else None
+            obs = self.telmodel.oda.obs_store.get_obs_by_id(obs_id) if obs_id is not None else None
                     
-                # If the observation is still in CONFIGURING state, trigger the workflow to attempt to move to READY
-                if obs is not None and obs.obs_state == ObsState.CONFIGURING:
-                    action.set_obs_transition(obs=obs, transition=ObsTransition.CONFIGURE_RESOURCES)
-
-                logger.info(f"Telescope Manager received Dish Manager status update{f' for observation {obs_id}' if obs_id is not None else ''}.")
+            # If the observation is still in CONFIGURING state, trigger the workflow to attempt to move to READY
+            if obs is not None and obs.obs_state == ObsState.CONFIGURING:
+                logger.info(f"Telescope Manager received Dish Manager observation update{f' for observation {obs_id}' if obs_id is not None else ''}.")
+                action.set_obs_transition(obs=obs, transition=ObsTransition.CONFIGURE_RESOURCES)    
 
             # Update the last update timestamp on the Dish Manager model
             self.telmodel.dsh_mgr.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
@@ -629,8 +631,9 @@ class TelescopeManager(App):
                     logger.info(message)
 
                 else:
-                    status, message = tm_sdp.STATUS_ERROR, f"Telescope Manager received SCAN_COMPLETE for unknown or non-scanning observation {obs_id} scan {scan_id}"
-                    logger.warning(message)
+                    # Respond with success even though the observation is not found, as a user may be performing a manual scan via the UI
+                    status, message = tm_sdp.STATUS_SUCCESS, f"Telescope Manager received SCAN_COMPLETE for user-initiated observation {obs_id} scan {scan_id}"
+                    logger.info(message)
 
                 sdp_rsp = self._construct_rsp_to_sdp(status, message, api_msg, api_call)
                 action.set_msg_to_remote(sdp_rsp)
@@ -895,9 +898,10 @@ class TelescopeManager(App):
 
             # If key value is unchanged, skip it
             if old_config and config_key in old_config and old_config[config_key] == config_value:
+                logger.info(f"Telescope Manager skipping unchanged Dish Manager configuration item: {config_key}, value: {config_value}")
                 continue
 
-            logger.info(f"Telescope Manager configuration update for dish {dsh_id} key: {config_key}, value: {config_value}")
+            logger.info(f"Dish Manager configuration update for dish {dsh_id} key: {config_key}, value: {config_value}")
 
             property = value = None
             (property, value) = map.get_property_name_value(config_key, config_value)

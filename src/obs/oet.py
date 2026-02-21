@@ -179,8 +179,20 @@ class ObservationExecutionTool:
             event.obs.obs_state = ObsState.FAULT
 
         elif event.transition == ObsTransition.RESET:
-            event.obs.obs_state = ObsState.IDLE
 
+            # Can only reset observations in ABORTED or FAULT states
+            if event.obs.obs_state in [ObsState.ABORTED, ObsState.FAULT]:
+                # Stop abort timer if active
+                timer_name = f"obs_abort_timer:{event.obs.obs_id}"
+                action.set_timer_action(Action.Timer(name=timer_name, timer_action=Action.Timer.TIMER_STOP))
+
+                # Reset observation state to IDLE
+                event.obs.obs_state = ObsState.IDLE
+                # Try to assign resources for the next scan if possible
+                action.set_obs_transition(obs=event.obs, transition=ObsTransition.ASSIGN_RESOURCES)
+            else:
+                logger.warning(f"Observation Execution Tool ignoring reset for observation {event.obs.obs_id} in state {event.obs.obs_state.name}. " + \
+                    "Reset can only be applied to observations in ABORTED or FAULT states.")
         else:
             logger.warning(f"Observation Execution Tool received unknown observation event transition: {event.transition}")
         
@@ -599,7 +611,7 @@ class ObservationExecutionTool:
         dsh_model = next((dsh for dsh in self.telmodel.dsh_mgr.dish_store.dish_list if dsh.dsh_id == obs.dsh_id), None)
 
         if dsh_model is not None:
-            # Instruct the dish to go to STANDBY_FP mode (ready for configuration)
+            # Instruct the dish to go to STANDBY_FP mode and clear the target
             old_dsh_config = {}
             new_dsh_config = {}
 

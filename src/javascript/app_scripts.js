@@ -472,8 +472,8 @@ function onEditHandler(e) {
   const obsSheet = ss.getSheetByName("DB OBS LIST")
 
   // ---------- DIG00X sheet: Digitiser config ----------
-  if (sheetName === "DIG00X" && col === 4 && row >= 3 && row <= 9) {
-    const jsonStr = generateJSON(sheet, ["A3:B3","C3:D9"]);
+  if (sheetName === "DIG00X" && col === 4 && row >= 3 && row <= 11) {
+    const jsonStr = generateJSON(sheet, ["A3:B3","C3:D11"]);
 
     apiSheet.getRange("B3").setValue(jsonStr);
     Logger.log("Digitiser JSON updated in TM_UI_API B3");
@@ -548,14 +548,17 @@ function onEditHandler(e) {
     const obsRanges = ["A2:B3","A6:B11", "D29:E33"];
     const obsJsonObj = generateJSON(sheet, obsRanges, true);
 
-    let dish_id;
-    // Extract first token of dish_id (before first space)
+    let dsh_id;
+    // Extract first token of dsh_id (before first space)
     if (obsJsonObj.hasOwnProperty("dish_id")) {
       // Ensure it's treated as string
       const text = String(obsJsonObj["dish_id"]);
-      dish_id = text.split(" ")[0];
-      obsJsonObj["dish_id"] = dish_id;
-    } else { dish_id = "<dish not selected>"}
+      dsh_id = text.split(" ")[0];
+      obsJsonObj["dsh_id"] = dsh_id;
+      // remove old key
+      delete obsJsonObj["dish_id"];
+      
+    } else { dsh_id = "<dish not selected>"}
 
     let start_datetime;
 
@@ -571,7 +574,7 @@ function onEditHandler(e) {
     }
 
     // Generate a unique observation id
-    const obs_id = start_datetime + "-" + dish_id;
+    const obs_id = "ODT-" + start_datetime + "-" + dsh_id;
     obsJsonObj["obs_id"] = obs_id
     
     const lastTargetRow = targetSheet.getLastRow();
@@ -645,7 +648,7 @@ function onEditHandler(e) {
     Logger.log(`Observation JSON written to DB OBS LIST row: ${writeRow}`);
 
     // Update consumed Scheduling Blocks
-    updateConsumedBlocks(dish_id)
+    updateConsumedBlocks(dsh_id)
     clearExpiredBlocks()
 
     // Reset the checkbox
@@ -707,11 +710,11 @@ function onEditHandler(e) {
  *
  * Throws an error if the start/end datetimes or block size are invalid.
  */
-function updateConsumedBlocks(dish_id) {
+function updateConsumedBlocks(dsh_id) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName('OBS DESIGN');
 
-  Logger.log("Update Consumed Blocks for Dish ID:"+dish_id)
+  Logger.log("Update Consumed Blocks for Dish ID:"+dsh_id)
 
   const lookup = ss.getSheetByName("Lookup");
   if (!lookup) throw new Error("Sheet 'Lookup' not found.");
@@ -739,7 +742,7 @@ function updateConsumedBlocks(dish_id) {
   // Build output rows
   const rows = [];
   for (let i = 0; i < blocks; i++) {
-    rows.push([dish_id, new Date(start.getTime() + i * blockMS)]);
+    rows.push([dsh_id, new Date(start.getTime() + i * blockMS)]);
   }
 
   // Find first empty row in column AL (col 38)
@@ -853,13 +856,12 @@ function generateJSONFromRanges(sheetName, cellRanges, returnObject = false) {
 function generateObsList() {
   const ss = SpreadsheetApp.getActive();
   const sourceSheet = ss.getSheetByName("DB OBS LIST");
-  const targetSheet = ss.getSheetByName("TM_UI_API");  
-  const targetCell = targetSheet.getRange("D2");
+  const targetSheet = ss.getSheetByName("TM_UI_API++");  
+  const targetCell = targetSheet.getRange("M2");
 
   // Get all values in column A (JSON objects)
-  const values = sourceSheet.getRange("A2:A").getValues(); // skip header
-  
-  // Parse all non-empty JSON objects
+  const values = sourceSheet.getRange("A2:A").getValues();
+
   const obsList = [];
   for (const [cell] of values) {
     if (cell && cell.toString().trim() !== "") {
@@ -877,15 +879,27 @@ function generateObsList() {
     obs_list: obsList,
     last_update: {
       "_type": "datetime",
-      "value": new Date().toISOString()  // valid ISO datetime
+      "value": new Date().toISOString()
     }
   };
 
-  const obsListJSON = JSON.stringify(result, null, 2)
+  // 🔥 Flatten directly (no stringify!)
+  const flattened = flattenObject(result);
 
-  // Write JSON back to the sheet
-  targetCell.setValue(obsListJSON);
-  return obsListJSON
+  // Clear old output area first (important!)
+  targetSheet.getRange(
+    targetCell.getRow(),
+    targetCell.getColumn(),
+    targetSheet.getMaxRows(),
+    2
+  ).clearContent();
+
+  // Write flattened rows
+  targetSheet
+    .getRange(targetCell.getRow(), targetCell.getColumn(), flattened.length, 2)
+    .setValues(flattened);
+
+  return flattened;
 }
 
 /**
@@ -1396,7 +1410,7 @@ function get_simbad_otypes() {
  * Test2 of get_search
  */
 function test2() {
-  results = get_search("SELECT TOP 50000 b.main_id, b.ra, b.dec, MIN(i1.id) FROM basic AS b JOIN ident AS i1 ON b.oid = i1.oidref JOIN ident AS i2 ON b.oid = i2.oidref  WHERE i1.id LIKE '%'  AND i2.id LIKE 'M %'  GROUP BY b.main_id, b.ra, b.dec ORDER BY dec ASC")
+  results = get_search("SELECT TOP 50000 b.main_id, b.ra, b.dec, MIN(i1.id) FROM basic AS b JOIN ident AS i1 ON b.oid = i1.oidref JOIN ident AS i2 ON b.oid = i2.oidref  WHERE i1.id LIKE '%'  AND i2.id LIKE 'M %'  GROUP BY b.main_id, b.ra, b.dec ORDER BY dec DESC")
 }
 
 /**
@@ -1488,60 +1502,41 @@ function capitalize(s) {
  * @return {Array<Array<string>>} A 2D array [["key", "value"], ...]
  * @customfunction
  */
-function flattenJSON(jsonText) {
-  try {
-    if (!jsonText) return [["Error", "Empty input"]];
+function flattenObject(obj) {
+  if (!obj) return [["Error", "Empty input"]];
 
-    // Parse JSON safely
-    const obj = JSON.parse(jsonText);
-    
-    // Collect all key-value pairs
-    const results = [];
-    
-    /**
-     * Recursively flatten an object or array
-     * @param {*} value - Current value to process
-     * @param {string} prefix - Current key path in dot notation
-     */
-    function flatten(value, prefix = '') {
-      if (value === null || value === undefined) {
-        // Leaf node: null or undefined
-        results.push([prefix, String(value)]);
-      } else if (Array.isArray(value)) {
-        // Array: recurse into each element with [index] notation
-        if (value.length === 0) {
-          results.push([prefix, '[]']);
-        } else {
-          value.forEach((item, index) => {
-            const newKey = prefix ? `${prefix}[${index}]` : `[${index}]`;
-            flatten(item, newKey);
-          });
-        }
-      } else if (typeof value === 'object') {
-        // Object: recurse into each property with dot notation
-        const keys = Object.keys(value);
-        if (keys.length === 0) {
-          results.push([prefix, '{}']);
-        } else {
-          keys.forEach(key => {
-            const newKey = prefix ? `${prefix}.${key}` : key;
-            flatten(value[key], newKey);
-          });
-        }
+  const results = [];
+
+  function flatten(value, prefix = '') {
+    if (value === null || value === undefined) {
+      results.push([prefix, String(value)]);
+    } else if (Array.isArray(value)) {
+      if (value.length === 0) {
+        results.push([prefix, '[]']);
       } else {
-        // Leaf node: primitive value (string, number, boolean)
-        results.push([prefix, String(value)]);
+        value.forEach((item, index) => {
+          const newKey = prefix ? `${prefix}[${index}]` : `[${index}]`;
+          flatten(item, newKey);
+        });
       }
+    } else if (typeof value === 'object') {
+      const keys = Object.keys(value);
+      if (keys.length === 0) {
+        results.push([prefix, '{}']);
+      } else {
+        keys.forEach(key => {
+          const newKey = prefix ? `${prefix}.${key}` : key;
+          flatten(value[key], newKey);
+        });
+      }
+    } else {
+      results.push([prefix, String(value)]);
     }
-    
-    flatten(obj);
-    
-    // Add header row
-    return [["Key", "Value"]].concat(results);
-
-  } catch (err) {
-    return [["Error", "Invalid JSON: " + err.message]];
   }
+
+  flatten(obj);
+
+  return results;
 }
 
 /**

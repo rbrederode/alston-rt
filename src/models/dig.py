@@ -29,8 +29,8 @@ class DigitiserModel(BaseModel):
         "bandwidth": And(float, lambda v: v >= 0.0),
         "center_freq": And(float, lambda v: v >= 0.0),
         "freq_correction": And(int, lambda v: -1000 <= v <= 1000),
-        "channels": And(int, lambda v: v >= 0),
-        "scan_duration": And(int, lambda v: v >= 0),
+        "channels": And(int, lambda v: v >= 0),                     # Digitiser property of interest to the Science Data Processor
+        "scan_duration": And(int, lambda v: v >= 0),                # Digitiser property of interest to the Science Data Processor (in seconds)
         "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "sdp_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "sdr_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),

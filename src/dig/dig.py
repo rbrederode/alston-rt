@@ -524,11 +524,12 @@ class Digitiser(App):
             {"property": "sample_rate", "value": self.dig_model.sample_rate},     # Hz
             {"property": "bandwidth", "value": self.dig_model.bandwidth},         # MHz
             {"property": "gain", "value": self.dig_model.gain},                   # dB
-             {"property": "read_counter", "value": read_counter},
+            {"property": "read_counter", "value": read_counter},
             {"property": "read_start", "value": datetime.fromtimestamp(read_start, timezone.utc).isoformat()},
             {"property": "read_end", "value": datetime.fromtimestamp(read_end, timezone.utc).isoformat()},
+            {"property": "scanning", "value": self.dig_model.scanning}
            ]   
-
+  
         sdp_adv.set_api_call({
             "msg_type": "adv", 
             "action_code": "samples", 
