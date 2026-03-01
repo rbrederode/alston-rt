@@ -55,6 +55,8 @@ PROPERTY_SCAN_COMPLETE  = 'scan_complete'    # Notify Telescope Manager that a s
 PROPERTY_OBS_RESET      = 'obs_reset'        # Notify Science Data Processor to reset observation data
 PROPERTY_OBS_COMPLETE   = 'obs_complete'     # Notify Science Data Processor that an observation has completed
 PROPERTY_SIGNAL_DISPLAY = 'signal_display'   # Control the signal display (show/hide) for a digitiser
+PROPERTY_CHANNELS       = 'channels'         # Number of spectral channels (part of scan_config)
+PROPERTY_SCAN_DURATION  = 'scan_duration'    # Scan duration in seconds (part of scan_config)
 
 PROPERTIES = (
     PROPERTY_DEBUG,

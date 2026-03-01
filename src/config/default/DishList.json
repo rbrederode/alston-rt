@@ -57,7 +57,7 @@
             "feed": {
                 "_type": "enum.IntEnum",
                 "instance": "Feed",
-                "value": "NONE"
+                "value": "H3T_1420"
             },
             "dig_id": "dig002",
             "mode": {
@@ -86,12 +86,12 @@
                 "_type": "MD01Config",
                 "host": "192.168.0.2",
                 "port": 65000,
-                "stow_alt": 90.0,
-                "stow_az": 0.0,
+                "stow_alt": 80.0,
+                "stow_az": 10.0,
                 "offset_alt": 0.0,
                 "offset_az": 0.0,
-                "min_alt": 0.0,
-                "max_alt": 90.0,
+                "min_alt": 1.0,
+                "max_alt": 89.0,
                 "close_enough": 0.1,
                 "last_update": {
                     "_type": "datetime",

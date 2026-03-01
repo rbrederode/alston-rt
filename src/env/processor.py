@@ -50,7 +50,7 @@ class Processor(threading.Thread):
         return self._event
 
     def get_current_event_processing_time(self):
-        return time.time() - self._event_timestamp if self._event_timestamp else None
+        return (time.time() - self._event_timestamp) * 1000 if self._event_timestamp else None
 
     def run(self):
         """ Thread run method to process events from the queue 

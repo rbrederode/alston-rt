@@ -20,6 +20,8 @@ SDP -[#green]> Digitiser: Status SUCCESS
 ...Scan Duration seconds later...
 SDP -[#blue]> TM: Set Scan Complete
 note right: Scan fully loaded
+SDP -> SDP: Create Scan
+SDP -> SDP: Load Samples
 TM -[#green]> SDP: Status SUCCESS
 TM -> OET: Scan Completed
 == ObsState READY ==

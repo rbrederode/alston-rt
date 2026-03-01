@@ -269,7 +269,7 @@ class BaseModel:
         from models.proc import ProcessorModel
         from models.scan import ScanModel, ScanState
         from models.sdp import ScienceDataProcessorModel
-        from models.target import TargetModel, PointingType, TargetConfig, TargetScanSet
+        from models.target import TargetModel, PointingType, OffsetScan, FivePointScan, TargetConfig, TargetScanSet
         from models.tm import TelescopeManagerModel, ResourceAllocations, Allocation, AllocationState
         from models.ui import UIDriverType, UIDriver
         
@@ -336,6 +336,9 @@ class BaseModel:
                     return Feed[v]
                 else:
                     return Feed(int(v))
+            elif model_type == "FivePointScan":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return FivePointScan(**deserialized_fields)
             elif model_type == "MD01Config":
                 # Import lazily to avoid package import errors when MD01 driver is not present
                 from dsh.drivers.md01.md01_model import MD01Config
@@ -356,6 +359,9 @@ class BaseModel:
             elif model_type == "ODAModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ODAModel(**deserialized_fields)
+            elif model_type == "OffsetScan":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return OffsetScan(**deserialized_fields)
             elif model_type == "PECModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return PECModel(**deserialized_fields)

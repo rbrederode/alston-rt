@@ -33,6 +33,78 @@ class PointingType(enum.IntEnum):
     OFFSET_SCAN = 3           # Offset scan over the target
     FIVE_POINT_SCAN = 4       # Center point and 4 offset points e.g. for beam mapping
 
+class OffsetScan(BaseModel):
+    """ A class representing the parameters for an offset or five point scan over a target.
+        Angle is the position angle of the scan in the tangent plane 
+            0°  - North-South scan
+            90° - West-East scan
+            180° - South-North scan
+            270° - East-West scan
+
+        Example: To scan 5 degrees over the Sun in 60 seconds.
+            offset = -2.5 (start 2.5 degrees before the Sun)
+            rate = 0.0833 (5 degrees in 60 seconds)
+            angle = 90.0 (West-East scan)
+
+    """
+
+    schema = Schema({
+        "_type": And(str, lambda v: v == "OffsetScan"),
+        "offset": And(float, lambda v: isinstance(v, float)),                               # Offset in degrees for offset scans or five-point scans (e.g. 0.1 degree)
+        "rate": And(float, lambda v: isinstance(v, float)),                                 # Slew rate in degrees per second for offset scans or five-point scans (e.g. 0.5 degree/sec)
+        "angle": And(float, lambda v: isinstance(v, float)),                                # Angle in degrees for offset scans or five-point scans (e.g. 0.0 degree)
+        "start": Or(None, And(datetime, lambda v: v is None or isinstance(v, datetime))),   # Scan start date and time
+    })
+
+    def __init__(self, **kwargs):
+
+        # Default values
+        defaults = {
+            "_type": "OffsetScan",
+            "offset": 1.0,                          # Offset in degrees for offset scans or five-point scans (e.g. 0.1 degree)
+            "rate": 1.0,                            # Slew rate in degrees per second for offset scans or five-point scans (e.g. 0.5 degree/sec)
+            "angle": 0.0,                           # Angle in degrees for offset scans or five-point scans (e.g. 0.0 degree)
+            "start": None                           # Scan start date and time
+        }
+
+        # Apply defaults if not provided in kwargs
+        for key, value in defaults.items():
+            if key not in kwargs:
+                kwargs.setdefault(key, value)
+
+        super().__init__(**kwargs)
+
+class FivePointScan(BaseModel):
+    """ A class representing the parameters for a five point scan over a target.
+        Five points: Centre, N, S, E, W
+        Scan duration seconds will be spent on each point.
+        Offset is the distance in degrees from the center to the N, S, E and W points.
+        Offset is usually HPBW (deg) = 70 * (wavelength (m) / dish diameter (m)) for beam mapping.
+        Compute offsets using directional_offset_by() to maintain accurate great-circle geometry
+    """
+
+    schema = Schema({
+        "_type": And(str, lambda v: v == "FivePointScan"),
+        "offset": And(float, lambda v: isinstance(v, float)), # Offset in degrees for five-point scans (e.g. 0.1 degree)
+        "direction": Or(None, And(str, lambda v: isinstance(v, str) and v in ["C", "N", "S", "E", "W"])),  # Direction C, N, S, E, W for the five points
+    })
+
+    def __init__(self, **kwargs):
+
+        # Default values
+        defaults = {
+            "_type": "FivePointScan",
+            "offset": 10.0,                          # Offset in degrees for five-point scans (e.g. 0.1 degree)
+            "direction": None                        # Direction C, N, S, E, W for the five points (default to Center point "C")
+         }
+
+        # Apply defaults if not provided in kwargs
+        for key, value in defaults.items():
+            if key not in kwargs:
+                kwargs.setdefault(key, value)
+
+        super().__init__(**kwargs)
+
 class TargetModel(BaseModel):
     """A class representing a target model."""
 
@@ -41,10 +113,11 @@ class TargetModel(BaseModel):
         "obs_id": Or(None, And(str, lambda v: isinstance(v, str))),                      # Observation identifier (see Observation model)
         "tgt_idx": And(int, lambda v: v >= -1),                                          # Target list index (-1 = not set, 0-based)
 
-        "id": Or(None, And(str, lambda v: isinstance(v, str))),                          # Target identifier e.g. "Sun", "Moon", "Mars", "Vega"
-        "pointing": And(PointingType, lambda v: isinstance(v, PointingType)),            # Target type
+        "id": Or(None, And(str, lambda v: isinstance(v, str))),                          # Target identifier e.g. "Sun", "Moon", "M82", "Vega"
+        "pointing": And(PointingType, lambda v: isinstance(v, PointingType)),            # Pointing type
         "sky_coord": Or(None, lambda v: v is None or isinstance(v, SkyCoord)),           # Sky coordinates (any frame)
         "altaz": Or(None, dict, lambda v: v is None or isinstance(v, (dict, SkyCoord, AltAz))), # Alt-az coordinates (SkyCoord or AltAz)
+        "scan": Or(None, OffsetScan, FivePointScan, lambda v: v is None or isinstance(v,(OffsetScan, FivePointScan)))    # Offset or five-point scan parameters (e.g. offsets)
     })
 
     allowed_transitions = {}
@@ -61,6 +134,7 @@ class TargetModel(BaseModel):
             "pointing": PointingType.DRIFT_SCAN,    # Default to drift scan pointing
             "sky_coord": None,                      # Used for sidereal targets (ra,dec or l,b)
             "altaz": None,                          # Used for non-sidereal targets e.g. solar, terrestrial or satellite targets
+            "scan": None                            # Offset or five-point scan parameters (e.g. offset positions and durations)
         }
 
         # Apply defaults if not provided in kwargs
@@ -69,6 +143,17 @@ class TargetModel(BaseModel):
                 kwargs.setdefault(key, value)
 
         super().__init__(**kwargs)
+
+    def __str__(self):
+
+        if self.id is not None:
+            return f"Id={self.id}"
+        elif self.sky_coord is not None:
+            return f"{self.pointing.name}(ra={self.sky_coord.ra}, dec={self.sky_coord.dec})"
+        elif self.altaz is not None:
+            return f"{self.pointing.name}(alt={self.altaz.get('alt')}, az={self.altaz.get('az')})"
+        else:
+            return f"Undefined Target with pointing type {self.pointing}"
 
 class TargetConfig(BaseModel):
     """A class representing a target configuration."""
@@ -221,7 +306,7 @@ class TargetScanSet(BaseModel):
         self.freq_min = tgt_config.center_freq - tgt_config.bandwidth / 2 - tgt_config.sample_rate * (1-USABLE_BANDWIDTH)/2  # Start of frequency scanning
         self.freq_max = tgt_config.center_freq + tgt_config.bandwidth / 2 + tgt_config.sample_rate * (1-USABLE_BANDWIDTH)/2  # End of frequency scanning
 
-        logger.info(f"Target determining scans for TargetConfig idx={self.tgt_idx} from {self.freq_min/1e6:.2f} MHz to {self.freq_max/1e6:.2f} MHz with Sample Rate: {tgt_config.sample_rate/1e6:.2f} MHz and Duration: {tgt_config.integration_time} sec(s)")
+        logger.info(f"Target in {obs_id} determining scans for TargetConfig idx={self.tgt_idx} from {self.freq_min/1e6:.2f} MHz to {self.freq_max/1e6:.2f} MHz with Sample Rate: {tgt_config.sample_rate/1e6:.2f} MHz and Duration: {tgt_config.integration_time} sec(s)")
 
         # Calculate the number of frequency scans to cover the bandwidth (ceiling of bandwidth/sample_rate)
         self.freq_scans = int(-((self.freq_max-self.freq_min)) // -(tgt_config.sample_rate * USABLE_BANDWIDTH))  # Ceiling division
@@ -229,8 +314,8 @@ class TargetScanSet(BaseModel):
         self.scan_iterations = int(np.ceil(tgt_config.integration_time / MAX_SCAN_DURATION_SEC))  # Number of iterations of a frequency scan, # e.g. 5 minutes of data will be 5 scans of 1 minute each
         self.scan_duration = math.ceil(tgt_config.integration_time / self.scan_iterations) if self.scan_iterations > 1 else tgt_config.integration_time  # Duration of each scan in seconds
 
-        logger.info(f"Target Frequency-Iteration Scans: {self.freq_scans}-{self.scan_iterations} each of Scan Duration: {self.scan_duration} sec(s)")
-        logger.info(f"Target Sample Rate: {tgt_config.sample_rate} Hz, Overlap: {self.freq_overlap:.2f} Hz")
+        logger.info(f"Target in {obs_id} Frequency-Iteration Scans: {self.freq_scans}-{self.scan_iterations} each of Scan Duration: {self.scan_duration} sec(s)")
+        logger.info(f"Target in {obs_id} Sample Rate: {tgt_config.sample_rate} Hz, Overlap: {self.freq_overlap:.2f} Hz")
         
         # Initialise the scans list
         self.scans = []
@@ -265,6 +350,18 @@ class TargetScanSet(BaseModel):
 if __name__ == "__main__":
 
     import pprint
+    print("="*40)
+    print("Offset Scan Test")
+    print("="*40)
+    offsetscan001 = OffsetScan(
+        offset=0.1,
+        rate=0.5,
+        start=datetime.now(timezone.utc)
+    )
+    print('='*40)
+    print("OffsetScan Test")
+    print('='*40)
+    pprint.pprint(offsetscan001.to_dict())
 
     coord = SkyCoord(ra="18h36m56.33635s", dec="+38d47m01.2802s", frame="icrs")
     altaz = {"alt": 45.0*u.deg, "az": 180.0*u.deg}

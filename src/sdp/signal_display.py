@@ -125,6 +125,12 @@ class SignalDisplay:
     def set_is_active(self, active: bool):
         """ Set whether this signal display instance is active """
         self.is_active = active
+
+        # Clear scan and load if deactivated 
+        if not active:
+            self.scan = None
+            self.load = None
+            self.sec = None
     
     def set_scan(self, scan : Scan, load: Scan):
         """ # Initialize the figure and axes of the signal displays for a given scan

@@ -10,6 +10,9 @@ import time
 import threading
 
 from api import tm_dm
+from dsh.dish_display import DishDisplay
+from dsh.drivers.driver import DishDriver
+from dsh.drivers.md01.md01_driver import MD01Driver
 from env.app import App
 from ipc.message import APIMessage
 from ipc.action import Action
@@ -17,8 +20,6 @@ from ipc.message import AppMessage
 from ipc.tcp_client import TCPClient
 from ipc.tcp_server import TCPServer
 from models.comms import CommunicationStatus, InterfaceType
-from dsh.drivers.driver import DishDriver
-from dsh.drivers.md01.md01_driver import MD01Driver
 from models.dsh import DishManagerModel, DriverType, PointingState, DishMode, Capability
 from models.health import HealthState
 from models.obs import Observation
@@ -56,6 +57,7 @@ class DM(App):
         # Interfaces to each respective dish need to be managed by the respective dish drivers
         self.dish_drivers = {}        # Dictionary to hold a dish driver for each dish
         self.dish_locks = {}          # Dictionary of threading locks, one per dish
+        self.dish_displays = {}       # Dictionary to hold DishDisplay objects for each dish
 
     def add_args(self, arg_parser): 
         """ Specifies the Dish Manager's command line arguments.
@@ -180,7 +182,7 @@ class DM(App):
         """ Processes api messages received on the Telescope Manager service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
-        logger.info(f"DM received Telescope Manager {api_call['msg_type']} message with action code: {api_call['action_code']}")
+        logger.info(f"DM received Telescope Manager {api_call['msg_type']} msg, action code: {api_call['action_code']}, property: {api_call.get('property','')}")
 
         dish_id = api_msg.get('entity', None)
         dish_driver = self.dish_drivers.get(dish_id, None) if dish_id is not None else None
@@ -270,12 +272,10 @@ class DM(App):
                     logger.error(msg + f"\n{target.to_dict() if target is not None else 'No Target'}")
                     rsp_msg = self._construct_rsp_to_tm(status=tm_dm.STATUS_ERROR, message=msg, api_msg=api_msg, api_call=api_call)
                     action.set_msg_to_remote(rsp_msg)
-                    return action
-                finally:
-                    # Clearing the target tuple in the dish model does not call the driver subclass
                     dish_driver.clear_target_tuple()
+                    return action
 
-            msg = f"DM set new target {target_id if target_id is not None else 'None'} for Dish {dish_id}."
+            msg = f"DM set target {target_id if target_id is not None else 'None'} for Dish {dish_id}."
             logger.info(msg + f"\n{target.to_dict() if target is not None else 'No Target'}")
             rsp_msg = self._construct_rsp_to_tm(status=tm_dm.STATUS_SUCCESS, message=msg, api_msg=api_msg, api_call=api_call)            
             action.set_msg_to_remote(rsp_msg)
@@ -323,22 +323,37 @@ class DM(App):
                 # If the dish pointing state transitioned to READY, it means we have reached the desired slew position
                 # Pointing state would be SLEW if still slewing or TRACK if already tracking (if necessary)
                 if target is not None and dish_driver.get_pointing_state() == PointingState.READY:
-                    logger.info(f"DM reached slew target and now in READY state for target {target.id} acquisition in observation {target.obs_id} with Dish {dish_id}.")
+                    logger.info(f"DM reached slew target and is now in READY state for target {target} acquisition in observation {target.obs_id} with Dish {dish_id}.")
 
                     # If we need to track the target, tell the driver to track to it
                     if target.pointing in [PointingType.SIDEREAL_TRACK, PointingType.NON_SIDEREAL_TRACK]:                         
                         try:
                             dish_driver.track()
                         except XBase as e:
-                            logger.error(f"DM failed to track for Dish {dish_id} to target {target.id} in observation {target.obs_id}: {e}")
-                    
+                            logger.error(f"DM failed to track for Dish {dish_id} to target {target} in observation {target.obs_id}: {e}")
+
+                    # Else if we are doing an offset or five point scan, tell the driver to scan it
+                    elif target.pointing in [PointingType.OFFSET_SCAN, PointingType.FIVE_POINT_SCAN]:
+                        target.scan.start = target.scan.start if target.scan.start is not None else datetime.now(timezone.utc)
+                        try:
+                            dish_driver.scan()
+                        except XBase as e:
+                            logger.error(f"DM failed to scan for Dish {dish_id} for target {target} in observation {target.obs_id}: {e}")
+
                     self._send_status_adv_to_tm(action, target_id, target)
 
                 elif target is not None and dish_driver.get_pointing_state() == PointingState.TRACK:                     
                     try:
                         dish_driver.track()  # Continue tracking the target
                     except XBase as e:
-                        logger.error(f"DM failed to track for Dish {dish_id} to target {target.id} in observation {target.obs_id}: {e}")
+                        logger.error(f"DM failed to track for Dish {dish_id} to target {target} in observation {target.obs_id}: {e}")
+                
+                elif target is not None and dish_driver.get_pointing_state() == PointingState.SCAN:                     
+                    try:
+                        dish_driver.scan()  # Continue scanning the target
+                    except XBase as e:
+                        logger.error(f"DM failed to scan for Dish {dish_id} to target {target} in observation {target.obs_id}: {e}")
+
 
         # Restart the driver timer for the dish    
         action.set_timer_action(Action.Timer(
@@ -436,9 +451,9 @@ class DM(App):
         if api_call.get('value') is not None:
             tm_rsp_api_call["value"] = api_call['value']
 
-        # Only include obs_data if the status indicates an Error
-        # This will trigger an OET workflow transition and review
-        if status == tm_dm.STATUS_ERROR and api_call.get('obs_data') is not None:
+        # Exclude obs_data on Sucessful Set Target as this will trigger an OET workflow transition and review
+        # Set Target takes time to slew and acquire the target, so a status update is initiated to communicate this event
+        if status == tm_dm.STATUS_ERROR or api_call.get('property') != tm_dm.PROPERTY_TARGET:
             tm_rsp_api_call["obs_data"] = api_call['obs_data']
 
         if message is not None:
@@ -488,9 +503,22 @@ def main():
 
     try:
         while True:
+
+            for dish_id, dish_driver in dm.dish_drivers.items():
+
+                # If there is no signal display for this digitiser, create a new active signal display
+                if dish_id not in dm.dish_displays or dm.dish_displays[dish_id] is None:
+                    logger.info(f"Dish Manager creating new DishDisplay for dish {dish_id}")
+                    dm.dish_displays[dish_id] = DishDisplay(driver=dish_driver)
+
+                if not (dm.dish_displays[dish_id].get_is_active()):
+                    continue # Dish display for dish has been deactivated, continue to next dish
+
+                dm.dish_displays[dish_id].display()
+
             # Main thread does nothing currently apart from sleeping
             # All processing is in the DM app processor thread
-            time.sleep(0.1)
+            time.sleep(1) # Update every second
                 
     except KeyboardInterrupt:
         pass

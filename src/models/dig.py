@@ -29,8 +29,8 @@ class DigitiserModel(BaseModel):
         "bandwidth": And(float, lambda v: v >= 0.0),
         "center_freq": And(float, lambda v: v >= 0.0),
         "freq_correction": And(int, lambda v: -1000 <= v <= 1000),
-        "channels": And(int, lambda v: v >= 0),
-        "scan_duration": And(int, lambda v: v >= 0),
+        "channels": And(int, lambda v: v >= 0),                     # Digitiser property of interest to the Science Data Processor
+        "scan_duration": And(int, lambda v: v >= 0),                # Digitiser property of interest to the Science Data Processor (in seconds)
         "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "sdp_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "sdr_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
@@ -118,6 +118,14 @@ class DigitiserList(BaseModel):
         """
         for dig in self.dig_list:
             if dig.dig_id == dig_id:
+                return dig
+        return None
+
+    def get_dig_by_obs_id(self, obs_id: str) -> DigitiserModel:
+        """ Retrieve a DigitiserModel object from the dig_list that is currently scanning for a given obs_id.
+        """
+        for dig in self.dig_list:
+            if isinstance(dig.scanning, dict) and dig.scanning.get("obs_id") == obs_id:
                 return dig
         return None
 

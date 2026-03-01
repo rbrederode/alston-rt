@@ -30,10 +30,17 @@ class ObservationExecutionTool:
     def __init__(self, telmodel:TelescopeModel, tm:"TelescopeManager"):
         
         # Lock for thread-safe allocation of shared resources
-        self._rlock = threading.RLock()  
+        self._rlock = threading.RLock()
+        self._obs_locks = {}  # Dictionary of locks for individual observations, keyed by obs_id
 
         self.telmodel = telmodel        # Telescope Model
         self.tm = tm                    # Telescope Manager  
+
+    def _get_obs_lock(self, obs_id: str) -> threading.RLock:
+        """Get or create a threading lock for a specific observation ID."""
+        if obs_id not in self._obs_locks:
+            self._obs_locks[obs_id] = threading.RLock()
+        return self._obs_locks[obs_id]
 
     def process_obs_event(self, event):
         """ Processes a workflow transition on an observation.
@@ -44,145 +51,168 @@ class ObservationExecutionTool:
 
         action = Action()
 
-        # Handle observation event transitions
-        if event.transition == ObsTransition.START:
+        # Get the threading lock specific to this observation
+        obs_lock = self._get_obs_lock(event.obs.obs_id)
+        with obs_lock:
 
-            # Transition to IDLE where resources can be assigned or released
-            event.obs.obs_state = ObsState.IDLE
+            # Handle observation event transitions
+            if event.transition == ObsTransition.START:
 
-            # Determine the required scans for each target in the observation
-            event.obs.determine_scans()
-            action.set_obs_transition(obs=event.obs, transition=ObsTransition.ASSIGN_RESOURCES)
+                # Transition to IDLE where resources can be assigned or released
+                event.obs.obs_state = ObsState.IDLE
 
-        elif event.transition == ObsTransition.ASSIGN_RESOURCES:
+                # Determine the required scans for each target in the observation
+                event.obs.determine_scans()
+                action.set_obs_transition(obs=event.obs, transition=ObsTransition.ASSIGN_RESOURCES)
 
-            event.obs.obs_state = ObsState.IDLE
-            
-            # Grant resources for this observation if possible, otherwise request resources i.e. get in the queue
-            # Resource availability will be checked each time this method is called, resources will only be requested once 
-            # Returns true if all resources were granted, false if any resource had to be requested
-            if self.assign_resources(event.obs, action):
-                action.set_obs_transition(obs=event.obs, transition=ObsTransition.CONFIGURE_RESOURCES)
-            else:
-                # Resources not available, observation remains in IDLE state waiting for resources to be released by other observations
-                logger.info(f"Observation {event.obs.obs_id} blocked waiting for resources.")
+            elif event.transition == ObsTransition.ASSIGN_RESOURCES:
 
-        elif event.transition == ObsTransition.RELEASE_RESOURCES:
+                event.obs.obs_state = ObsState.IDLE
+                
+                # Grant resources for this observation if possible, otherwise request resources i.e. get in the queue
+                # Resource availability will be checked each time this method is called, resources will only be requested once 
+                # Returns true if all resources were granted, false if any resource had to be requested
+                if self.assign_resources(event.obs, action):
+                    action.set_obs_transition(obs=event.obs, transition=ObsTransition.CONFIGURE_RESOURCES)
+                else:
+                    # Resources not available, observation remains in IDLE state waiting for resources to be released by other observations
+                    logger.info(f"Observation {event.obs.obs_id} blocked waiting for resources.")
 
-            event.obs.obs_state = ObsState.IDLE
+            elif event.transition == ObsTransition.RELEASE_RESOURCES:
 
-            # Release resources for this observation
-            # Returns true if at least one active resource was released, false otherwise
-            if self.release_resources(event.obs, action):
+                event.obs.obs_state = ObsState.IDLE
 
-                now = datetime.now(timezone.utc)
-                # Find observations with ObsState = IDLE that should be observing now
-                waiting_obs = [obs for obs in self.telmodel.oda.obs_store.obs_list if obs.obs_state == ObsState.IDLE and obs.scheduling_block_start <= now and obs.scheduling_block_end > now]
+                # Release resources for this observation
+                # Returns true if at least one active resource was released, false otherwise
+                if self.release_resources(event.obs, action):
 
-                # Check if there are other observations waiting for the same resources just released so that they can be assigned
-                for obs in waiting_obs:
-                    if obs.obs_id != event.obs.obs_id and obs.dsh_id == event.obs.dsh_id and obs.dig_id == event.obs.dig_id:
-                        action.set_obs_transition(obs=obs, transition=ObsTransition.ASSIGN_RESOURCES)
+                    now = datetime.now(timezone.utc)
+                    # Find observations with ObsState = IDLE that should be observing now
+                    waiting_obs = [obs for obs in self.telmodel.oda.obs_store.obs_list if obs.obs_state == ObsState.IDLE and obs.scheduling_block_start <= now and obs.scheduling_block_end > now]
 
-            # Save current observation state to disk
-            event.obs.save_to_disk(self.telmodel.get_scan_store_dir())
+                    # Check if there are other observations waiting for the same resources just released so that they can be assigned
+                    for obs in waiting_obs:
+                        if obs.obs_id != event.obs.obs_id and obs.dsh_id == event.obs.dsh_id and obs.dig_id == event.obs.dig_id:
+                            action.set_obs_transition(obs=obs, transition=ObsTransition.ASSIGN_RESOURCES)
 
-        elif event.transition == ObsTransition.CONFIGURE_RESOURCES:
+                # Save current observation state to disk
+                event.obs.save_to_disk(self.telmodel.get_scan_store_dir())
 
-            event.obs.obs_state = ObsState.CONFIGURING
-            timer_name = f"obs_configuring_timer:{event.obs.obs_id}"
+            elif event.transition == ObsTransition.CONFIGURE_RESOURCES:
 
-            # Determine outstanding configuration actions for this observation
-            # Returns true if all resources are already configured, false if any resource still requires configuration
-            if self.configure_resources(event.obs, action):
-                action.set_obs_transition(obs=event.obs, transition=ObsTransition.READY)
-                action.set_timer_action(Action.Timer(name=timer_name, timer_action=Action.Timer.TIMER_STOP))
-            else:
+                event.obs.obs_state = ObsState.CONFIGURING
+                timer_name = f"obs_configuring_timer:{event.obs.obs_id}"
 
-                # Start configuration timer for this observation if not already active
-                if not any(timer.active for timer in Timer.manager.get_timers_by_name(timer_name)):
+                # Determine outstanding configuration actions for this observation
+                # Returns true if all resources are already configured, false if any resource still requires configuration
+                if self.configure_resources(event.obs, action):
+                    action.set_obs_transition(obs=event.obs, transition=ObsTransition.READY)
+                    action.set_timer_action(Action.Timer(name=timer_name, timer_action=Action.Timer.TIMER_STOP))
+                else:
+
+                    # Start configuration timer for this observation if not already active
+                    if not any(timer.active for timer in Timer.manager.get_timers_by_name(timer_name)):
                     
-                    action.set_timer_action(Action.Timer(
-                        name=timer_name, 
-                        timer_action=event.obs.timeout_ms_config, 
-                        echo_data=event.obs))
-        
-        elif event.transition == ObsTransition.READY:
-            event.obs.obs_state = ObsState.READY
-
-            # Attempt to start scanning, returns true if scanning successfully requested, false otherwise
-            if self.start_scanning(event.obs, action):
-                action.set_obs_transition(obs=event.obs, transition=ObsTransition.SCAN_STARTED)
-
-        elif event.transition == ObsTransition.SCAN_STARTED:
-
-            event.obs.obs_state = ObsState.SCANNING
-            timer_name = f"obs_scanning_timer:{event.obs.obs_id}"
-        
-            # Start a scan timer in case the scan exceeds its expected duration
-            action.set_timer_action(Action.Timer(
-                name=timer_name, 
-                timer_action=event.obs.timeout_ms_scan, 
-                echo_data=event.obs))
-
-        elif event.transition == ObsTransition.SCAN_COMPLETED:
-
-            event.obs.obs_state = ObsState.READY
-
-            # Save current observation state to disk
-            event.obs.save_to_disk(self.telmodel.get_scan_store_dir())
-
-            # Stop the scanning timer
-            timer_name = f"obs_scanning_timer:{event.obs.obs_id}"
-            action.set_timer_action(Action.Timer(name=timer_name, timer_action=Action.Timer.TIMER_STOP))
-
-            # If the observation is complete, stop scanning and release resources
-            if self.complete_scan(event.obs, action):
-                self.stop_scanning(event.obs, action)
-                action.set_obs_transition(obs=event.obs, transition=ObsTransition.RELEASE_RESOURCES)
+                        action.set_timer_action(Action.Timer(
+                            name=timer_name, 
+                            timer_action=event.obs.timeout_ms_config, 
+                            echo_data=event.obs))
             
-            # If the observation is not complete, prepare for the next scan
-            # Workflow will transition to SCAN_STARTED or CONFIGURE_RESOURCES as needed within complete_scan()  
+            elif event.transition == ObsTransition.READY:
+                event.obs.obs_state = ObsState.READY
 
-        elif event.transition == ObsTransition.SCAN_ENDED:
-            event.obs.obs_state = ObsState.READY
+                # Attempt to start scanning, returns true if scanning successfully requested, false otherwise
+                if self.start_scanning(event.obs, action):
+                    action.set_obs_transition(obs=event.obs, transition=ObsTransition.SCAN_STARTED)
 
-            # If the observation is complete, stop scanning and release resources
-            if self.complete_scan(event.obs, action):
-                self.stop_scanning(event.obs, action)
-                action.set_obs_transition(obs=event.obs, transition=ObsTransition.RELEASE_RESOURCES)
+            elif event.transition == ObsTransition.SCAN_STARTED:
 
-            # If the observation is not complete, prepare for the next scan
-            # Workflow will transition to SCAN_STARTED or CONFIGURE_RESOURCES as needed within complete_scan()
+                event.obs.obs_state = ObsState.SCANNING
+                timer_name = f"obs_scanning_timer:{event.obs.obs_id}"
+            
+                # Start a scan timer in case the scan exceeds its expected duration
+                action.set_timer_action(Action.Timer(
+                    name=timer_name, 
+                    timer_action=event.obs.timeout_ms_scan, 
+                    echo_data=event.obs))
 
-        elif event.transition == ObsTransition.ABORT:
+            elif event.transition == ObsTransition.SCAN_COMPLETED:
 
-            # If resources were assigned and are either configuring, ready or scanning
-            if event.obs.obs_state in [ObsState.CONFIGURING, ObsState.READY, ObsState.SCANNING]:
-                # Stop scanning for this observation
-                self.stop_scanning(event.obs, action)
+                event.obs.obs_state = ObsState.READY
 
-            # Transition to ABORTED state where resources will be released after a timeout
-            event.obs.obs_state = ObsState.ABORTED
+                # Save current observation state to disk
+                event.obs.save_to_disk(self.telmodel.get_scan_store_dir())
 
-            # Start timer till end of the scheduling block before releasing resources
-            # Allows operators to investigate and potentially reset the observation before the end of the scheduling block
-            timer_name = f"obs_abort_timer:{event.obs.obs_id}"
+                # Stop the scanning timer
+                timer_name = f"obs_scanning_timer:{event.obs.obs_id}"
+                action.set_timer_action(Action.Timer(name=timer_name, timer_action=Action.Timer.TIMER_STOP))
 
-            time_ms_until_end = int((event.obs.scheduling_block_end - datetime.now(timezone.utc)).total_seconds() * 1000)
-            action.set_timer_action(Action.Timer(
-                name=timer_name, 
-                timer_action=time_ms_until_end,
-                echo_data=event.obs))
+                # If the observation is complete, stop scanning and release resources
+                if self.complete_scan(event.obs, action):
+                    self.stop_scanning(event.obs, action)
+                    action.set_obs_transition(obs=event.obs, transition=ObsTransition.RELEASE_RESOURCES)
+                
+                # If the observation is not complete, prepare for the next scan
+                # Workflow will transition to SCAN_STARTED or CONFIGURE_RESOURCES as needed within complete_scan()  
 
-        elif event.transition == ObsTransition.FAULT_OCCURRED:
-            event.obs.obs_state = ObsState.FAULT
+            elif event.transition == ObsTransition.SCAN_ENDED:
+                event.obs.obs_state = ObsState.READY
 
-        elif event.transition == ObsTransition.RESET:
-            event.obs.obs_state = ObsState.IDLE
+                # If the observation is complete, stop scanning and release resources
+                if self.complete_scan(event.obs, action):
+                    self.stop_scanning(event.obs, action)
+                    action.set_obs_transition(obs=event.obs, transition=ObsTransition.RELEASE_RESOURCES)
 
-        else:
-            logger.warning(f"Observation Execution Tool received unknown observation event transition: {event.transition}")
+                # If the observation is not complete, prepare for the next scan
+                # Workflow will transition to SCAN_STARTED or CONFIGURE_RESOURCES as needed within complete_scan()
+
+            elif event.transition == ObsTransition.ABORT:
+
+                # If resources were assigned and are either configuring, ready or scanning
+                if event.obs.obs_state in [ObsState.CONFIGURING, ObsState.READY, ObsState.SCANNING]:
+                    # Stop scanning for this observation
+                    self.stop_scanning(event.obs, action)
+
+                # Transition to ABORTED state where resources will be released after a timeout
+                event.obs.obs_state = ObsState.ABORTED
+
+                # Start timer till end of the scheduling block before releasing resources
+                # Allows operators to investigate and potentially reset the observation before the end of the scheduling block
+                timer_name = f"obs_abort_timer:{event.obs.obs_id}"
+
+                time_ms_until_end = int((event.obs.scheduling_block_end - datetime.now(timezone.utc)).total_seconds() * 1000)
+                action.set_timer_action(Action.Timer(
+                    name=timer_name, 
+                    timer_action=time_ms_until_end,
+                    echo_data=event.obs))
+
+            elif event.transition == ObsTransition.FAULT_OCCURRED:
+                event.obs.obs_state = ObsState.FAULT
+
+            elif event.transition == ObsTransition.RESET:
+
+                # Can only reset observations in ABORTED or FAULT states
+                if event.obs.obs_state in [ObsState.ABORTED, ObsState.FAULT, ObsState.IDLE]:
+                    # Stop abort timer if active
+                    timer_name = f"obs_abort_timer:{event.obs.obs_id}"
+                    action.set_timer_action(Action.Timer(name=timer_name, timer_action=Action.Timer.TIMER_STOP))
+
+                    # Reset target index and target scan index to start at the beginning if the Obs State was IDLE
+                    if event.obs.obs_state == ObsState.IDLE:
+                        event.obs.tgt_idx = 0
+                        event.obs.tgt_scan = 0
+                        event.obs.determine_scans()
+                        self.reset_sdp_scan(obs=event.obs, action=action)
+
+                    # Reset observation state to IDLE
+                    event.obs.obs_state = ObsState.IDLE
+                    # Try to assign resources for the next scan if possible
+                    action.set_obs_transition(obs=event.obs, transition=ObsTransition.ASSIGN_RESOURCES)
+                else:
+                    logger.warning(f"Observation Execution Tool ignoring reset for observation {event.obs.obs_id} in state {event.obs.obs_state.name}. " + \
+                        "Reset can only be applied to observations in ABORTED, FAULT or IDLE states.")
+            else:
+                logger.warning(f"Observation Execution Tool received unknown observation event transition: {event.transition}")
         
         return action
 
@@ -394,14 +424,23 @@ class ObservationExecutionTool:
             old_dsh_config = {}
             new_dsh_config = {}
 
+            # on_target returns None if the wrong target is configured, True if ON the correct target, else False if not on the correct target
+            on_target = self.is_on_target(obs, target, dsh_model)
             # If we are not on the correct target, set the dish to CONFIG mode and provide the new target
-            if not self.is_on_target(obs, target, dsh_model): 
-                old_dsh_config['mode'] = dsh_model.mode
-                new_dsh_config['mode'] = DishMode.CONFIG
+            if on_target is None:
 
-                old_dsh_config['target'] = dsh_model.pointing_altaz
-                new_dsh_config['target'] = target.to_dict()
+                # Dish can only set target if in CONFIG mode
+                if dsh_model.mode != DishMode.CONFIG:
+                    old_dsh_config['mode'] = dsh_model.mode
+                    new_dsh_config['mode'] = DishMode.CONFIG
+                else:
+                    old_dsh_config['target'] = dsh_model.pointing_altaz
+                    new_dsh_config['target'] = target.to_dict()
 
+            else:
+                logger.info(f"Observation Execution Tool found Dish already configured for correct target for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}. " +
+                    f"Dish target ID {dsh_model.tgt_id} matches expected target ID {obs.obs_id}_{obs.tgt_idx}. On Target {on_target}")
+  
             if len(new_dsh_config) > 0:
 
                 already_configured = False
@@ -428,8 +467,6 @@ class ObservationExecutionTool:
             ('bandwidth',     target_config,   'bandwidth'),
             ('sample_rate',   target_config,   'sample_rate'),
             ('gain',          target_config,   'gain'),
-            ('channels',      target_config,   'spectral_resolution'),
-            ('scan_duration', target_scan_set, 'scan_duration'),
         ]
 
         # If we found a valid digitiser, check if it needs to be configured
@@ -456,6 +493,11 @@ class ObservationExecutionTool:
 
                 already_configured = False
 
+                # If digitiser is aready scanning, update the observation and scan parameters
+                if dig_model.scanning is not False:
+                    old_dig_config['scanning'] = dig_model.scanning
+                    new_dig_config['scanning'] = {'obs_id': obs.obs_id, 'tgt_idx': obs.tgt_idx, 'freq_scan': target_scan.freq_scan } 
+
                 # Needed to direct the config to the correct digitiser and 
                 # To transition the appropriate observation state once configuration is applied
                 old_dig_config['dig_id'] = dig_model.dig_id 
@@ -469,8 +511,13 @@ class ObservationExecutionTool:
             else:
                 logger.info(f"Observation Execution Tool found Digitiser already configured for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}")
   
-        sdp = self.telmodel.sdp
-        if sdp is not None:
+        # Append additional config parameters
+        config_params.extend([
+            ('channels',      target_config,   'spectral_resolution'),
+            ('scan_duration', target_scan_set, 'scan_duration'),
+        ])
+  
+        if self.telmodel.sdp is not None:
 
             old_scan_config = {}
             new_scan_config = {}
@@ -484,6 +531,19 @@ class ObservationExecutionTool:
                     old_scan_config[dig_attr] = current
                     new_scan_config[dig_attr] = desired
 
+            scanning = {'obs_id': obs.obs_id, 'tgt_idx': obs.tgt_idx, 'freq_scan': target_scan.freq_scan } if sdp_dig is not None else False
+
+            if sdp_dig is not None and sdp_dig.scanning != scanning:
+                old_scan_config['scanning'] = sdp_dig.scanning
+                new_scan_config['scanning'] = scanning
+
+            if target_config.feed == Feed.LOAD and sdp_dig.load != True:
+                old_scan_config['load'] = sdp_dig.load
+                new_scan_config['load'] = True
+            elif target_config.feed != Feed.LOAD and sdp_dig.load != False:
+                old_scan_config['load'] = sdp_dig.load
+                new_scan_config['load'] = False
+
             if len(new_scan_config) > 0:
 
                 already_configured = False
@@ -491,8 +551,6 @@ class ObservationExecutionTool:
                 # SDP needs to know about additional parameters to prepare for incoming scan samples
                 new_scan_config['dig_id'] = dig_model.dig_id if dig_model is not None else None
                 new_scan_config['obs_id'] = obs.obs_id
-                new_scan_config['tgt_idx'] = obs.tgt_idx
-                new_scan_config['freq_scan'] = target_scan.freq_scan
  
                 old_sdp_config = {}
                 new_sdp_config = {}
@@ -500,19 +558,19 @@ class ObservationExecutionTool:
                 old_sdp_config['scan_config'] = old_scan_config
                 new_sdp_config['scan_config'] = new_scan_config
 
-                new_sdp_config['sdp_id'] = sdp.sdp_id
+                new_sdp_config['sdp_id'] = self.telmodel.sdp.sdp_id
                 new_sdp_config['obs_id'] = obs.obs_id
 
                 # Send configuration requests to the Science Data Processor if we are not already waiting for previous requests to complete
-                if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{sdp.sdp_id}_req_timer")):
+                if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{self.telmodel.sdp.sdp_id}_req_timer")):
                     logger.info(f"Observation Execution Tool sending Science Data Processor configuration requests for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}")
                     action = self.tm.update_sdp_configuration(old_sdp_config, new_sdp_config, action)
             else:
                 logger.info(f"Observation Execution Tool found Science Data Processor already configured for observation {obs.obs_id} with index {obs.tgt_idx}-{obs.tgt_scan}")
 
-        if dsh_model is None or dig_model is None or sdp is None:
+        if dsh_model is None or dig_model is None or self.telmodel.sdp is None:
             raise XSoftwareFailure(f"Observation Execution Tool could not configure missing critical resource for observation {obs.obs_id}. " + \
-                f"Dish found: {dsh_model is not None}, Digitiser found: {dig_model is not None}, Science Data Processor found: {sdp is not None}.")
+                f"Dish found: {dsh_model is not None}, Digitiser found: {dig_model is not None}, Science Data Processor found: {self.telmodel.sdp is not None}.")
 
         return already_configured
 
@@ -543,7 +601,6 @@ class ObservationExecutionTool:
                 "obs_id": obs.obs_id,
                 "tgt_idx": obs.tgt_idx,
                 "freq_scan": (obs.tgt_scan // target_scan_set.scan_iterations) if target_scan_set is not None else -1,
-                "scan_iter": (obs.tgt_scan % target_scan_set.scan_iterations) if target_scan_set is not None else -1
             }
 
             # Instruct the digitiser to start scanning 
@@ -576,13 +633,14 @@ class ObservationExecutionTool:
         dsh_model = next((dsh for dsh in self.telmodel.dsh_mgr.dish_store.dish_list if dsh.dsh_id == obs.dsh_id), None)
 
         if dsh_model is not None:
-            # Instruct the dish to go to STANDBY_FP mode (ready for configuration)
+            # Instruct the dish to go to STANDBY_FP mode and clear the target
             old_dsh_config = {}
             new_dsh_config = {}
 
             old_dsh_config['mode'] = dsh_model.mode
             new_dsh_config['mode'] = DishMode.STANDBY_FP
 
+            # Clearing a target can be done in any dish mode
             old_dsh_config['target'] = dsh_model.target
             new_dsh_config['target'] = None
 
@@ -591,9 +649,9 @@ class ObservationExecutionTool:
             new_dsh_config['obs_id'] = obs.obs_id
 
             # Send configuration requests to the Dish if we are not already waiting for previous requests to complete
-            if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{dsh_model.dsh_id}_req_timer")):
-                logger.info(f"Observation Execution Tool sending Dish stop scanning request for observation {obs.obs_id}")
-                action = self.tm.update_dsh_configuration(old_dsh_config, new_dsh_config, action)
+            #if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{dsh_model.dsh_id}_req_timer")):
+            logger.info(f"Observation Execution Tool sending Dish stop scanning request for observation {obs.obs_id}")
+            action = self.tm.update_dsh_configuration(old_dsh_config, new_dsh_config, action)
 
         # Lookup the digitiser model for this observation
         dig_model = next((dig for dig in self.telmodel.dig_store.dig_list if dig.dig_id == dsh_model.dig_id), None)
@@ -613,12 +671,11 @@ class ObservationExecutionTool:
             new_dig_config['obs_id'] = obs.obs_id
 
             # Send configuration requests to the Digitiser if we are not already waiting for previous requests to complete
-            if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{dig_model.dig_id}_req_timer")):
-                logger.info(f"Observation Execution Tool sending Digitiser stop scanning request for observation {obs.obs_id}")
-                action = self.tm.update_dig_configuration(old_dig_config, new_dig_config, action)
+            #if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{dig_model.dig_id}_req_timer")):
+            logger.info(f"Observation Execution Tool sending Digitiser stop scanning request for observation {obs.obs_id}")
+            action = self.tm.update_dig_configuration(old_dig_config, new_dig_config, action)
 
-        sdp = self.telmodel.sdp
-        if sdp is not None:
+        if self.telmodel.sdp is not None:
 
             old_sdp_config = {}
             new_sdp_config = {}
@@ -627,18 +684,18 @@ class ObservationExecutionTool:
             old_sdp_config['obs_complete'] = None
             new_sdp_config['obs_complete'] = obs.obs_id
 
-            old_sdp_config['sdp_id'] = sdp.sdp_id
-            new_sdp_config['sdp_id'] = sdp.sdp_id
+            old_sdp_config['sdp_id'] = self.telmodel.sdp.sdp_id
+            new_sdp_config['sdp_id'] = self.telmodel.sdp.sdp_id
             new_sdp_config['obs_id'] = obs.obs_id
 
             # Send configuration requests to the Science Data Processor if we are not already waiting for previous requests to complete
-            if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{sdp.sdp_id}_req_timer")):
-                logger.info(f"Observation Execution Tool sending Science Data Processor observation complete request for observation {obs.obs_id}")
-                action = self.tm.update_sdp_configuration(old_sdp_config, new_sdp_config, action)
+            #if not any(timer.active for timer in Timer.manager.get_timers_by_keyword(f"{self.telmodel.sdp.sdp_id}_req_timer")):
+            logger.info(f"Observation Execution Tool sending Science Data Processor observation complete request for observation {obs.obs_id}")
+            action = self.tm.update_sdp_configuration(old_sdp_config, new_sdp_config, action)
 
-        if dsh_model is None or dig_model is None or sdp is None:
+        if dsh_model is None or dig_model is None or self.telmodel.sdp is None:
             raise XSoftwareFailure(f"Observation Execution Tool could not stop scanning on missing critical resource for observation {obs.obs_id}. " + \
-                f"Dish found: {dish_model is not None}, Digitiser found: {dig_model is not None}, SDP found: {sdp is not None}.")
+                f"Dish found: {dish_model is not None}, Digitiser found: {dig_model is not None}, SDP found: {self.telmodel.sdp is not None}.")
 
         return True
 
@@ -677,19 +734,38 @@ class ObservationExecutionTool:
 
         return False
 
+    def reset_sdp_scan(self, obs, action):
+        """ Adds a SDP reset scan command to the action object.
+            This is used when an observation is aborted during a scan and needs to reset.
+            Alternatively a previous observation is repeatedly executed, and the SDP needs to be informed to reset
+            the current scan index.
+        """        
+        logger.info(f"Observation Execution Tool processing Reset Scan for observation {obs.obs_id}")
+
+        # Inform the Science Data Processor that we are resetting this observation scan iter to zero
+        old_config = {}
+        new_config = {}
+
+        old_config['obs_reset'] = None
+        new_config['obs_reset'] = obs.obs_id
+        new_config['sdp_id'] = self.telmodel.sdp.sdp_id
+
+        action = self.tm.update_sdp_configuration(old_config, new_config, action)
+
     def is_on_target(self, obs, target, dish) -> bool:
-        """ Check if the dish is currently pointed at the target within a tolerance.
-            Returns true if on target, false otherwise.
+        """ Check if the dish is currently configured to point at the current target and is in the correct pointing state.
+            Returns None if not configured for the correct target, True if on target, False if not on target.
         """
         if obs is None or target is None or dish is None:
             raise XSoftwareFailure(f"Observation Execution Tool could not determine if dish is on target due to missing observation, dish or target.")
 
-        on_target = True
-
         target_id = obs.obs_id + f"_{obs.tgt_idx}" # Unique target identifier within the observation (see DishModel.tgt_id)
         if dish.tgt_id != target_id:
-            on_target = False
+            logger.info(f"Observation Execution Tool found Dish {dish.dsh_id} is NOT configured to point to correct target {target_id} for observation {obs.obs_id} " +
+                f"Dish target ID {dish.tgt_id} does not match expected target ID {target_id}.")
+            return None
 
+        on_target = True
         if target.pointing in [PointingType.SIDEREAL_TRACK,PointingType.NON_SIDEREAL_TRACK] and dish.pointing_state != PointingState.TRACK:
             on_target = False
         elif target.pointing == PointingType.DRIFT_SCAN and dish.pointing_state != PointingState.READY:

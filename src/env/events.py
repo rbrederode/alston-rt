@@ -173,7 +173,7 @@ class StatusUpdateEvent:
     def notify_dequeued(self):
         self.current_status = StatusUpdateEvent.STATUS_PROCESSING
         self.dequeue_time = time.time()
-        self.total_processing_time_ms += self.dequeue_time - self.enqueue_time
+        self.total_processing_time_ms += (self.dequeue_time - self.enqueue_time) * 1000
         self.total_processing_count += 1
 
     def notify_update_completed(self):
@@ -195,7 +195,7 @@ class StatusUpdateEvent:
         return self.total_processing_time_ms / self.total_processing_count  
 
     def get_millis_since_update_enqueued(self) -> float:
-        return (time.time() - self.enqueue_time)
+        return (time.time() - self.enqueue_time) * 1000
 
     def get_total_processing_time(self) -> float:
         return self.total_processing_time_ms
