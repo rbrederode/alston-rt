@@ -103,6 +103,8 @@ def get_property_name_value(config_item: str, value) -> (str, Any):
                 return property, True
             elif str(value).upper() in ["FALSE", "0", "NO", "OFF"]:
                 return property, False
+            elif property == tm_dm.PROPERTY_TARGET and value is None:
+                return property, None
             else:
                 logger.error(f"Telescope Manager map: invalid value {value} for property {property}")
                 return property, None

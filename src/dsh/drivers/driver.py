@@ -12,13 +12,13 @@ import threading
 from models.dsh import DishModel, DriverType, PointingState, Capability, DishMode, Feed, PECModel
 from models.target import TargetModel, PointingType
 from models.health import HealthState
-from util.xbase import XInvalidTransition, XSoftwareFailure
+from util.xbase import XInvalidTransition, XSoftwareFailure, XStreamUnableToExtract
 
 logger = logging.getLogger(__name__)
 
 class DishDriver:
 
-    MAX_PEC_HISTORY = 1000  # Store last X Periodic Error Correction (PEC) readings
+    MAX_HISTORY = 1000  # Store last X AltAz, PEC and mode/state readings
 
     def __init__(self, dsh_model: DishModel=None):
         if dsh_model is None:
@@ -30,7 +30,11 @@ class DishDriver:
         self.dsh_model = dsh_model      
         self.location = EarthLocation(lat=self.dsh_model.latitude*u.deg, lon=self.dsh_model.longitude*u.deg, height=self.dsh_model.height*u.m)
 
-        # Periodic Error Correction (PEC) history for altitude and azimuth
+        # History of pointing and desired AltAz for plotting
+        self.pointing_altaz_hist = None
+        self.desired_altaz_hist = None
+        
+         # Periodic Error Correction (PEC) history for altitude and azimuth
         self.pec_hist = None
 
     ##############################################################################
@@ -60,6 +64,14 @@ class DishDriver:
         # Delegate to subclass implementation
         with self._rlock:
             return self._get_rotation_speed()
+
+    def get_min_max_alt(self) -> Tuple[float, float]:
+        """ Get the minimum and maximum altitude limits of the dish from the subclass implementation.
+            :return: A tuple of (min_altitude, max_altitude) in degrees.
+        """
+        # Delegate to subclass implementation
+        with self._rlock:
+            return self._get_min_max_alt()
 
     def get_resolution(self) -> float:
         """ Get the resolution of the dish from the subclass implementation.
@@ -194,6 +206,7 @@ class DishDriver:
             self.dsh_model.increment_failures()
             raise ValueError(f"DishDriver {self.dsh_model.dsh_id} returned invalid (None) AltAz data.\n{self.dsh_model.to_dict()}")
         else:
+            self.update_pointing_hist() # Update pointing history with the latest AltAz 
             if self.get_failure_count() > 0:
                 logger.info(f"DishDriver {self.dsh_model.dsh_id} reset failure count {self.get_failure_count()} to 0 after successful AltAz read.")
                 self.dsh_model.reset_failures()
@@ -207,6 +220,7 @@ class DishDriver:
         # If first time reading AltAz, just update the dish model
         if previous_alt is None or previous_az is None:
             self.dsh_model.pointing_altaz = {"alt": altaz.alt.degree, "az": altaz.az.degree}
+            self.dsh_model.velocity_altaz = {"alt": 0.0, "az": 0.0} # No velocity on first reading
             self.dsh_model.last_update = datetime.now(timezone.utc)
 
         # If current altaz does not match previous altaz i.e. dish has moved
@@ -217,6 +231,7 @@ class DishDriver:
 
             # Update the dish model with the current pointing altaz 
             self.dsh_model.pointing_altaz = {"alt": altaz.alt.degree, "az": altaz.az.degree}
+            self.dsh_model.velocity_altaz = {"alt": alt - previous_alt, "az": az - previous_az}
             self.dsh_model.last_update = datetime.now(timezone.utc)
 
             # If we were NOT expecting the dish to be moving, log an error
@@ -229,12 +244,14 @@ class DishDriver:
         # Else if Dish has not moved noticeably (TRACKING is slow and hard to notice)
         elif alt == previous_alt and az == previous_az: 
 
+            self.dsh_model.velocity_altaz = {"alt": 0.0, "az": 0.0}
+
             # If we were expecting the dish to be stationary i.e. READY
             if self.dsh_model.pointing_state == PointingState.READY:
                 pass # Dish seems stationary as expected
 
-            # Else if we were expecting the dish to be tracking or slewing to a desired AltAz
-            elif self.dsh_model.pointing_state in [PointingState.TRACK, PointingState.SLEW]:
+            # Else if we were expecting the dish to be tracking, scanning or slewing to a desired AltAz
+            elif self.dsh_model.pointing_state in [PointingState.TRACK, PointingState.SLEW, PointingState.SCAN]:
 
                 logger.info(f"DishDriver {self.dsh_model.dsh_id} is pointing at AltAz " + \
                 f"(Alt: {alt}, Az: {az}) in pointing state: {self.dsh_model.pointing_state.name}, dish mode: {self.dsh_model.mode.name}.")
@@ -243,13 +260,13 @@ class DishDriver:
                 desired_az = self.dsh_model.desired_altaz.get("az", None) if self.dsh_model.desired_altaz else None
 
                 if desired_alt is None or desired_az is None:
-                    raise XSoftwareFailure(f"DishDriver {self.dsh_model.dsh_id} is in TRACK/SLEW pointing state but no desired AltAz is set in DishModel.\n{self.dsh_model.to_dict()}")
+                    raise XSoftwareFailure(f"DishDriver {self.dsh_model.dsh_id} is in TRACK/SLEW/SCAN pointing state but no desired AltAz is set in DishModel.\n{self.dsh_model.to_dict()}")
 
                 # If the dish pointing AltAz is within resolution of the desired AltAz
                 if abs(alt - desired_alt) <= self.get_resolution() and abs(az - desired_az) <= self.get_resolution():
 
-                    # Transition from SLEW to READY or stay in TRACK
-                    self.dsh_model.pointing_state = PointingState.READY if self.dsh_model.pointing_state == PointingState.SLEW else PointingState.TRACK
+                    # Transition from SLEW to READY or stay in original pointing state
+                    self.dsh_model.pointing_state = PointingState.READY if self.dsh_model.pointing_state == PointingState.SLEW else self.dsh_model.pointing_state
                     self.dsh_model.last_update = datetime.now(timezone.utc)
                 
                 # If in TRACK, Dish has drifted off target, not a major issue as tracking can catch up on the next movement
@@ -324,11 +341,7 @@ class DishDriver:
 
         if tgt_id is None or target is None or not isinstance(target, TargetModel):
             raise ValueError(f"DishDriver set_target_tuple requires a valid TargetModel and tgt_id to be provided.\n{self.dsh_model.to_dict()}")
-        
-        # If the target is unchanged, do nothing
-        if self.dsh_model.tgt_id == tgt_id and self.dsh_model.target == target:
-            return 
-        
+                
         # Check if the obs_id has changed i.e. we are starting a new observation
         new_obs_id = tgt_id.split("_")[0] if "_" in tgt_id else None
         cur_obs_id = self.dsh_model.tgt_id.split("_")[0] if self.dsh_model.tgt_id and "_" in self.dsh_model.tgt_id else None
@@ -480,7 +493,9 @@ class DishDriver:
         az = self.dsh_model.pointing_altaz.get("az", None) if self.dsh_model.pointing_altaz else None
 
         # If the dish is already at the stow position, set mode to STOW and return
-        if abs(alt - stow_alt) <= self.get_resolution() and abs(az - stow_az) <= self.get_resolution():
+        if alt is None or az is None:
+            logger.warning(f"DishDriver {self.dsh_model.dsh_id} has no pointing AltAz data.")
+        elif abs(alt - stow_alt) <= self.get_resolution() and abs(az - stow_az) <= self.get_resolution():
             self.dsh_model.mode = DishMode.STOW
             self.dsh_model.pointing_state = PointingState.READY
             self.dsh_model.last_update = datetime.now(timezone.utc)
@@ -624,10 +639,57 @@ class DishDriver:
             self.dsh_model.last_update = datetime.now(timezone.utc)
             raise e
         finally:
-            self.update_pec_hist(target_id) # Update PEC history after each track attempt, regardless of success or failure
+            self.update_pec_hist(target_id) # Update AltAz and PEC history after each scan attempt, regardless of success or failure
 
         # Set the dish pointing state to TRACKING
         self.dsh_model.pointing_state = PointingState.TRACK
+        self.dsh_model.last_update = datetime.now(timezone.utc)
+
+    def scan(self):    
+        """
+            Scan the drivers current target if states and modes permit. Delegates to subclass implementation.
+            :raises NotImplementedError: If the method is not implemented by a subclass
+        """
+        def _is_scan_cmd_allowed(self) -> bool:
+            
+            if self.dsh_model.mode != DishMode.OPERATE:
+                return False
+            if self.dsh_model.pointing_state not in [PointingState.SCAN, PointingState.READY]:
+                return False
+            return True
+       
+        # Check if scan command is allowed
+        if not _is_scan_cmd_allowed(self):
+            raise XInvalidTransition(f"DishDriver {self.dsh_model.dsh_id} scan command not allowed in dish mode or pointing state.\n{self.dsh_model.to_dict()}")
+
+        # Calculate the desired AltAz for the current target
+        target_id, target = self.get_target_tuple()
+        if target is None:
+            raise XInvalidTransition(f"DishDriver {self.dsh_model.dsh_id} scan command requires a valid target to be set.\n{self.dsh_model.to_dict()}")
+
+        if target.pointing not in [PointingType.OFFSET_SCAN, PointingType.FIVE_POINT_SCAN]:
+            logger.warning(f"DishDriver {self.dsh_model.dsh_id} scan command ignored for target {target.id} with pointing type {target.pointing.name}.\n{self.dsh_model.to_dict()}")
+            return
+
+        altaz = self.get_desired_altaz(target=target)
+       
+        # Delegate to subclass implementation
+        try:
+            with self._rlock:
+                self._scan(altaz.alt.degree, altaz.az.degree)
+        except Exception as e:
+            logger.exception(f"DishDriver {self.dsh_model.dsh_id} failed to scan to AltAz (Alt: {altaz.alt.degree}, Az: {altaz.az.degree}): {e}\n{self.dsh_model.to_dict()}")
+            
+            self.dsh_model.increment_failures()
+            self.dsh_model.mode = DishMode.UNKNOWN
+            self.dsh_model.pointing_state = PointingState.UNKNOWN
+            self.dsh_model.last_update = datetime.now(timezone.utc)
+            raise e
+        finally:
+            self.update_pec_hist(target_id) # Update AltAz and PEC history after each scan attempt, regardless of success or failure
+
+        # Set the dish pointing state to SCAN
+        self.dsh_model.pointing_state = PointingState.SCAN
         self.dsh_model.last_update = datetime.now(timezone.utc)
 
     def stop(self):
@@ -679,6 +741,7 @@ class DishDriver:
             logger.exception(f"DishDriver {self.dsh_model.dsh_id} failed to slew to AltAz (Alt: {altaz.alt.degree}, Az: {altaz.az.degree}): {e}\n{self.dsh_model.to_dict()}")
             
             self.dsh_model.increment_failures()
+            
             self.dsh_model.mode = DishMode.UNKNOWN
             self.dsh_model.pointing_state = PointingState.UNKNOWN
             self.dsh_model.last_update = datetime.now(timezone.utc)
@@ -687,20 +750,6 @@ class DishDriver:
         # Set the dish pointing state to SLEWing
         self.dsh_model.pointing_state = PointingState.SLEW
         self.dsh_model.last_update = datetime.now(timezone.utc)
-
-    def start_scan(self, start_alt: float, start_az: float, end_alt: float, end_az: float, rate_deg_per_sec: float):
-        """
-            Start scanning the current target.
-            :raises NotImplementedError: If the method is not implemented by a subclass
-        """
-        raise NotImplementedError("Subclasses should implement this method.")
-
-    def end_scan(self):
-        """
-            Stop scanning the current target.
-            :raises NotImplementedError: If the method is not implemented by a subclass
-        """
-        raise NotImplementedError("Subclasses should implement this method.")
 
     def get_desired_altaz(self, target: TargetModel) -> AltAz:
         """ Calculates the desired AltAz for the given target at the current time.
@@ -720,13 +769,44 @@ class DishDriver:
 
         elif target.pointing == PointingType.DRIFT_SCAN:
             # Drift scan target
-            alt, az = target.altaz.alt, target.altaz.az
+            alt = target.altaz.get("alt")
+            az = target.altaz.get("az")
             alt_q = alt if hasattr(alt, 'unit') else alt * u.deg
             az_q = az if hasattr(az, 'unit') else az * u.deg
             desired_altaz = AltAz(obstime=time, location=self.location, alt=alt_q, az=az_q)
 
         elif target.pointing == PointingType.OFFSET_SCAN:
-            raise NotImplementedError("OFFSET_SCAN pointing type not yet implemented")
+
+            if target.scan is None or target.scan.offset is None or target.scan.rate is None or target.scan.angle is None:
+                raise XStreamUnableToExtract(f"DishDriver {self.dsh_model.dsh_id} cannot calculate desired AltAz for OFFSET_SCAN target without valid scan parameters.\n{self.dsh_model.to_dict()}")
+
+            # Step 1: Compute true target position in AltAz at current time
+            if target.sky_coord is not None:
+                sky_coord = SkyCoord(ra=target.sky_coord.ra, dec=target.sky_coord.dec, unit='deg', frame=target.sky_coord.frame)
+                true_altaz = sky_coord.transform_to(frame)
+            elif target.id is not None:
+                body_coord = get_body(body=target.id, time=time, location=self.location)
+                true_altaz = body_coord.transform_to(frame)
+            else:
+                raise XStreamUnableToExtract(f"DishDriver {self.dsh_model.dsh_id} cannot calculate desired AltAz for OFFSET_SCAN target without valid sky_coord, altaz or target id.\n{self.dsh_model.to_dict()}")
+
+            # If we have not yet started scanning, then return the true target position as the desired AltAz from which to start scanning
+            if target.scan.start is None:
+                desired_altaz = true_altaz
+            else:
+                # Step 2: Compute elapsed time
+                now = datetime.now(timezone.utc)
+                elapsed = (now - target.scan.start).total_seconds() * u.s
+
+                # Step 3: Compute angular offset
+                start_offset = target.scan.offset * u.deg
+                rate = target.scan.rate * u.deg / u.s
+                offset = start_offset + rate * elapsed
+
+                # Step 4: Apply offset in tangent plane
+                position_angle = target.scan.angle * u.deg
+                desired_altaz = true_altaz.directional_offset_by(position_angle, offset)
+                logger.info(f"DishDriver {self.dsh_model.dsh_id} performing OFFSET_SCAN: true AltAz (Alt: {true_altaz.alt.degree}°, Az: {true_altaz.az.degree}°), start offset: {start_offset}°, current offset: {offset}°, elapsed time: {elapsed}s, position angle: {position_angle}°, resulting in desired AltAz (Alt: {desired_altaz.alt.degree}°, Az: {desired_altaz.az.degree}°).") 
 
         elif target.pointing == PointingType.FIVE_POINT_SCAN:
             raise NotImplementedError("FIVE_POINT_SCAN pointing type not yet implemented")
@@ -735,25 +815,33 @@ class DishDriver:
         return desired_altaz
 
     def reset_pec_hist(self):
-        """ Reset PEC history to all zeros.
+        """ Reset PEC and AltAz history to all zeros.
         """
         with self._rlock:
-            self.pec_hist = np.zeros((self.MAX_PEC_HISTORY, 3)) # Reset PEC history to all zeros
+            self.pec_hist = np.zeros((self.MAX_HISTORY, 3)) # Reset PEC history to all zeros
+
+    def reset_pointing_hist(self):
+        """ Reset pointing AltAz history to all zeros.
+        """
+        with self._rlock:
+            self.pointing_altaz_hist = np.zeros((self.MAX_HISTORY, 3)) # Reset pointing AltAz history to all zeros
+            self.desired_altaz_hist = np.zeros((self.MAX_HISTORY, 3)) # Reset desired AltAz history to all zeros
 
     def update_pec_hist(self, tgt_id: str = None):
-        """ Update the PEC history with the latest PEC values.
-            Maintains a history of the last N PEC values where N is defined by MAX_PEC_HISTORY.
+        """ Update the PEC history with the latest values.
+            Maintains a history of the last N PEC values where N is defined by MAX_HISTORY.
         """
         alt_pec, az_pec = self.get_current_pec()
 
+        # PEC will be None if either a pointing or desired AltAz value is not available
         if alt_pec is None or az_pec is None:
             return # If we cannot calculate PEC, do not update history
 
         now = Time(datetime.now(timezone.utc)) # Current datetime in UTC
         now.format = 'unix'
 
-        # Update PEC history by obtaining the current thread lock first
-        # Numpy arrays (pec_hist) are not inherently thread-safe
+        # Update history by obtaining the current thread lock first
+        # Numpy arrays are not inherently thread-safe
         with self._rlock:
 
             if self.pec_hist is None:
@@ -773,6 +861,36 @@ class DishDriver:
             now = datetime.now(timezone.utc)
             tgt_pec.last_update = now
             self.dsh_model.last_update = now
+
+    def update_pointing_hist(self):
+        """ Update the PEC and pointing AltAz history with the latest values.
+            Maintains a history of the last N PEC and pointing AltAz values where N is defined by MAX_HISTORY.
+        """
+        pointing_alt = self.dsh_model.pointing_altaz.get("alt", None) if self.dsh_model.pointing_altaz else None
+        pointing_az = self.dsh_model.pointing_altaz.get("az", None) if self.dsh_model.pointing_altaz else None
+
+        desired_alt = self.dsh_model.desired_altaz.get("alt", None) if self.dsh_model.desired_altaz else None
+        desired_az = self.dsh_model.desired_altaz.get("az", None) if self.dsh_model.desired_altaz else None
+
+        # PEC will be None if either a pointing or desired AltAz value is not available
+        if pointing_alt is None or pointing_az is None:
+            return # If we cannot get current pointing AltAz, do not update history
+
+        now = Time(datetime.now(timezone.utc)) # Current datetime in UTC
+        now.format = 'unix'
+
+        # Update history by obtaining the current thread lock first
+        # Numpy arrays are not inherently thread-safe
+        with self._rlock:
+
+            if self.pointing_altaz_hist is None or self.desired_altaz_hist is None:
+                self.reset_pointing_hist() 
+
+            self.pointing_altaz_hist = np.roll(self.pointing_altaz_hist, shift=-1, axis=0)
+            self.pointing_altaz_hist[-1] = (now.value, pointing_alt, pointing_az)
+
+            self.desired_altaz_hist = np.roll(self.desired_altaz_hist, shift=-1, axis=0)
+            self.desired_altaz_hist[-1] = (now.value, desired_alt, desired_az)
 
     ##############################################################################
     # Callback Methods Available to be called by Subclasses
@@ -820,6 +938,12 @@ class DishDriver:
     def _get_rotation_speed(self) -> float:
         """ Get the rotation speed of the dish from the subclass implementation.
             :return: The rotation speed in degrees per second.
+        """
+        raise NotImplementedError("Subclasses should implement this method.")
+
+    def _get_min_max_alt(self) -> Tuple[float, float]:
+        """ Get the minimum and maximum altitude limits of the dish from the subclass implementation.
+            :return: A tuple of (min_altitude, max_altitude) in degrees.
         """
         raise NotImplementedError("Subclasses should implement this method.")
 

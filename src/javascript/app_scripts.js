@@ -5,9 +5,9 @@
 * Useful for debugging without manually editing the sheet.
 */
 function testOnEdit() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("DM00X");;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("OBS DESIGN");;
   const e = {
-    range: sheet.getRange("D5"),
+    range: sheet.getRange("B34"),
     value: "TRUE"
   };
   onEditHandler(e);
@@ -471,6 +471,29 @@ function onEditHandler(e) {
   const apiSheet = ss.getSheetByName("TM_UI_API");
   const obsSheet = ss.getSheetByName("DB OBS LIST")
 
+  // ---------- OBS STORE sheet: Reset Observation ----------
+  if (sheetName === "OBS STORE" && col === 10 && row >= 3 && row <= 6 && e.value === "TRUE") {
+    const jsonObj = {};
+
+    const obs_id = sheet.getRange("A"+row).getValue()
+    Logger.log(`Resetting observation: ${obs_id}`)
+
+    jsonObj["_type"] = "ObservationReset"
+    jsonObj["obs_id"] = obs_id;
+    jsonObj["user_email"] = userEmail
+    jsonObj["created"] = {
+      "_type": "datetime",
+      "value": new Date().toISOString()
+    }
+    
+    // Reset the checkbox
+    sheet.getRange(row, col).setValue(false);
+    Logger.log(`Reset checkbox reset for row ${row}`);
+    
+    sendWebhook("oet", JSON.stringify(jsonObj, null, 2));
+    return;
+  }
+  
   // ---------- DIG00X sheet: Digitiser config ----------
   if (sheetName === "DIG00X" && col === 4 && row >= 3 && row <= 11) {
     const jsonStr = generateJSON(sheet, ["A3:B3","C3:D11"]);
@@ -679,6 +702,23 @@ function onEditHandler(e) {
   const targetRanges = ["A25:B25", "A29:B32"];
   const targetObj = generateJSON(sheet, targetRanges, true, false);
 
+  Logger.log(targetObj)
+  if (targetObj.target.pointing.value === "OFFSET_SCAN") {
+    targetObj.target.scan = { 
+      "_type": "OffsetScan",
+      "offset": -2.5,   // Starting -2.5° West of Sun
+      "rate": 0.0833,   // degrees / sec 0.0833 is 5°/ 60s
+      "angle": 90.0001  // 90.0 (West-East)
+    };
+  }
+
+  if (targetObj.target.pointing.value === "FIVE_POINT_SCAN") {
+    targetObj.target.scan = { 
+      "_type": "FivePointScan",
+      "offset": 10,     // 10° Centre, North, South, East, West
+    };
+  }
+
   const targetConfigRanges = ["A14:B18", "D25:E26"];
   const targetConfigObj = generateJSON(sheet, targetConfigRanges, true, false, "TargetConfig")
 
@@ -688,6 +728,7 @@ function onEditHandler(e) {
   const lastTargetRow = targetSheet.getLastRow();
   const writeRow = lastTargetRow < 2 ? 2 : lastTargetRow + 1;
   targetSheet.getRange("A" + writeRow).setValue(JSON.stringify(targetObj, null, 2));
+
   Logger.log(`Target JSON written to DB TARGET LIST row: ${writeRow}`);
 
   // Clear input fields
@@ -1355,7 +1396,7 @@ function get_simbad_catalogs() {
   results = [];
 
   const query = encodeURIComponent(
-    'SELECT TOP 10000 ' +
+    'SELECT TOP 5000 ' +
     'cat_name, ' +
     'description, ' +
     '"size" ' +

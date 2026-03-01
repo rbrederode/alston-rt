@@ -111,6 +111,7 @@ class DishModel(BaseModel):
         "pointing_state": And(PointingState, lambda v: isinstance(v, PointingState)),
         "desired_altaz": Or(None, dict, lambda v: v is None or isinstance(v, (dict, SkyCoord))),  # Desired alt-az position of dish
         "pointing_altaz": Or(None, dict, lambda v: v is None or isinstance(v, (dict, SkyCoord))), # Current alt-az pointing direction of dish
+        "velocity_altaz": Or(None, dict, lambda v: v is None or isinstance(v, dict)),             # Current velocity of dish in Altitude and Azimuth (degrees per second)
         "target": Or(None, lambda v: v is None or isinstance(v, BaseModel)),                      # Current target model assigned to the dish
         "tgt_id": Or(None, And(str, lambda v: isinstance(v, str))),                               # Current target id assigned to the dish in the form {obs_id}_{obs.tgt_idx}
         "tgt_pec": And(list, lambda v: isinstance(v, list)),                                      # Current periodic error correction (PEC) list of PECModel instances 
@@ -142,6 +143,7 @@ class DishModel(BaseModel):
             PointingState.READY:    {PointingState.UNKNOWN, PointingState.READY, PointingState.SLEW, PointingState.TRACK, PointingState.SCAN},
             PointingState.SLEW:     {PointingState.UNKNOWN, PointingState.SLEW, PointingState.READY},
             PointingState.TRACK:    {PointingState.UNKNOWN, PointingState.TRACK, PointingState.READY},
+            PointingState.SCAN:     {PointingState.UNKNOWN, PointingState.SCAN, PointingState.READY},
         },
         "capability": {
             Capability.UNKNOWN:          {Capability.UNKNOWN, Capability.UNAVAILABLE, Capability.STANDBY, Capability.CONFIGURING, Capability.OPERATE_DEGRADED, Capability.OPERATE_FULL},
@@ -171,6 +173,7 @@ class DishModel(BaseModel):
             "pointing_state": PointingState.UNKNOWN,
             "desired_altaz": None,
             "pointing_altaz": None,
+            "velocity_altaz": None,
             "target": None,
             "tgt_id": None,
             "tgt_pec": [],

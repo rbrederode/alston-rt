@@ -58,6 +58,12 @@ class MD01Driver(DishDriver):
         """
         return self.md01_config.rotation_speed
 
+    def _get_min_max_alt(self) -> Tuple[float, float]:
+        """ Get the minimum and maximum altitude limits of the dish from the MD01 configuration.
+            :return: A tuple of (min_altitude, max_altitude) in degrees.
+        """
+        return (self.md01_config.min_alt, self.md01_config.max_alt)
+
     def _get_resolution(self) -> float:
         """ Get the resolution of the dish from the MD01 configuration.
             :return: The resolution in degrees per step.
@@ -174,6 +180,13 @@ class MD01Driver(DishDriver):
             raise XInvalidTransition(f"MD01Driver for controller {self.md01_config.host} {self.md01_config.port} cannot reach Alt: {alt} deg, Az: {az} deg due to dish limits: {self.md01_config.min_alt}-{self.md01_config.max_alt} deg altitude.")
     
         self._set_md01_altaz(alt, az)
+
+    def _scan(self, alt: float, az: float):
+        """
+            Scan to the current target (same as tracking).
+            Do not set the dish model attributes here, that is done in the base class.
+        """
+        self._track(alt, az)
 
     def _slew(self, alt: float, az: float):
         """

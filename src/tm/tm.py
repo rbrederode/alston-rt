@@ -35,6 +35,7 @@ from models.oda import ODAModel, ObsList, ScanStore
 from models.health import HealthState
 from models.scan import ScanModel, ScanState
 from models.sdp import ScienceDataProcessorModel
+from models.target import TargetModel
 from models.telescope import TelescopeModel
 from models.tm import ResourceType, AllocationState, ResourceAllocations, Allocation
 from models.ui import UIDriver, UIDriverType
@@ -259,14 +260,7 @@ class TelescopeManager(App):
                     odt_obs.scheduling_block_end = odt_obs.scheduling_block_start + timedelta(seconds=610)
 
                     # Inform the Science Data Processor that we are resetting these observations (in case they have been run already)
-                    old_config = {}
-                    new_config = {}
-
-                    old_config['obs_reset'] = None
-                    new_config['obs_reset'] = new_obs_id
-                    new_config['sdp_id'] = self.telmodel.sdp.sdp_id
-
-                    self.update_sdp_configuration(old_config, new_config, action)
+                    self.oet.reset_sdp_scan(obs=odt_obs, action=action)
                     # END DEBUG CODE, REMOVE LATER
 
                     self.telmodel.oda.obs_store.obs_list.append(odt_obs)
@@ -321,7 +315,7 @@ class TelescopeManager(App):
         """ Processes api messages received on the Dish Manager service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
-        logger.info(f"Telescope Manager received Dish Manager {api_call['msg_type']} message with action code: {api_call['action_code']}")
+        logger.info(f"Telescope Manager received Dish Manager {api_call['msg_type']} msg, action code: {api_call['action_code']}, property: {api_call.get('property','')}")
         
         action = Action()
 
@@ -356,16 +350,21 @@ class TelescopeManager(App):
 
             # If the api call is a dish mode set property rsp message, update the Dish Model
             if api_call.get('property','') == tm_dm.PROPERTY_MODE:
-                dsh_model.mode = DishMode(api_call['value'])
+                dsh_model.mode = DishMode(api_call['value']) if api_call['value'] is not None else None
 
             # If the api call is a capability state set property rsp message, update the Dish Model
             elif api_call.get('property','') == tm_dm.PROPERTY_CAPABILITY:
-                dsh_model.capability = Capability(api_call['value'])
+                dsh_model.capability = Capability(api_call['value']) if api_call['value'] is not None else None
 
+            # If the api call is a capability state set property rsp message, update the Dish Model
+            elif api_call.get('property','') == tm_dm.PROPERTY_TARGET:
+                dsh_model.target = TargetModel.from_dict(api_call['value']) if api_call['value'] is not None and isinstance(api_call['value'], dict) else None
+                dsh_model.tgt_id = dsh_model.target.obs_id + f"_{dsh_model.target.tgt_idx}" if dsh_model.target is not None else None
+                
             # If the api call is a status update message, update the Dish Manager model
             elif api_call.get('property','') == tm_dm.PROPERTY_STATUS:
                 logger.debug(f"Telescope Manager received Dish Manager STATUS update: {api_call['value']}")
-                self.telmodel.dsh_mgr = DishManagerModel.from_dict(api_call['value'])
+                self.telmodel.dsh_mgr = DishManagerModel.from_dict(api_call['value']) if api_call['value'] is not None else None
 
             # If the status update message contains additional observation data, trigger the observation workflow
             obs_data = api_call.get('obs_data', None)
@@ -399,7 +398,7 @@ class TelescopeManager(App):
             if isinstance(digitiser.app.arguments, dict) and "local_host" in digitiser.app.arguments:
 
                 if digitiser.app.arguments["local_host"] == event.remote_addr[0]:
-                    logger.info(f"Telescope Manager found digitiser entity ID: {digitiser.dig_id} for remote address: {event.remote_addr}")
+                    logger.debug(f"Telescope Manager found digitiser entity ID: {digitiser.dig_id} for remote address: {event.remote_addr}")
                     return digitiser.dig_id, digitiser
             else:
                 logger.warning(f"Telescope Manager digitiser {digitiser.dig_id} is not configured with a valid local_host argument to match against remote address: {event.remote_addr[0]}")
@@ -409,7 +408,7 @@ class TelescopeManager(App):
     def process_dig_entity_connected(self, event, entity) -> Action:
         """ Processes Digitiser connected events.
         """
-        logger.info(f"Telescope Manager connected to Digitiser entity on {event.remote_addr}\n{entity}")
+        logger.info(f"Telescope Manager connected to Digitiser entity on {event.remote_addr}")
         digitiser: DigitiserModel = entity if entity is not None and isinstance(entity, DigitiserModel) else None
 
         if digitiser is not None:
@@ -433,7 +432,8 @@ class TelescopeManager(App):
         """ Processes api messages received on the Digitiser service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
-        logger.info(f"Telescope Manager received digitiser {api_call['msg_type']} msg with action code: {api_call['action_code']} on entity: {api_msg['entity']}")
+        logger.info(f"Telescope Manager received digitiser {api_call['msg_type']} msg, action code: {api_call['action_code']}, " + \
+            f"property {api_call.get('property','')} on entity: {api_msg['entity']}")
 
         digitiser: DigitiserModel = entity
 
@@ -496,7 +496,7 @@ class TelescopeManager(App):
                 obs = self.telmodel.oda.obs_store.get_obs_by_id(obs_id) if obs_id is not None else None
 
                 # If the observation was identified and is in CONFIGURING state, trigger a review of the configuration updates
-                if obs is not None and obs.obs_state == ObsState.CONFIGURING:
+                if obs is not None:
 
                     config_mismatched = False
 
@@ -511,7 +511,7 @@ class TelescopeManager(App):
                                 break
 
                     # If no mismatches remain, the configuration update has been applied successfully
-                    if not config_mismatched:
+                    if not config_mismatched and obs.obs_state == ObsState.CONFIGURING:
                         logger.info(f"Telescope Manager configuration update for observation {obs_id} has been applied successfully by Digitiser {digitiser.dig_id}.")
                         action.set_obs_transition(obs=obs, transition=ObsTransition.CONFIGURE_RESOURCES)
 
@@ -543,7 +543,7 @@ class TelescopeManager(App):
         """ Processes api messages received on the Science Data Processor service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
-        logger.info(f"Telescope Manager received Science Data Processor {api_call['msg_type']} message with action code: {api_call['action_code']}")
+        logger.info(f"Telescope Manager received Science Data Processor {api_call['msg_type']} msg, action code: {api_call['action_code']}, property: {api_call.get('property','')}")
         action = Action()
 
         dt = api_msg.get("timestamp")
@@ -592,6 +592,14 @@ class TelescopeManager(App):
 
             elif api_call.get('property','') == tm_sdp.PROPERTY_OBS_COMPLETE:
                 logger.info(f"Telescope Manager received Science Data Processor OBS_COMPLETE response: {api_call['value']}")
+                
+                # Update SDP digitiser configuration for the relevant observation
+                obs_id = api_call['value'].get('obs_id') if api_call['value'] is not None and isinstance(api_call['value'], dict) else None
+                dig = self.telmodel.sdp.dig_store.get_dig_by_obs_id(obs_id) if obs_id is not None else None
+                if dig is not None:
+                    # Reset the scanning field of the digitiser
+                    dig.scanning = False
+                    dig.last_update = datetime.now(timezone.utc)
 
             # Else if a scan complete advice is received, process it 
             elif api_call.get('property','') == tm_sdp.PROPERTY_SCAN_COMPLETE:
@@ -658,7 +666,7 @@ class TelescopeManager(App):
                 obs = self.telmodel.oda.obs_store.get_obs_by_id(obs_id) if obs_id is not None else None
 
                 # If the observation was identified and is in CONFIGURING state, trigger a review of the configuration updates
-                if obs is not None and obs.obs_state == ObsState.CONFIGURING:
+                if obs is not None:
 
                     config_mismatched = False
 
@@ -671,7 +679,7 @@ class TelescopeManager(App):
                                 break
 
                     # If no mismatches remain, the configuration update has been applied successfully
-                    if not config_mismatched:
+                    if not config_mismatched and obs.obs_state == ObsState.CONFIGURING:
                         logger.info(f"Telescope Manager configuration update for observation {obs_id} has been applied successfully by Science Data Processor.")
                         action.set_obs_transition(obs=obs, transition=ObsTransition.CONFIGURE_RESOURCES)
 

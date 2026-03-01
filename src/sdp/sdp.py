@@ -116,7 +116,7 @@ class SDP(App):
         """ Determines the digitiser entity ID based on the remote address of a ConnectEvent, DisconnectEvent, or DataEvent.
             Returns a tuple of the entity ID and entity if found, else None, None.
         """
-        logger.debug(f"Science Data Processor finding digitiser entity ID for remote address: {event.remote_addr[0]}")
+        logger.debug(f"Science Data Processor finding digitiser entity ID for remote address: {event.remote_addr[0] if event.remote_addr else 'None'}")
 
         for digitiser in self.sdp_model.dig_store.dig_list:
 
@@ -160,7 +160,8 @@ class SDP(App):
         """ Processes api messages received on the Digitiser service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
-        logger.info(f"Science Data Processor received digitiser {api_call['msg_type']} msg with action code: {api_call['action_code']} on entity: {api_msg['entity']}")
+        logger.info(f"Science Data Processor received digitiser {api_call['msg_type']} msg, action code: {api_call['action_code']}, " + \
+            f"property: {api_call.get('property','')} on entity: {api_msg['entity']}")
 
         digitiser: DigitiserModel = entity
         dig_id = digitiser.dig_id
@@ -187,11 +188,17 @@ class SDP(App):
             # Get the threading lock specific to this digitiser
             dig_lock = self._get_dig_lock(dig_id)
 
-            with dig_lock:   
+            with dig_lock:
+
+                obs_id = digitiser.scanning.get('obs_id') if isinstance(digitiser.scanning, dict) else None
+                tgt_idx = digitiser.scanning.get('tgt_idx') if isinstance(digitiser.scanning, dict) else None
+                freq_scan = digitiser.scanning.get('freq_scan') if isinstance(digitiser.scanning, dict) else None
+
+                odt_initiated = obs_id[:3] == "ODT" if isinstance(obs_id, str) and len(obs_id) >= 3 else False
 
                 # Discard digitiser samples if the SDP scan configuration does not match the sample metadata
                 # Respond with success to avoid triggering retries from the digitiser, but log a warning and discard the samples
-                if not digitiser.scanning or digitiser.scanning != scanning or center_freq != digitiser.center_freq or \
+                if not digitiser.scanning or (odt_initiated and digitiser.scanning != scanning) or center_freq != digitiser.center_freq or \
                     sample_rate != digitiser.sample_rate or gain != digitiser.gain or load != digitiser.load:
                     
                     diff = self._diff_dig_metadata(digitiser, meta_dict)
@@ -331,7 +338,7 @@ class SDP(App):
         """ Processes api messages received on the Telescope Manager service access point (SAP)
             API messages are already translated and validated before being passed to this method.
         """
-        logger.info(f"Science Data Processor received Telescope Manager {api_call['msg_type']} message with action code: {api_call['action_code']}")
+        logger.info(f"Science Data Processor received Telescope Manager {api_call['msg_type']} msg, action code: {api_call['action_code']}, property {api_call.get('property','')}")
 
         action = Action()
 
@@ -465,9 +472,13 @@ class SDP(App):
                 f" and observation {'None' if obs_id is None else obs_id}\n{value}")
             return False
 
-        if dig.scanning and isinstance(dig.scanning, dict) and dig.scanning.get('obs_id') is not None and str(obs_id)[:3] != str(dig.scanning.get('obs_id'))[:3]:
-            logger.warning(f"Science Data Processor declining scan config for digitiser {dig_id} because the digitiser is already scanning samples for obs_id {dig.scanning.get('obs_id')}.\n{value}")
-            return False
+        user_initiated = obs_id[:3] == "USR" if isinstance(obs_id, str) and len(obs_id) >= 3 else False
+
+        # If this is a user-initiated scan config and digitiser already scanning, then decline if the current scanning is an observation-initiated (ODT) scan
+        if user_initiated and dig.scanning:
+            if isinstance(dig.scanning, dict) and dig.scanning.get('obs_id') and str(obs_id)[:3] != str(dig.scanning.get('obs_id'))[:3]:
+                logger.warning(f"Science Data Processor declining scan config for digitiser {dig_id} because the digitiser is already scanning samples for obs_id {dig.scanning.get('obs_id')}.\n{value}")
+                return False
             
         # Loop through the key value pairs in value dict
         for key, val in value.items():
@@ -661,7 +672,7 @@ class SDP(App):
         diffs = []
         if not digitiser.scanning:
             diffs.append(f" - scanning: model={digitiser.scanning} (not scanning)")
-        for field in [sdp_dig.PROPERTY_CENTER_FREQ, sdp_dig.PROPERTY_SAMPLE_RATE, sdp_dig.PROPERTY_GAIN, sdp_dig.PROPERTY_LOAD, sdp_dig.PROPERTY_SCANNING]:
+        for field in [sdp_dig.PROPERTY_CENTER_FREQ, sdp_dig.PROPERTY_SAMPLE_RATE, sdp_dig.PROPERTY_SDR_GAIN, sdp_dig.PROPERTY_LOAD, sdp_dig.PROPERTY_SCANNING]:
             model_val = getattr(digitiser, field, None)
             meta_val = meta_dict.get(field)
             if model_val != meta_val:
