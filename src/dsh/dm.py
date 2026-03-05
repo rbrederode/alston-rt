@@ -309,9 +309,10 @@ class DM(App):
                     altaz = dish_driver.get_current_altaz()
                 except XBase as e:
                     logger.error(f"DM failed to get current AltAz for Dish {dish_id}: {e}")
+                finally:
                     
-                    # Review dish failure count to determine if action is needed
-                    if self._exceed_failure_threshold(dish_driver, dish_id):
+                    # Review dish health state to determine if action is needed
+                    if dish_driver.get_health_state() == HealthState.FAILED:
                         self._send_status_adv_to_tm(action, target_id, target)
                         
                         # Tone down the driver poll rate to once per minute to reduce log spam until the issue is resolved
@@ -334,7 +335,7 @@ class DM(App):
 
                     # Else if we are doing an offset or five point scan, tell the driver to scan it
                     elif target.pointing in [PointingType.OFFSET_SCAN, PointingType.FIVE_POINT_SCAN]:
-                        target.scan.start = target.scan.start if target.scan.start is not None else datetime.now(timezone.utc)
+                        target.start_scan()
                         try:
                             dish_driver.scan()
                         except XBase as e:
@@ -361,24 +362,6 @@ class DM(App):
             timer_action=dish_driver.get_poll_interval_ms())) 
        
         return action
-
-    def _exceed_failure_threshold(self, dish_driver: DishDriver, dish_id: str) -> bool:
-        """ Review the failure count of the dish driver. 
-            :return: True if failure threshold exceeded and action is necessary, False otherwise.
-        """
-        threshold = 60000/dish_driver.get_poll_interval_ms()
-        failure_count = dish_driver.get_failure_count()
-
-        if failure_count > 3 and failure_count < 10:
-            logger.error(f"DM detected sporadic failures {failure_count} getting current AltAz for Dish {dish_id}." + \
-                 f" Consider investigating dish driver.")
-        elif failure_count >= 10 and failure_count < threshold:
-            logger.error(f"DM detected persistent failures {failure_count} getting current AltAz for Dish {dish_id}." + \
-                f" Consider investigating dish driver.")
-        elif failure_count >= threshold:
-            logger.error(f"DM detected unacceptably high failures {failure_count} getting current AltAz for Dish {dish_id}.")
-            return True
-        return False
 
     def process_status_event(self, event) -> Action:
         """ Processes status update events.

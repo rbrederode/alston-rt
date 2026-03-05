@@ -52,6 +52,10 @@ class BaseModel:
                     f"Base model attempting invalid transition in type {type(self).__name__} for name: {name}: {old_value.name} → {new_value.name}"
                 )
 
+    def copy(self):
+        """Create a shallow copy of this model by constructing a new instance with the same _data values."""
+        return type(self)(**dict(self._data))
+
     def __getattr__(self, name):
         # Use object.__getattribute__ to avoid infinite recursion
         try:

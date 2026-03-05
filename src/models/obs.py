@@ -231,6 +231,41 @@ class Observation(BaseModel):
     def determine_scans(self):
         """Determine the set of scans for each target configuration in the observation."""
 
+        # Iterate through each target, expand Five Point Scan targets into five seperate targets each with a pointing direction in C, N,S, E, W
+        # Duplicate target configurations for each of the five pointings, update the target index in the target and configuration to the expanded index
+        expanded_targets = []
+        expanded_target_configs = []
+        for tgt_idx, target in enumerate(self.targets):
+            if target.pointing == PointingType.FIVE_POINT_SCAN and target.scan and target.scan.direction is None:
+                # Create the five pointings for the Five Point Scan target
+                for direction in ["C", "N", "S", "E", "W"]:
+
+                    # Copy the target model and update the Five Point Scan direction 
+                    tgt_scan_copy = target.scan.copy()
+                    tgt_scan_copy.direction = direction
+
+                    target_copy = target.copy()
+                    target_copy.scan = tgt_scan_copy
+                    target_copy.tgt_idx = len(expanded_targets)
+
+                    expanded_targets.append(target_copy)
+
+                    # Copy the target configuration and update the target index
+                    target_config_copy = self.target_configs[tgt_idx].copy()
+                    target_config_copy.tgt_idx = target_copy.tgt_idx
+                    
+                    expanded_target_configs.append(target_config_copy)
+            else:
+                target.tgt_idx = len(expanded_targets)
+                target_config_copy = self.target_configs[tgt_idx].copy()
+                target_config_copy.tgt_idx = target.tgt_idx
+
+                expanded_targets.append(target)
+                expanded_target_configs.append(target_config_copy)
+
+        self.targets = expanded_targets
+        self.target_configs = expanded_target_configs
+
         # Initialise the target scans list
         self.target_scans = []
 

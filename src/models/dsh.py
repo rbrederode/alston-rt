@@ -2,6 +2,7 @@
 
 import enum
 from datetime import datetime, timezone
+import numpy as np
 from schema import Schema, And, Or, Use, SchemaError
 
 from astropy.coordinates import EarthLocation, AltAz
@@ -120,6 +121,7 @@ class DishModel(BaseModel):
         "driver_config": Or(None, lambda v: v is None or isinstance(v, BaseModel)),               # Dish driver configuration instance e.g. MD01Config
         "driver_poll_period": Or(None, And(int, lambda v: v > 0)),                                # Dish driver poll period in milliseconds to get altaz updates
         "driver_failures": And(int, lambda v: v >= 0),                                            # Count of consecutive driver call failures
+        "health": And(HealthState, lambda v: isinstance(v, HealthState)),                         # Overall health state of the dish based on driver failures and other factors
         "last_err_msg": Or(None, And(str, lambda v: isinstance(v, str))),                         # Last error message from the dish manager
         "last_err_dt": Or(None, And(datetime, lambda v: isinstance(v, datetime))),                # Last error datetime from the dish manager
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
@@ -181,7 +183,8 @@ class DishModel(BaseModel):
             "driver_type": DriverType.UNKNOWN,
             "driver_config": None,                          # Initialize with None, will be set based on driver_type
             "driver_poll_period": 1000,                     # Default to 1000 ms
-            "driver_failures": 0,                           # Initialize failure count to zero  
+            "driver_failures": 0,                           # Initialize failure count to zero
+            "health": HealthState.UNKNOWN,
             "last_err_msg": None,
             "last_err_dt": None,   
             "last_update": datetime.now(timezone.utc),
@@ -193,6 +196,38 @@ class DishModel(BaseModel):
                 kwargs.setdefault(key, value)
 
         super().__init__(**kwargs)
+
+        # Mode transition history: each row is [unix_timestamp, old_mode, new_mode]
+        self._mode_hist_max = 1000
+        self._mode_hist = np.zeros((self._mode_hist_max, 3))
+
+    def __setattr__(self, name, value):
+        """Override to capture mode transitions in a numpy history array."""
+        if name == "mode" and hasattr(self, '_mode_hist'):
+            try:
+                old_mode = self._data.get("mode", None)
+            except AttributeError:
+                old_mode = None
+
+            # Delegate to BaseModel (validates transition + schema)
+            super().__setattr__(name, value)
+
+            # Record the transition after successful validation
+            if old_mode is not None:
+                now = Time(datetime.now(timezone.utc))
+                now.format = 'unix'
+                self._mode_hist = np.roll(self._mode_hist, shift=-1, axis=0)
+                self._mode_hist[-1] = (now.value, int(old_mode), int(value))
+            return
+
+        super().__setattr__(name, value)
+
+    def get_mode_hist(self) -> np.ndarray:
+        """Return the mode transition history as a numpy array.
+        Each row is [unix_timestamp, old_mode, new_mode].
+        Rows with timestamp == 0 are unused slots.
+        """
+        return self._mode_hist[self._mode_hist[:, 0] > 0]
 
     def increment_failures(self):
         """ Increment the driver failure count by one.
