@@ -7,7 +7,7 @@ astroplan
 astroquery
 witmotion
 pyobjc
-pyrtlsdr
+pyrtlsdr==0.2.93
 scipy
 schema
 geopy

@@ -6,9 +6,11 @@ import json
 import os
 from datetime import datetime, timezone
 
+from models.pipeline import StepConfig, StepType
 from models.scan import ScanModel, ScanState
+from sdp.pipeline.steps.dc_spike import DCSpike
 from util import gen_file_prefix
-from util.xbase import XSoftwareFailure
+from util.xbase import XSoftwareFailure 
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +44,7 @@ class Scan:
             The data arrays are initialized to zero and incrementally loaded as samples arrive.
 
             Parameters
-                start_idx: Starting index of the digitiser read counter for this scan
-                duration: Duration of the scan in seconds
-                sample_rate: Sample rate in Hz
-                channels: Number of channels (FFT size) for the analysis
-                center_freq: Center frequency of the samples in Hz (optional)
-                gain: Gain in dB (optional)
-                load: Load flag (optional)
+                scan_model: The ScanModel instance containing the parameters for this scan
         """
 
         # Compose a key from obs_id, tgt_idx, freq_scan
@@ -73,6 +69,7 @@ class Scan:
         with self._rlock:
 
             self.scan_model = scan_model
+            self.pipeline = None            # Processing pipeline to calibrate scan data
 
             self.loaded_secs = self.scan_model.duration * [False]    # List of seconds for which samples have been loaded
             self.prev_read_end = None                                # Timestamp of the previous read end
@@ -81,13 +78,20 @@ class Scan:
             self.raw = None  # Raw IQ samples for the duration of the scan
             self.pwr = None  # Power spectrum for the duration of the scan
             self.spr = None  # Summed power spectrum for each second in the duration of the scan
+            self.cal = None  # Calibrated power spectrum for each second in the duration of the scan
             self.mpr = None  # Mean power spectrum over duration of the scan
+            self.snr = None  # Signal to Noise Ratio (SNR) for each second in the duration of the scan
 
             self.mean_real = 0.0  # Mean of real value of the raw samples (I)
             self.mean_imag = 0.0  # Mean of imaginary value of the raw samples (Q)
 
+            self.load_scan = None  # Reference to a load scan for calibration
+
             # Initialize data arrays for the scan
             self.init_data_arrays()
+
+            # Initialise a DC Spike removal step for this scan (used in load_samples when loading each second of samples)
+            self.dcspike = DCSpike(StepConfig(step=StepType.DC_SPIKE, params={'scan': self}))
 
     def __str__(self):
 
@@ -140,7 +144,9 @@ class Scan:
             self.raw = np.zeros((num_rows, self.scan_model.channels), dtype=np.complex64)   # complex64 for raw IQ samples i.e. 8 bytes per sample (4 bytes for real and 4 bytes for imaginary parts)
             self.pwr = np.zeros((num_rows, self.scan_model.channels), dtype=np.float64)     # float64 for power spectrum data
             self.spr = np.zeros((self.scan_model.duration, self.scan_model.channels), dtype=np.float64)     # float64 for summed pwr for each second in duration
+            self.cal = np.zeros((self.scan_model.duration, self.scan_model.channels), dtype=np.float64)     # float64 for calibrated spectrum for each second in duration
             self.mpr = np.ones((self.scan_model.channels,), dtype=np.float64)               # float64 for mean power spectrum over duration for each channel (fft bin)
+            self.snr = np.zeros(self.scan_model.duration)                                   # SNR for each second in duration
 
     def get_dig_id(self) -> str:
         """
@@ -172,12 +178,37 @@ class Scan:
         with self._rlock:
             self.scan_model.status = status
 
+    def set_pipeline(self, pipeline: "ProcessingPipeline"):
+        """
+        Associates a Processing Pipeline with this scan for processing the samples as they are loaded.
+        """
+        with self._rlock:
+            self.pipeline = pipeline
+
     def is_load_scan(self) -> bool:
         """
         Check if this scan is a load scan (i.e. load flag is True in the scan model).
             :returns: True if this is a load scan, False otherwise
         """
         return self.scan_model.load
+
+    def set_load_scan(self, load_scan: "Scan"):
+        """
+        Associate a load scan with this sky scan
+            :param load_scan: The load scan to associate with this sky scan
+        """
+        if not isinstance(load_scan, Scan):
+            raise XSoftwareFailure(f"Scan {self.scan_model.scan_id} - Provided load_scan is not a Scan instance")
+
+        if not load_scan.is_load_scan():
+            raise XSoftwareFailure(f"Scan {self.scan_model.scan_id} - Provided load_scan {load_scan.scan_model.scan_id} is not a load scan (load flag is not True)")
+
+        if not self.equivalent(load_scan):
+            raise XSoftwareFailure(f"Scan {self.scan_model.scan_id} - Provided load_scan {load_scan.scan_model.scan_id} is not equivalent to this scan (different scan parameters)")
+
+        with self._rlock:
+            self.load_scan = load_scan
+            self.scan_model.load_scan_id = load_scan.scan_model.scan_id
 
     def get_loaded_seconds(self) -> int:
         """
@@ -227,19 +258,24 @@ class Scan:
             pwr[j,:] = np.abs(np.fft.fftshift(np.fft.fft(iq[j,:])))**2  # The power spectrum is the absolute value of the signal squared
 
         spr = np.sum(pwr, axis=0)  # Sum power across all rows for this second
-        remove_dc_spike(self.scan_model.channels, spr)  # Remove DC spike if present
+        self.dcspike.process(context={}, signal=spr)  # Remove DC spike if present using the DCSpike step
+        cal = self.pipeline.process(signal=spr.copy(), context={}) if self.pipeline else spr.copy()  # Push the summed power spectrum through the calibration pipeline
 
         # Store the raw, power and summed spectrum data in the appropriate rows of the scan data arrays
         with self._rlock:
             self.raw[row_start:row_start + iq.shape[0],:] = iq
             self.pwr[row_start:row_start + iq.shape[0],:] = pwr
             self.spr[sec - 1,:] = spr  # sec is 1-based index, so adjust for 0-based array index
+            self.cal[sec - 1,:] = cal  # sec is 1-based index, so adjust for 0-based array index
             self.loaded_secs[sec - 1] = True  # Mark this second as loaded
 
             indices = np.linspace(row_start, row_end - 1, int(self.raw.shape[0]*0.01), dtype=int)
 
             self.mean_real = np.mean(np.abs(self.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
             self.mean_imag = np.mean(np.abs(self.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
+
+            self.snr[sec - 1] = self.calc_snr(self.spr[sec - 1, :])                   # Calculate the SNR for this second and store it in the snr array
+            logger.info(f"Scan {self.scan_model.scan_id} - SNR for second {sec}: {self.snr[sec - 1]:.2f} dB")
 
         # Count how many rows have self.loaded_secs marked as True
         actual_rows = np.count_nonzero(self.loaded_secs)
@@ -263,6 +299,37 @@ class Scan:
             self.mpr = np.mean(self.spr, axis=0)
 
         return True
+
+    def calc_snr(self, spectrum: np.ndarray, window_frac: float = 0.10) -> float:
+        """
+        Calculate the signal-to-noise ratio (SNR) for a given power spectrum.
+        The SNR is computed as (mean signal - mean noise) / std noise, where:
+        - The signal region is a window around the peak (default: 10% of channels, min 3 bins)
+        - The noise region is all bins outside the signal window
+        :param spectrum: 1D numpy array of power values (e.g., a row from self.spr)
+        :param window_frac: Fraction of channels to use for the signal window (default 10%)
+        :return: SNR value (float)
+        """
+        channels = self.scan_model.channels
+        peak_bin = np.argmax(spectrum)
+        window_width = max(3, int(window_frac * channels))
+        half_width = window_width // 2
+        signal_start = max(0, peak_bin - half_width)
+        signal_end = min(channels, peak_bin + half_width + 1)
+
+        signal_region = spectrum[signal_start:signal_end]
+        if signal_start == 0:
+            noise_region = spectrum[signal_end:]
+        elif signal_end == channels:
+            noise_region = spectrum[:signal_start]
+        else:
+            noise_region = np.concatenate((spectrum[:signal_start], spectrum[signal_end:]))
+
+        signal_mean = np.mean(signal_region)
+        noise_mean = np.mean(noise_region) if noise_region.size > 0 else 0.0
+        noise_std = np.std(noise_region) if noise_region.size > 0 else 1.0
+        snr = (signal_mean - noise_mean) / noise_std if noise_std > 0 else np.inf
+        return snr
 
     def save_to_disk(self, output_dir, include_iq: bool = False) -> bool:
         """
@@ -379,8 +446,8 @@ class Scan:
 
                     # Calculate the sum of the power spectrum for each frequency bin in a given second
                     scan.spr[sec,:] = np.sum(scan.pwr[row_start:row_end,:], axis=0)  # Sum the power spectrum in a given sec for each frequency bin (in columns)
-                    remove_dc_spike(scan.scan_model.channels, scan.spr[sec,:])
-
+                    scan.dcspike.process(context={}, signal=scan.spr[sec,:])         # Remove DC spike if present using the DCSpike step
+                    
                 scan.loaded_secs = [True] * scan.scan_model.duration
             else:
                 # Load summed power spectrum only
@@ -416,31 +483,6 @@ class Scan:
         with self._rlock:
             return self.scan_model.to_dict()
 
-def remove_dc_spike(channels, arr):
-
-    """ Ref: https://pysdr.org/content/sampling.html#dc-spike-and-offset-tuning
-    Identify and remove the DC spike (if present) at the center frequency """
-
-    # Review the bins either side the centre of channels
-    # We expect the DC spike to occur in the central bin
-    start = channels//2-1 # Zero indexed array
-    end =  channels//2+2 # DC spike is in the middle
-
-    # Calculate the mean and std deviation of the reviewed samples
-    mean = np.mean(arr[start:end])
-    std = np.std(arr[start:end])
-
-    # Create a mask for values above one standard deviation from the mean
-    mask = arr[start:end] > (mean + std)
-    # Calculate the mean of the reviewed samples excluding the values in the mask
-    mean_no_dc = np.mean(arr[start:end][~mask])
-
-    #print(f"Considered samples from {start} to {end}: {arr[start:end]}")
-    #print(f"Mean {mean} Std {std} Mask {mask} Mean Excluding DC {np.mean(arr[start:end][~mask])}")
-
-    # Replace values above one standard deviation with the mean of the samples surrounding the DC spike
-    arr[start:end][mask] = np.mean(arr[start:end][~mask])
-
 if __name__ == "__main__":
 
     # Setup logging configuration
@@ -457,7 +499,11 @@ if __name__ == "__main__":
     INPUT_DIR = os.path.expanduser(INPUT_DIR)
 
     scan_model = ScanModel(
-        scan_id="tm001",
+        dig_id="dig001",
+        obs_id="obs001",
+        tgt_idx=0,
+        freq_scan=1,
+        scan_iter=5,
         created=datetime.now(timezone.utc),
         read_start=datetime.now(timezone.utc),
         read_end=datetime.now(timezone.utc),
@@ -466,23 +512,23 @@ if __name__ == "__main__":
         duration=60,
         sample_rate=24e5,
         channels=1024,
-        center_freq=1420400000,
-        gain=12,
+        center_freq=1420400000.0,
+        gain=12.0,
         load=False,
-        status="WIP",
+        status=ScanState.WIP,
         load_failures=0,
         last_update=datetime.now(timezone.utc)
     )
 
     scan = Scan(scan_model=scan_model)
     print(scan)
-    scan.from_disk(read_start="2025-06-24T130440", input_dir=INPUT_DIR, include_iq=True)
+    scan.from_disk(file_prefix="2025-06-24T130440", input_dir=INPUT_DIR, include_iq=True)
     print(scan)
 
     from sdp.signal_display import SignalDisplay
 
-    display = SignalDisplay()
-    display.set_scan(scan)
+    display = SignalDisplay(dig_id="dig001")
+    display.set_scan(scan=scan, load=scan)
     display.display()
 
     # press a key to continue

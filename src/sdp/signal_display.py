@@ -174,7 +174,7 @@ class SignalDisplay:
 
         # Set axes properties
         self.init_pwr_spectrum_axes(self.sig[0], "Power/Sec (SPR,BSL)", self.extent, units="{np.abs(shift fft(signal))**2}")
-        self.init_pwr_spectrum_axes(self.sig[1], "Power/Sec (SPR/BSL)", self.extent)
+        self.init_pwr_spectrum_axes(self.sig[1], "Power/Sec (CAL)", self.extent)
         self.init_saturation_axes(self.sig[3])
         self.init_total_power_axes(self.sig[4], self.scan.scan_model.duration)
 
@@ -214,8 +214,8 @@ class SignalDisplay:
         if self.sec is None:
 
             self.sig[2].cla()
-            self.pwr_im = self.sig[2].imshow(self.scan.spr / self.load.mpr, aspect='auto', extent=self.extent)
-            self.sig[4].plot([1], [np.sum(self.scan.spr[0, :])], color='red', label='Total Power')  # Plot total power across all channels for the first second
+            self.pwr_im = self.sig[2].imshow(self.scan.cal, aspect='auto', extent=self.extent)
+            self.sig[4].plot([1], [np.sum(self.scan.cal[0, :])], color='red', label='Total Power')  # Plot total power across all channels for the first second
             self.sec = 0
 
         else:
@@ -227,14 +227,14 @@ class SignalDisplay:
 
             # Update the existing power spectrum image with new data
             if self.pwr_im is not None:
-                self.pwr_im.set_data(self.scan.spr / self.load.mpr)
+                self.pwr_im.set_data(self.scan.cal)
             else:
-                self.pwr_im = self.sig[2].imshow(self.scan.spr / self.load.mpr, aspect='auto', extent=self.extent)
+                self.pwr_im = self.sig[2].imshow(self.scan.cal, aspect='auto', extent=self.extent)
 
         # Plot total power across all channels for each second up to the current second
         self.sig[4].plot(
             np.arange(1, l_sec + 1), 
-            [np.sum(self.scan.spr[s, :]) for s in range(l_sec)], 
+            [np.sum(self.scan.cal[s, :]) for s in range(l_sec)], 
             color='red', 
             label='Total Power (TPW)'
         )  
@@ -260,14 +260,15 @@ class SignalDisplay:
 
         self.sig[1].plot(
             np.linspace(self.extent[0], self.extent[1], self.scan.scan_model.channels), 
-            self.scan.spr.flatten()[(l_sec-1)*self.scan.scan_model.channels:(l_sec)*self.scan.scan_model.channels] / self.load.mpr, 
+            #self.scan.spr.flatten()[(l_sec-1)*self.scan.scan_model.channels:(l_sec)*self.scan.scan_model.channels] / self.load.mpr, 
+            self.scan.cal.flatten()[(l_sec-1)*self.scan.scan_model.channels:(l_sec)*self.scan.scan_model.channels], 
             color='orange', 
-            label='Signal (SPR/BSL)'
+            label=f'Signal (CAL)\nSNR {self.scan.snr[l_sec-1]:.2f} dB' if self.scan.snr is not None else 'Signal (CAL)'
         )
         self.sig[1].legend(loc='lower right')
 
-        self.sig[3].bar(0, self.scan.mean_real, color='blue', label='I' if self.sec == 0 else '_nolegend_')
-        self.sig[3].bar(1, self.scan.mean_imag, color='orange', label='Q' if self.sec == 0 else '_nolegend_')
+        self.sig[3].bar(0, self.scan.mean_real, color='blue', label=f'I {self.scan.mean_real:.2e}' if self.sec == 0 else '_nolegend_')
+        self.sig[3].bar(1, self.scan.mean_imag, color='orange', label=f'Q {self.scan.mean_imag:.2e}' if self.sec == 0 else '_nolegend_')
         # Draw a line at the 33% and 66% marks
         self.sig[3].axhline(y=33, color='green', linestyle='--', label='33%')
         self.sig[3].axhline(y=66, color='red', linestyle='--', label='66%')
@@ -276,7 +277,7 @@ class SignalDisplay:
         if l_sec == self.scan.scan_model.duration:
             tpw = np.zeros(self.scan.scan_model.duration, dtype=np.float64)  # Initialise (scans * duration * iterations) array for total power sky timeline
             # Sum the power spectrum for each second in the current scan
-            tpw[:] = np.sum(self.scan.spr, axis=1) # Total Power per second
+            tpw[:] = np.sum(self.scan.cal, axis=1) # Total Power per second
             # Avg of the total power per second
             avg_tpwr = np.mean(tpw[:])
             self.sig[4].axhline(y=avg_tpwr, color='red', linestyle='--', label=f'Mean {avg_tpwr:.3e}')

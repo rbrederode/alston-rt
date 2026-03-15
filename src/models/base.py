@@ -270,6 +270,7 @@ class BaseModel:
         from models.obs import ObsState, Observation
         from models.oda import ObsList, ScanStore, ODAModel
         from models.oet import OETModel
+        from models.pipeline import StepConfig, StepType, PipelineConfig
         from models.proc import ProcessorModel
         from models.scan import ScanModel, ScanState
         from models.sdp import ScienceDataProcessorModel
@@ -329,6 +330,7 @@ class BaseModel:
                     "PointingType": PointingType,
                     "PointingState": PointingState,
                     "ScanState": ScanState, 
+                    "StepType": StepType,
                     "UIDriverType": UIDriverType,
                 }.get(enum_class_name)
                 if enum_class is not None:
@@ -369,6 +371,9 @@ class BaseModel:
             elif model_type == "PECModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return PECModel(**deserialized_fields)
+            elif model_type == "PipelineConfig":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return PipelineConfig(**deserialized_fields)
             elif model_type == "ProcessorModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ProcessorModel(**deserialized_fields)
@@ -409,6 +414,9 @@ class BaseModel:
                 else:
                     raise ValueError(f"Unsupported SkyCoord frame: {frame}")
 
+            elif model_type == "StepConfig":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return StepConfig(**deserialized_fields)
             elif model_type == "TargetConfig":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return TargetConfig(**deserialized_fields)
