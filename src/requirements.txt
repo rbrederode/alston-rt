@@ -10,6 +10,7 @@ pyobjc
 pyrtlsdr==0.2.93
 scipy
 schema
+setuptools==75.6.0
 geopy
 pytest
 flask>=3.0.0

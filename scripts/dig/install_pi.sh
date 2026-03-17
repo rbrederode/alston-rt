@@ -8,19 +8,19 @@ echo "==================================="
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Running system update..."
-bash "$BASE_DIR/scripts/system_update.sh"
+bash "$BASE_DIR/scripts/dig/system_update.sh"
 
 echo "Installing packages..."
-bash "$BASE_DIR/scripts/install_packages.sh"
+bash "$BASE_DIR/scripts/dig/install_packages.sh"
 
 echo "Installing SDR drivers..."
-bash "$BASE_DIR/scripts/install_sdr.sh"
+bash "$BASE_DIR/scripts/dig/install_sdr.sh"
 
 echo "Setting up Python environment..."
-bash "$BASE_DIR/scripts/install_python.sh"
+bash "$BASE_DIR/scripts/dig/install_python.sh"
 
 echo "Configuring services..."
-#bash "$BASE_DIR/scripts/configure_services.sh"
+#bash "$BASE_DIR/scripts/dig/configure_services.sh"
 
 echo ""
 echo "Installation complete."
