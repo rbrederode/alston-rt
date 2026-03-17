@@ -34,7 +34,7 @@ class PointingType(enum.IntEnum):
     FIVE_POINT_SCAN = 4       # Center point and 4 offset points e.g. for beam mapping
 
 class OffsetScan(BaseModel):
-    """ A class representing the parameters for an offset or five point scan over a target.
+    """ A class representing the parameters for an offset scan over a target.
         Angle is the position angle of the scan in the tangent plane 
             0°  - North-South scan
             90° - West-East scan
@@ -154,6 +154,11 @@ class TargetModel(BaseModel):
             return f"{self.pointing.name}(alt={self.altaz.get('alt')}, az={self.altaz.get('az')})"
         else:
             return f"Undefined Target with pointing type {self.pointing}"
+
+    def start_scan(self):
+        """Start the scan for this target by setting the scan start time to now if not already set."""
+        if self.pointing == PointingType.OFFSET_SCAN and isinstance(self.scan, OffsetScan) and self.scan.start is None:
+            self.scan.start = datetime.now(timezone.utc)
 
 class TargetConfig(BaseModel):
     """A class representing a target configuration."""

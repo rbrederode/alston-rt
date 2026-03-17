@@ -5,6 +5,7 @@ import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.patches as mpatches
 import matplotlib as mpl
 # Disable automatic window raising (backend-specific)
 mpl.rcParams['figure.raise_window'] = False
@@ -18,7 +19,8 @@ except ImportError:
 
 from matplotlib.gridspec import GridSpec
 
-from models.dsh import DishModel
+from models.dsh import DishModel, DishMode, PointingState, Capability
+from dsh.drivers.driver import DishDriver
 
 import logging
 logger = logging.getLogger(__name__)
@@ -30,8 +32,8 @@ class DishDisplay:
     # Attribute layout: (x, y, label) — x determines left (0) vs right (5) column
     ATTR_LABELS = [
         
-        (0, 0.5, "Target Type"),
-        (0, 1.5, "Target"),         
+        (0, 0.5, "Target"),
+        (0, 1.5, "Target Type"),    (5, 1.5, "Health"),   
         (0, 2.5, "Lat/Long"),       (5, 2.5, "Height"),
         (0, 3.5, "Feed"),           (5, 3.5, "Digitiser"),
         (0, 4.5, "Pointing State"), (5, 4.5, "Driver Type"),
@@ -43,8 +45,21 @@ class DishDisplay:
     ]
 
     RECT_LEFT_X, RECT_RIGHT_X = 2.5, 7.5
-    RECT_W, RECT_H = 2.4, 0.5
+    RECT_W, RECT_H = 2.5, 0.5
     LABEL_GAP = 0.1  # gap between label text and rectangle edge
+
+    # Predefine colors
+    MODE_COLOURS = {
+        DishMode.STARTUP: "tab:olive",
+        DishMode.SHUTDOWN: "dimgray",
+        DishMode.STANDBY_LP: "tab:blue",
+        DishMode.STANDBY_FP: "tab:blue",
+        DishMode.MAINTENANCE: "tab:red",
+        DishMode.STOW: "tab:orange",
+        DishMode.CONFIG: "yellow",
+        DishMode.OPERATE: "tab:green",
+        DishMode.UNKNOWN: "tab:purple",
+    }
 
     def __init__(self, driver: DishDriver):
         """ Initialize the dish display for a given dish driver
@@ -64,7 +79,7 @@ class DishDisplay:
         self.attr_texts = {}    # Attribute value texts keyed by label name
 
         self.gs0 = GridSpec(1, 3, width_ratios=[1, 1, 1], left=0.07, right=0.93, top=0.90, bottom=0.3, wspace=0.2) # dish displays
-        self.gs1 = GridSpec(1, 2, width_ratios=[0.32, 0.68], height_ratios=[1], left=0.07, right=0.93, top=0.20, bottom=0.07, wspace=0.2) # pec plot
+        self.gs1 = GridSpec(1, 2, width_ratios=[0.3, 0.70], height_ratios=[1], left=0.07, right=0.93, top=0.20, bottom=0.08, wspace=0.2) # pec plot
 
         self._create_figure()   # Create the figure and axes for the dish display
 
@@ -77,11 +92,11 @@ class DishDisplay:
         self.fig = plt.figure(num=f"Dish {self.driver.dsh_model.dsh_id}", figsize=FIG_SIZE)
 
         self.axes = [None] * 5  # Initialize axes for the subplots
-        self.axes[0] = self.fig.add_subplot(self.gs0[0]) # Elevation and azimuth timeline
-        self.axes[1] = self.fig.add_subplot(self.gs0[1]) # TBD
-        self.axes[2] = self.fig.add_subplot(self.gs0[2]) # TBD
+        self.axes[0] = self.fig.add_subplot(self.gs0[0]) # Attributes such as pointing state and dish mode
+        self.axes[1] = self.fig.add_subplot(self.gs0[1]) # Pointing altitude and azimuth timeline
+        self.axes[2] = self.fig.add_subplot(self.gs0[2]) # Desired altitude and azimuth timeline
 
-        self.axes[3] = self.fig.add_subplot(self.gs1[0]) # TBD
+        self.axes[3] = self.fig.add_subplot(self.gs1[0]) # Dish mode timeline
         self.axes[4] = self.fig.add_subplot(self.gs1[1]) # PEC Plot
 
         self.fig.subplots_adjust(top=0.78)
@@ -92,6 +107,7 @@ class DishDisplay:
 
         self.init_attribute_axes(self.axes[0]) # Initialise axes for attributes such as pointing state and dish mode
         self.init_pec_axes(self.axes[4]) # Initialise the PEC axes
+        self.init_mode_axis(self.axes[3]) # Initialise the dish mode timeline axis
 
     def _close_figure(self):
         """ Close the figure of the dish displays """
@@ -162,16 +178,21 @@ class DishDisplay:
 
         if self.driver.dsh_model is not None:
             m = self.driver.dsh_model
+
+            self.update_mode_timeline(m) # Update the dish mode timeline with the latest mode history from the model
+
             self.attr_texts["Height"].set_text(f"{m.height:.1f}m")
             self.attr_texts["Lat/Long"].set_text(f"{m.latitude:.1f}°,{m.longitude:.1f}°")
             self.attr_texts["Driver Type"].set_text(m.driver_type.name)
             self.attr_texts["Feed"].set_text(m.feed.name)
             self.attr_texts["Digitiser"].set_text(m.dig_id or "—")
+
+            self.attr_texts["Health"].set_text(m.health.name)
+            self.attr_rects["Health"].set_color(
+                {'OK': 'tab:green', 'DEGRADED': 'gold', 'FAILED': 'tab:red', 'UNKNOWN': 'tab:gray'}.get(m.health.name, 'tab:gray'))
             
             self.attr_texts["Mode"].set_text(m.mode.name)
-            self.attr_rects["Mode"].set_color(
-                {'OPERATE': 'tab:green', 'STANDBY_FP': 'tab:blue', 'STOW': 'gold', 'SHUTDOWN': 'tab:red', 'STARTUP': 'tab:olive',
-                 'MAINTENANCE': 'tab:red', 'UNKNOWN': 'tab:red', 'CONFIG': 'tab:olive'}.get(m.mode.name, 'tab:gray'))
+            self.attr_rects["Mode"].set_color(self.MODE_COLOURS.get(m.mode, 'tab:gray'))
 
             self.attr_texts["Capability"].set_text('DEGRADED' if m.capability.name == 'OPERATE_DEGRADED' else m.capability.name)
             self.attr_rects["Capability"].set_color(
@@ -193,7 +214,7 @@ class DishDisplay:
                 self.attr_rects["Target"].set_color('tab:gray')
                 self.attr_texts["Target Type"].set_text("—")
                 self.attr_rects["Target Type"].set_color('tab:gray')
-            
+
             if m.pointing_altaz is not None and isinstance(m.pointing_altaz, dict):
                 self.attr_texts["Pointing Az"].set_text(f"{m.pointing_altaz.get('az', 0):.4f}°")
                 self.attr_texts["Pointing Alt"].set_text(f"{m.pointing_altaz.get('alt', 0):.4f}°")
@@ -290,6 +311,61 @@ class DishDisplay:
             self.fig.canvas.draw_idle()     # Schedules a redraw without forcing a window focus change
             self.fig.canvas.flush_events()  # Process events for this figure only
 
+    def update_mode_timeline(self, dish_model):
+
+        hist = dish_model.get_mode_hist()
+        if hist.shape[0] == 0:
+            return
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        now_unix = now.timestamp()
+
+        # -----------------------------------------------------
+        # Build segments
+        # Each row: [timestamp, old_mode, new_mode]
+        # -----------------------------------------------------
+        segments = []
+
+        for i in range(len(hist)):
+            t_start = hist[i, 0]
+            old_mode = DishMode(int(hist[i, 1]))
+            new_mode = DishMode(int(hist[i, 2]))
+
+            # End time = next transition OR now
+            if i < len(hist) - 1:
+                t_end = hist[i + 1, 0]
+            else:
+                t_end = now_unix
+
+            segments.append((t_start, t_end - t_start, new_mode))
+
+        # -----------------------------------------------------
+        # Convert to matplotlib time
+        # -----------------------------------------------------
+        self.clear_axes_data(self.axes[3])
+
+        for start_unix, duration_sec, mode in segments:
+            start_dt = datetime.datetime.fromtimestamp(start_unix, tz=datetime.timezone.utc)
+            start_mpl = mdates.date2num(start_dt)
+            duration_days = duration_sec / 86400.0
+
+            self.axes[3].broken_barh(
+                [(start_mpl, duration_days)],
+                (0, 4),
+                facecolors=self.MODE_COLOURS[mode]
+            )
+
+       # Update x-limits to cover all data
+        start_dt = datetime.datetime.fromtimestamp(hist[0, 0], tz=datetime.timezone.utc)
+        self.axes[3].set_xlim(
+            mdates.date2num(start_dt),
+            mdates.date2num(now)
+        )
+
+        # Re-apply mode axis formatting (cleared by clear_axes_data)
+        self.init_mode_axis(self.axes[3])
+        self.axes[3].figure.canvas.draw_idle()
+
     def save_dsh_figure(self, output_dir: str) -> bool:
         """ Save the current dish figure to disk
             :param output_dir: The directory to save the figure in
@@ -318,7 +394,7 @@ class DishDisplay:
         axes.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
         axes.set_xlabel("Time [HH:MM:SS]")
         axes.grid(True)
-        axes.legend(loc='upper right')
+        axes.legend(loc='upper left', fontsize=7)
 
     def init_attribute_axes(self, axes):
         """ Initialise attribute plot axes """
@@ -332,7 +408,7 @@ class DishDisplay:
 
         for x, y, label in self.ATTR_LABELS:
             rect_x = self.RECT_LEFT_X if x < 5 else self.RECT_RIGHT_X
-            rect_w = self.RECT_W * 3.1 if label in ["Target", "Target Type"] else self.RECT_W
+            rect_w = self.RECT_W * 3.1 if label in ["Target"] else self.RECT_W
             axes.text(rect_x - self.LABEL_GAP, y, label, ha='right', va='center', fontsize=9)
             rect = plt.Rectangle((rect_x, y - 0.2), rect_w, self.RECT_H, color='tab:gray', alpha=0.5)
             axes.add_patch(rect)
@@ -340,6 +416,33 @@ class DishDisplay:
             # Value text centered inside the rectangle
             txt = axes.text(rect_x + rect_w / 2, y, "", ha='center', va='center', fontsize=8)
             self.attr_texts[label] = txt
+
+        # Target Type labels can be long (e.g. FIVE_POINT_SCAN) — use a smaller font
+        self.attr_texts["Target Type"].set_fontsize(6)
+
+    def init_mode_axis(self, axes):
+        """ Initialise the dish mode timeline axis """
+
+        axes.set_ylim(0, 4)
+        axes.set_yticks([])
+        axes.set_ylabel("Dish Mode")
+
+        axes.xaxis.set_major_formatter(mdates.DateFormatter('%M:%S'))
+        axes.xaxis.set_major_locator(mdates.AutoDateLocator())
+        axes.tick_params(axis='x', labelsize=7)
+
+        axes.set_title("Dish Mode Timeline")
+        axes.grid(False)
+
+        # Create a list of colored rectangles for the legend
+        legend_handles = [
+            mpatches.Patch(color=color, label=mode.name)
+            for mode, color in self.MODE_COLOURS.items()
+        ]
+
+        # Add the legend below the axis, left-justified, in two rows
+        axes.legend(handles=legend_handles, bbox_to_anchor=(-0.3, -0.2), loc='upper left', 
+                    fontsize=7, title_fontsize=7, ncol=5)
 
     def clear_axes_data(self, ax):
         """Clear plot data from axes without removing titles and labels."""

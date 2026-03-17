@@ -20,10 +20,12 @@ from models.base import BaseModel
 from models.comms import CommunicationStatus, InterfaceType
 from models.dig import DigitiserModel, DigitiserList
 from models.health import HealthState
+from models.pipeline import StepConfig, StepType, PipelineConfig
 from models.scan import ScanModel, ScanState
 from models.sdp import ScienceDataProcessorModel
 from obs.scan import Scan
-from signal_display import SignalDisplay
+from sdp.pipeline.pipeline_factory import ProcessingPipelineFactory
+from sdp.signal_display import SignalDisplay
 from util import log, util
 from util.xbase import XBase, XStreamUnableToExtract, XSoftwareFailure
 
@@ -62,11 +64,13 @@ class SDP(App):
         # Entity drivers maintain comms status per entity, so no need to initialise comms status here
 
         self.scan_q = Queue()            # Queue of sky scans being processed and displayed
-        self.load_q = Queue()            # Queue of load scans (baselines) to apply to sky scans
+        self.cal_q = Queue()             # Queue of calibration scans to apply to sky scans
         self.signal_displays = {}        # Dictionary to hold SignalDisplay objects for each digitiser
 
         self._rlock = threading.RLock()  # Lock for thread-safe access to shared resources
         self._dig_locks = {}             # Dictionary of threading locks, one per digitiser ID
+
+        self.pipeline_factory = None     # Pipeline factory to create signal processing pipelines for scans based on digitiser ID
 
     def add_args(self, arg_parser): 
         """ Specifies the science data processors command line arguments.
@@ -101,8 +105,30 @@ class SDP(App):
             dig_store = None
             logger.warning(f"Science Data Processor could not load Digitiser configuration from directory {input_dir} file {filename}. File not found.")
 
-        self.sdp_model.dig_store = dig_store if dig_store is not None else DigitiserList()
-        logger.info(f"Science Data Processor loaded {len(self.sdp_model.dig_store.dig_list)} digitiser configurations from directory {input_dir} file {filename}")
+        if dig_store is not None:
+            self.sdp_model.dig_store = dig_store
+            logger.info(f"Science Data Processor loaded {len(self.sdp_model.dig_store.dig_list)} digitiser configurations from directory {input_dir} file {filename}")
+        else:
+            self.sdp_model.dig_store = DigitiserList()
+            logger.info(f"Science Data Processor using default Digitiser configuration as file not found in directory {input_dir} file {filename}")
+
+        # Load processing pipeline factory configuration from disk
+        filename = "PipelineConfig.json"
+
+        try:
+            pipeline_config = self.sdp_model.pipeline_config.load_from_disk(input_dir=input_dir, filename=filename)
+        except FileNotFoundError:
+            pipeline_config = None
+            logger.warning(f"Science Data Processor could not load processing pipeline factory configuration from directory {input_dir} file {filename}. File not found.")
+
+        if pipeline_config is not None:
+            self.sdp_model.pipeline_config = pipeline_config
+            logger.info(f"Science Data Processor loaded processing pipeline factory configuration from directory {input_dir} file {filename}:\n{self.sdp_model.pipeline_config}")
+        else:
+            self.sdp_model.pipeline_config = PipelineConfig()
+            logger.info(f"Science Data Processor using default processing pipeline factory configuration as file not found in directory {input_dir} file {filename}:\n{self.sdp_model.pipeline_config}")
+
+        self.pipeline_factory = ProcessingPipelineFactory(pipeline_config=self.sdp_model.pipeline_config)
 
         return action
 
@@ -267,6 +293,11 @@ class SDP(App):
                         status=ScanState.EMPTY)
 
                     scan = Scan(scan_model=scan_model)
+
+                    # Create a signal processing pipeline using the pipeline factory and associate it with the scan
+                    pipeline = self.pipeline_factory.create_pipeline(scan, self.scan_q, self.cal_q) if self.pipeline_factory else None
+                    scan.set_pipeline(pipeline)
+
                     self.scan_q.put(scan)
                     self.sdp_model.scans_created += 1
                     match = scan
@@ -494,7 +525,7 @@ class SDP(App):
         load_found = False
 
         # Check if we already have an equivalent completed load scan in the load queue for this digitiser
-        load_scans = [s for s in list(self.load_q.queue) if s.get_dig_id() == dig_id]
+        load_scans = [s for s in list(self.cal_q.queue) if s.get_dig_id() == dig_id]
         purge = True if len(load_scans) > 5 else False  # Purge load scans from the load queue if there are more than 5 in the queue
 
         for load in load_scans:
@@ -506,8 +537,8 @@ class SDP(App):
                 break  # we already have an equivalent load scan in the load queue, so we can keep it and skip preparing a new one
             else:
                 if purge:
-                    self.load_q.queue.remove(load)  # remove non-equivalent load scans from the load queue to prevent build up of stale load scans
-                    self.load_q.task_done()
+                    self.cal_q.queue.remove(load)  # remove non-equivalent load scans from the load queue to prevent build up of stale load scans
+                    self.cal_q.task_done()
                     logger.info(f"Science Data Processor purged non-equivalent load scan from load queue for digitiser {dig_id} and observation {obs_id}:\n{load}")
 
         if not load_found:
@@ -533,7 +564,7 @@ class SDP(App):
                 
                 if load_scan is not None and load_scan.is_load_scan():
                     load_found = True
-                    self.load_q.put(load_scan)
+                    self.cal_q.put(load_scan)
                     logger.info(f"Science Data Processor found equivalent load scan in {self.get_args().scan_store_dir} for digitiser {dig_id} and observation {obs_id}:\n{load_scan}")
 
         if not load_found:
@@ -559,7 +590,7 @@ class SDP(App):
 
             load_scan = Scan(scan_model=load_model)
             Scan.reset_scan_iter_counter(obs_id, tgt_idx, freq_scan)  # reset the scan iteration counter for this observation, target, and frequency scan so that the load scan is applied to the correct sky scan iteration
-            self.load_q.put(load_scan)
+            self.cal_q.put(load_scan)
             load_found = True
             logger.info(f"Science Data Processor created default load scan for digitiser {dig_id} and observation {obs_id}:\n{load_scan}")
 
@@ -599,10 +630,10 @@ class SDP(App):
 
         # Flush the load queue for the relevant digitiser and observation
         obs_id = value if value is not None and isinstance(value, str) else None
-        load_scans = [s for s in list(self.load_q.queue) if s.get_obs_id() == obs_id]
+        load_scans = [s for s in list(self.cal_q.queue) if s.get_obs_id() == obs_id]
         for load in load_scans:
-            self.load_q.queue.remove(load)
-            self.load_q.task_done()
+            self.cal_q.queue.remove(load)
+            self.cal_q.task_done()
             logger.info(f"Science Data Processor removed load scan from load queue for completed observation {obs_id}:\n{load}")
 
         # Reset digitiser configuration for the relevant observation
@@ -777,7 +808,7 @@ class SDP(App):
         
         # Add load scan to the load queue and replace equivalent items (not needed anymore)
         if scan.is_load_scan():
-            self._merge_into_queue(scan, self.load_q) 
+            self._merge_into_queue(scan, self.cal_q) 
 
         return
 
@@ -786,7 +817,7 @@ class SDP(App):
             :params scan: the scan to add to the queue
             :params queue: the queue to add the scan to, defaults to the load (baseline) queue if not specified
         """
-        queue = queue if queue is not None else self.load_q
+        queue = queue if queue is not None else self.cal_q
         queue.put(scan)  # Add this scan to the queue
         
         equivalent_items = [s for s in list(queue.queue) if s != scan and s.equivalent(scan)]
@@ -847,7 +878,7 @@ def main():
                     #sig_display_scan.del_iq()
 
                     # Find the equivalent load scan for this scan if it exists in the load queue
-                    load_scans = [s for s in list(sdp.load_q.queue) if s.equivalent(scan) and s.is_load_scan() == True]
+                    load_scans = [s for s in list(sdp.cal_q.queue) if s.equivalent(scan) and s.is_load_scan() == True]
                     logger.debug(f"Science Data Processor found {len(load_scans)} equivalent load scans in load queue for digitiser {dig_id} and observation {scan.get_obs_id()} to apply to signal display")
 
                     # Set the signal display to the current scan

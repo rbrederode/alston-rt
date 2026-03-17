@@ -1,0 +1,12 @@
+[Unit]
+Description=Alston Radio Telescope
+After=network.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/alston-rt
+ExecStart=/home/pi/alston-rt/venv/bin/python main.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

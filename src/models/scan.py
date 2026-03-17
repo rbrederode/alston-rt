@@ -24,29 +24,30 @@ class ScanModel(BaseModel):
 
     schema = Schema({
         "_type": And(str, lambda v: v == "ScanModel"),
-        "obs_id": Or(None, And(str, lambda v: isinstance(v, str))),
-        "tgt_idx": Or(None, And(int, lambda v: isinstance(v, int))),
-        "freq_scan": Or(None, And(int, lambda v: isinstance(v, int))),
-        "scan_iter": Or(None, And(int, lambda v: isinstance(v, int))),
-        "dig_id": Or(None, And(str, lambda v: isinstance(v, str))),
-        "created": And(datetime, lambda v: isinstance(v, datetime)),
-        "read_start": Or(None, And(datetime, lambda v: isinstance(v, datetime))),
-        "read_end": Or(None, And(datetime, lambda v: isinstance(v, datetime))),
-        "gap": Or(None, And(float, lambda v: isinstance(v, float))),
-        "start_idx": And(int, lambda v: v >= 0),
-        "duration": And(Or(int, float), lambda v: v >= 0),
-        "sample_rate": And(Or(int, float), lambda v: v >= 0.0),
-        "channels": And(int, lambda v: v >= 0),
-        "start_freq": Or(None, And(Or(int, float), lambda v: v >= 0.0)),
-        "center_freq": And(Or(int, float), lambda v: v >= 0.0),
-        "end_freq": Or(None, And(Or(int, float), lambda v: v >= 0.0)),
-        "gain": And(Or(int, float), lambda v: 0 <= v <= 100.0),
-        "load": And(bool, lambda v: isinstance(v, bool)),
-        "status": And(ScanState, lambda v: isinstance(v, ScanState)),
-        "load_failures": And(int, lambda v: v >= 0),
-        "files_prefix": Or(None, And(str, lambda v: isinstance(v, str))),
-        "files_directory": Or(None, And(str, lambda v: isinstance(v, str))),
-        "last_update": And(datetime, lambda v: isinstance(v, datetime)),
+        "obs_id": Or(None, And(str, lambda v: isinstance(v, str))),                 # Observation ID for this scan (e.g. "obs001")
+        "tgt_idx": Or(None, And(int, lambda v: isinstance(v, int))),                # Target index for this scan (e.g. 0 for first target, 1 for second target in the observation)
+        "freq_scan": Or(None, And(int, lambda v: isinstance(v, int))),              # Frequency scan index for this scan (e.g. 0 for first freq scan, 1 for second freq scan in the target)
+        "scan_iter": Or(None, And(int, lambda v: isinstance(v, int))),              # Scan iteration index for this scan (e.g. 0 for first scan, 1 for second scan on the same target and freq scan)
+        "dig_id": Or(None, And(str, lambda v: isinstance(v, str))),                 # Digitiser ID for this scan (e.g. "dig001")
+        "created": And(datetime, lambda v: isinstance(v, datetime)),                # Timestamp when the scan model was created
+        "read_start": Or(None, And(datetime, lambda v: isinstance(v, datetime))),   # Timestamp when of the first sample that was read by the digitiser for this scan
+        "read_end": Or(None, And(datetime, lambda v: isinstance(v, datetime))),     # Timestamp when the last sample that was read by the digitiser for this scan
+        "gap": Or(None, And(float, lambda v: isinstance(v, float))),                # Gap in seconds between the previous set of samples and the current set of samples read by the digitiser 
+        "start_idx": And(int, lambda v: v >= 0),                                    # Index of the first sample in the scan, corresponding to the digitiser read counter value for the first sample in the scan
+        "duration": And(Or(int, float), lambda v: v >= 0),                          # Duration of the scan in seconds e.g. 60 seconds
+        "sample_rate": And(Or(int, float), lambda v: v >= 0.0),                     # Sample rate in Hz
+        "channels": And(int, lambda v: v >= 0),                                     # Number of channels (FFT size) for the analysis
+        "start_freq": Or(None, And(Or(int, float), lambda v: v >= 0.0)),            # Start frequency of the samples in Hz (optional, can be calculated from center_freq and sample_rate if not provided)
+        "center_freq": And(Or(int, float), lambda v: v >= 0.0),                     # Center frequency of the samples in Hz
+        "end_freq": Or(None, And(Or(int, float), lambda v: v >= 0.0)),              # End frequency of the samples in Hz (optional, can be calculated from center_freq and sample_rate if not provided)
+        "gain": And(Or(int, float), lambda v: 0 <= v <= 100.0),                     # Gain setting for the scan (0 to 100, where 100 is maximum gain)   
+        "load": And(bool, lambda v: isinstance(v, bool)),                           # Flag indicating whether this scan is a load scan (True) or a sky scan (False)
+        "load_scan_id": Or(None, And(str, lambda v: isinstance(v, str))),           # Scan id of load scan if this is a sky scan (in the form <obs_id>-<target_index>-<freq_scan>-<scan_iter>)
+        "status": And(ScanState, lambda v: isinstance(v, ScanState)),               # Status of the scan (EMPTY, WIP, ABORTED, COMPLETE)
+        "load_failures": And(int, lambda v: v >= 0),                                # Number of times loading this scan has failed (used for retry logic)
+        "files_prefix": Or(None, And(str, lambda v: isinstance(v, str))),           # Prefix of filenames containing scan data (e.g. "ODT-2026-03-11T2100Z-dish002-7-0-0-dig002-g23.0-du60-bw2.05-cf1420.07-ch2048")
+        "files_directory": Or(None, And(str, lambda v: isinstance(v, str))),        # Directory where the scan data is stored (e.g. "~/samples")
+        "last_update": And(datetime, lambda v: isinstance(v, datetime)),            # Timestamp when the scan model was last updated
     })
 
     allowed_transitions = {}
@@ -72,6 +73,7 @@ class ScanModel(BaseModel):
         "end_freq": 0.0,
         "gain": 0.0,
         "load": False,
+        "load_scan_id": None,
         "status": ScanState.EMPTY,
         "load_failures": 0,
         "loaded_secs": [],
