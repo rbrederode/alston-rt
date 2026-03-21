@@ -9,7 +9,7 @@ from queue import Queue
 import time
 import threading
 
-from api import tm_dm
+from api import tm_dm, ws_dm
 from dsh.dish_display import DishDisplay
 from dsh.drivers.driver import DishDriver
 from dsh.drivers.md01.md01_driver import MD01Driver
@@ -25,6 +25,7 @@ from models.health import HealthState
 from models.obs import Observation
 from models.oda import ObsList, ScanStore
 from models.target import TargetModel, PointingType
+from models.ws import WeatherData, WeatherStationList
 from util import log
 from util.xbase import XBase, XStreamUnableToExtract, XSoftwareFailure
 
@@ -53,6 +54,14 @@ class DM(App):
         self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint, InterfaceType.APP_APP)
         # Set initial Telescope Manager connection status
         self.dm_model.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        
+        # Weather Station TCP Server
+        self.ws_system = "ws"
+        self.ws_api = ws_dm.WS_DM()
+        self.ws_endpoint = TCPServer(description=self.ws_system, queue=self.get_queue(), host=self.get_args().ws_host, port=self.get_args().ws_port)
+        self.ws_endpoint.start()
+        # Register Weather Station interface with the App
+        self.register_interface(self.ws_system, self.ws_api, self.ws_endpoint, InterfaceType.APP_APP)
 
         # Interfaces to each respective dish need to be managed by the respective dish drivers
         self.dish_drivers = {}        # Dictionary to hold a dish driver for each dish
@@ -66,6 +75,8 @@ class DM(App):
 
         arg_parser.add_argument("--tm_host", type=str, required=False, help="TCP host to listen on for Telescope Manager commands", default="localhost")
         arg_parser.add_argument("--tm_port", type=int, required=False, help="TCP port for Telescope Manager commands", default=50002)
+        arg_parser.add_argument("--ws_host", type=str, required=False, help="TCP host to listen on for Weather Station commands", default="localhost")
+        arg_parser.add_argument("--ws_port", type=int, required=False, help="TCP port for Weather Station commands", default=51000)
 
     def _get_dish_lock(self, dsh_id: str) -> threading.RLock:
         """Get or create a threading lock for a specific dish."""
@@ -81,10 +92,23 @@ class DM(App):
 
         action = Action()
 
+        input_dir = f"./config/{self.get_args().profile}"
+
+        # Load Weather Station configuration from disk, initialises wind and precipitation thresholds for the WeatherStationList model
+        filename = "WeatherStationList.json"
+
+        try:
+            weatherstation_store = self.dm_model.weather_store.load_from_disk(input_dir=input_dir, filename=filename)
+        except FileNotFoundError:
+            weatherstation_store = None
+            logger.warning(f"DM could not load Weather Station configuration from directory {input_dir} file {filename}")
+
+        self.dm_model.weather_store = weatherstation_store if weatherstation_store is not None else WeatherStationList()
+        logger.info(f"DM initialised Weather Station configuration:\n{self.dm_model.weather_store}")
+
         # Load Dish configuration from disk, config file is located in ./config/<profile>/<model>.json
         # <profile> can be specified as a cmd line argument (provided by the App base class) default='default'
-        # Config file defines initial list of dishes to be processed by the DM
-        input_dir = f"./config/{self.get_args().profile}"
+        # Config file defines initial list of dishes to be processed by the DM and their initial parameters such as driver type and location
         filename = "DishList.json"
 
         try:
@@ -282,6 +306,85 @@ class DM(App):
 
         return action
 
+    def process_ws_connected(self, event) -> Action:
+        """ Processes Weather Station connected events.
+        """
+        logger.info(f"DM connected to Weather Station: {event.remote_addr}")
+        self.dm_model.ws_connected = CommunicationStatus.ESTABLISHED
+        
+        action = Action()
+        return action
+
+    def process_ws_disconnected(self, event) -> Action:
+        """ Processes Weather Station disconnected events.
+        """
+        logger.info(f"DM disconnected from Weather Station: {event.remote_addr}")
+        self.dm_model.ws_connected = CommunicationStatus.NOT_ESTABLISHED
+        
+        action = Action()
+        return action
+
+    def process_ws_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
+        """ Processes messages received on the Weather Station service access point (SAP)
+            API messages are already translated and validated before being passed to this method.
+        """
+        logger.debug(f"DM received Weather Station msg, action code: {api_call['msg_type']}")
+
+        action = Action()
+
+        # For demonstration, we will just log the weather station data received and include it in the status update to TM
+        weather = api_call.get('value', None)
+
+        weather = WeatherData.from_dict(api_call['value']) if api_call['value'] is not None and isinstance(api_call['value'], dict) else None
+        self.dm_model.weather_store.append(weather) if weather is not None else None
+
+    def _process_weather_alarm(self, action: Action) -> Action:
+        """ Processes weather alarm events triggered by the Weather Station model when a weather threshold is breached.
+        """
+
+        # For each dish driver, set the dish to STOW mode for safety if not already in STOW
+        for dish_id, dish_driver in self.dish_drivers.items():
+
+            # If the dish does not have an operational capability, skip setting to STOW
+            if dish_driver.get_capability() not in [Capability.OPERATE_FULL, Capability.OPERATE_DEGRADED]:
+                continue
+
+            # If the dish is already in STOW mode (or other mode that prevents transitioning to STOW), skip setting to STOW
+            if dish_driver.get_mode() in [DishMode.STOW, DishMode.MAINTENANCE, DishMode.SHUTDOWN, DishMode.STARTUP]:
+                continue
+
+            dish_lock = self._get_dish_lock(dish_id)
+            with dish_lock:
+                try:
+                    dish_driver.set_weather_alarm(True)
+                    dish_driver.set_dish_mode(DishMode.STOW)
+
+                except XBase as e:
+                    logger.error(f"DM failed to set STOW mode for Dish {dish_id} on weather alarm: {e}")
+
+        return action
+
+    def _revert_weather_alarm(self, action: Action) -> Action:
+        """ Reverts weather alarm state when weather conditions return to safe levels.
+        """
+
+        # For each dish driver, revert the weather alarm state to False
+        for dish_id, dish_driver in self.dish_drivers.items():
+
+            if dish_driver.get_weather_alarm() == False:
+                continue
+
+            dish_lock = self._get_dish_lock(dish_id)
+            with dish_lock:
+                try:
+                    dish_driver.set_weather_alarm(False)
+                    dish_driver.set_dish_mode(DishMode.STANDBY_FP)
+
+                except XBase as e:
+                    logger.error(f"DM failed to revert weather alarm state for Dish {dish_id}: {e}")
+
+        return action
+
     def process_timer_event(self, event) -> Action:
         """ Processes timer events.
         """
@@ -300,7 +403,15 @@ class DM(App):
             if dish_driver is None or dish_lock is None:
                 raise XSoftwareFailure(f"DM driver timer event {event.name} for dish id {dish_id} without driver instance or lock\n{event}")
 
+            # If a weather threshold has been breached, process the weather alarm
+            # This will stow the dish where necessary and clear targets to prevent damage. 
+            if self.dm_model.weather_store.alarm():
+                self._process_weather_alarm(action)
+            else:
+                self._revert_weather_alarm(action)
+
             with dish_lock:
+
                 # Retrieve the target model and unique target identifier from the driver
                 target_id, target = dish_driver.get_target_tuple()
 

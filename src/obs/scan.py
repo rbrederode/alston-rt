@@ -258,7 +258,7 @@ class Scan:
             pwr[j,:] = np.abs(np.fft.fftshift(np.fft.fft(iq[j,:])))**2  # The power spectrum is the absolute value of the signal squared
 
         spr = np.sum(pwr, axis=0)  # Sum power across all rows for this second
-        self.dcspike.process(context={}, signal=spr)  # Remove DC spike if present using the DCSpike step
+        #self.dcspike.process(context={}, signal=spr)  # Remove DC spike if present using the DCSpike step
         cal = self.pipeline.process(signal=spr.copy(), context={}) if self.pipeline else spr.copy()  # Push the summed power spectrum through the calibration pipeline
 
         # Store the raw, power and summed spectrum data in the appropriate rows of the scan data arrays
@@ -274,7 +274,7 @@ class Scan:
             self.mean_real = np.mean(np.abs(self.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
             self.mean_imag = np.mean(np.abs(self.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
 
-            self.snr[sec - 1] = self.calc_snr(self.spr[sec - 1, :])                   # Calculate the SNR for this second and store it in the snr array
+            self.snr[sec - 1] = self.calc_snr(self.cal[sec - 1, :])                   # Calculate the SNR for this second and store it in the snr array
             logger.info(f"Scan {self.scan_model.scan_id} - SNR for second {sec}: {self.snr[sec - 1]:.2f} dB")
 
         # Count how many rows have self.loaded_secs marked as True
@@ -446,7 +446,7 @@ class Scan:
 
                     # Calculate the sum of the power spectrum for each frequency bin in a given second
                     scan.spr[sec,:] = np.sum(scan.pwr[row_start:row_end,:], axis=0)  # Sum the power spectrum in a given sec for each frequency bin (in columns)
-                    scan.dcspike.process(context={}, signal=scan.spr[sec,:])         # Remove DC spike if present using the DCSpike step
+                    #scan.dcspike.process(context={}, signal=scan.spr[sec,:])         # Remove DC spike if present using the DCSpike step
                     
                 scan.loaded_secs = [True] * scan.scan_model.duration
             else:

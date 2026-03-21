@@ -18,7 +18,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import HttpRequest
 
 # Import application modules
-from api import tm_dig, tm_sdp, tm_dm
+from api import tm_dig, tm_sdp, tm_dm, tm_ws
 from env.app import App
 from env.events import ConnectEvent, DisconnectEvent, DataEvent, ConfigEvent, ObsEvent
 from ipc.message import AppMessage, APIMessage
@@ -39,6 +39,7 @@ from models.target import TargetModel
 from models.telescope import TelescopeModel
 from models.tm import ResourceType, AllocationState, ResourceAllocations, Allocation
 from models.ui import UIDriver, UIDriverType
+from models.ws import WeatherStationModel
 from obs.oet import ObservationExecutionTool
 from util import log, util
 from util.timer import Timer, TimerManager
@@ -107,6 +108,18 @@ class TelescopeManager(App):
         self.telmodel.sdp.tm_connected = CommunicationStatus.NOT_ESTABLISHED
         self.telmodel.tel_mgr.sdp_connected = CommunicationStatus.NOT_ESTABLISHED
 
+        # Weather Station interface 
+        self.ws_system = "ws"
+        self.ws_api = tm_ws.TM_WS()
+        # Weather Station TCP Client
+        self.ws_endpoint = TCPClient(description=self.ws_system, queue=self.get_queue(), host=self.get_args().ws_host, port=self.get_args().ws_port)
+        self.ws_endpoint.connect()
+        # Register Weather Station interface with the App
+        self.register_interface(self.ws_system, self.ws_api, self.ws_endpoint, InterfaceType.APP_APP)
+        # Initialise Weather Station comms status
+        self.telmodel.wtr_stn.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.tel_mgr.ws_connected = CommunicationStatus.NOT_ESTABLISHED
+
     def add_args(self, arg_parser): 
         """ Specifies the digitiser's command line arguments.
         """
@@ -120,6 +133,9 @@ class TelescopeManager(App):
 
         arg_parser.add_argument("--dm_host", type=str, required=False, help="TCP server host to connect to the Dish Manager", default="localhost")
         arg_parser.add_argument("--dm_port", type=int, required=False, help="TCP server port to connect to the Dish Manager", default=50002) 
+
+        arg_parser.add_argument("--ws_host", type=str, required=False, help="TCP server host to connect to the Weather Station", default="localhost")
+        arg_parser.add_argument("--ws_port", type=int, required=False, help="TCP server port to connect to the Weather Station", default=50003) 
 
     def process_init(self) -> Action:
         """ Processes initialisation event on startup once all app processors are running.
@@ -387,6 +403,65 @@ class TelescopeManager(App):
 
         return action
 
+    def process_ws_connected(self, event) -> Action:
+        """ Processes Weather Station connected events.
+        """
+        logger.info(f"Telescope Manager connected to Weather Station: {event.remote_addr}")
+
+        self.telmodel.wtr_stn.tm_connected = CommunicationStatus.ESTABLISHED
+        self.telmodel.tel_mgr.ws_connected = CommunicationStatus.ESTABLISHED
+
+        action = Action()
+        return action
+
+    def process_ws_disconnected(self, event) -> Action:
+        """ Processes Weather Station disconnected events.
+        """
+        logger.info(f"Telescope Manager disconnected from Weather Station: {event.remote_addr}")
+
+        self.telmodel.wtr_stn.tm_connected = CommunicationStatus.NOT_ESTABLISHED
+        self.telmodel.tel_mgr.ws_connected = CommunicationStatus.NOT_ESTABLISHED
+
+        return self.abort_all_observations()
+
+    def process_ws_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
+        """ Processes api messages received on the Weather Station service access point (SAP)
+            API messages are already translated and validated before being passed to this method.
+        """
+        logger.info(f"Telescope Manager received Weather Station {api_call['msg_type']} msg, action code: {api_call['action_code']}, property: {api_call.get('property','')}")
+        
+        action = Action()
+    
+        # Extract datetime, weather station id from API message
+        dt = api_msg.get("timestamp")
+        ws_id = api_msg.get("entity", None) 
+
+        # If the api call indicates that an error occured
+        if api_call.get('status','') == tm_ws.STATUS_ERROR:
+            
+            logger.error(f"Telescope Manager received error response from Weather Station for station {ws_id}.\n{api_call}")
+            self.telmodel.wtr_stn.last_err_msg = api_call['message'] if 'message' in api_call else self.telmodel.wtr_stn.last_err_msg
+            self.telmodel.wtr_stn.last_err_dt = datetime.fromisoformat(dt) if dt is not None else datetime.now(timezone.utc)
+
+        # If the api call does not indicate that an error occured
+        elif api_call.get('status','') != tm_dm.STATUS_ERROR:
+
+              # If the api call is a status update message, update the Dish Manager model
+            if api_call.get('property','') == tm_dm.PROPERTY_STATUS:
+                logger.debug(f"Telescope Manager received Weather Station STATUS update: {api_call['value']}")
+                self.telmodel.wtr_stn = WeatherStationModel.from_dict(api_call['value']) if api_call['value'] is not None else None
+
+        # Update the last update timestamp on the Weather Station model
+        self.telmodel.wtr_stn.last_update = datetime.fromisoformat(dt) if dt else datetime.now(timezone.utc)
+
+        # If the api call is a rsp message, stop the corresponding retry timers
+        if api_call['msg_type'] == tm_dm.MSG_TYPE_RSP:
+            if dt is not None and ws_id is not None: # Do not set this to None (it breaks things !)
+                action.set_timer_action(Action.Timer(name=f"{ws_id}_req_timer_retry:{dt}", timer_action=Action.Timer.TIMER_STOP))
+                action.set_timer_action(Action.Timer(name=f"{ws_id}_req_timer_final:{dt}", timer_action=Action.Timer.TIMER_STOP))
+
+        return action
+  
     def get_dig_entity(self, event) -> (str, BaseModel):
         """ Determines the digitiser entity ID based on the remote address of a ConnectEvent, DisconnectEvent, or DataEvent.
             Returns a tuple of the entity ID and entity if found, else None, None.
@@ -1200,6 +1275,9 @@ def main():
 
                             oda_dict = tm.telmodel.oda.to_dict()
                             driver.instance.publish(oda_dict)
+
+                            ws_dict = tm.telmodel.wtr_stn.to_dict()
+                            driver.instance.publish(ws_dict)
 
                             tm_dict = tm.telmodel.tel_mgr.to_dict()
                             driver.instance.publish(tm_dict)

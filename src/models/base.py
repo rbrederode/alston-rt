@@ -277,6 +277,7 @@ class BaseModel:
         from models.target import TargetModel, PointingType, OffsetScan, FivePointScan, TargetConfig, TargetScanSet
         from models.tm import TelescopeManagerModel, ResourceAllocations, Allocation, AllocationState
         from models.ui import UIDriverType, UIDriver
+        from models.ws import WeatherData, WeatherStationList, WeatherStationModel
         
         if isinstance(v, dict) and "_type" in v:
 
@@ -434,6 +435,15 @@ class BaseModel:
             elif model_type == "UIDriver":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return UIDriver(**deserialized_fields)
+            elif model_type == "WeatherData":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return WeatherData(**deserialized_fields)
+            elif model_type == "WeatherStationModel":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return WeatherStationModel(**deserialized_fields)
+            elif model_type == "WeatherStationList":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return WeatherStationList(**deserialized_fields)
         elif isinstance(v, (list, tuple)):
             return type(v)(BaseModel._deserialise(item) for item in v)
         elif isinstance(v, dict):

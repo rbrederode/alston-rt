@@ -97,6 +97,7 @@ class ObservationExecutionTool:
 
                 # Save current observation state to disk
                 event.obs.save_to_disk(self.telmodel.get_scan_store_dir())
+                event.obs.save_fits_to_disk(self.telmodel.get_scan_store_dir())
 
             elif event.transition == ObsTransition.CONFIGURE_RESOURCES:
 

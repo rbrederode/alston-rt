@@ -325,19 +325,22 @@ class App:
                 self.avail_logger.info(f"App {self.app_model.app_name} health state transition {old_health.name} -> {health.name}")
 
     def get_availability_logger(self) -> logging.Logger:
-        """Gets a logger for availability logging.
-            : return: A logger instance for availability logging
-        """
+        """Gets a dedicated logger for availability logging only."""
+
         log_dir = Path(App.logs_dir).expanduser() / "availability"
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        logger = logging.getLogger(self.app_model.app_name)
+        # Use a unique logger name for availability
+        logger_name = f"{self.app_model.app_name}.availability"
+        logger = logging.getLogger(logger_name)
         logger.setLevel(logging.INFO)
         logger.propagate = False  # Don't propagate to root logger
 
         log_file = os.path.join(log_dir, f"{self.app_model.app_name}.log")
 
-        # Rotate monthly (when= 'midnight', interval=1, backupCount=24 handles 2 years)
+        # Remove all handlers to avoid duplicate logs if re-initialized
+        logger.handlers.clear()
+
         handler = TimedRotatingFileHandler(
             filename=log_file,
             when="midnight",
@@ -350,8 +353,7 @@ class App:
         formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
         handler.setFormatter(formatter)
 
-        if not logger.handlers:
-            logger.addHandler(handler)
+        logger.addHandler(handler)
 
         return logger
 

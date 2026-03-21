@@ -12,6 +12,7 @@ from models.oda import ODAModel
 from models.sdp import ScienceDataProcessorModel
 from models.proc import ProcessorModel
 from models.tm import TelescopeManagerModel
+from models.ws import WeatherStationModel
 
 # The Telescope Model
 class TelescopeModel:
@@ -20,8 +21,9 @@ class TelescopeModel:
         - Observation Data Archive,
         - Telescope Manager, 
         - Dish Manager, 
-        - Digitiser Manager, and the
-        - Science Data Processor
+        - Digitiser Manager,
+        - Science Data Processor, and the
+        - Weather Station
         
     """
     def __init__(self):
@@ -31,6 +33,7 @@ class TelescopeModel:
         self.dsh_mgr = DishManagerModel(id="dshmgr001")             # Dish Manager (App) model
         self.dig_store = DigitiserList(list_id="diglist001")        # Digitiser store (just a list of digitisers)
         self.sdp = ScienceDataProcessorModel(sdp_id="sdp001")       # Science Data Processor (App) model
+        self.wtr_stn = WeatherStationModel(id="ws001")              # Weather Station (App) model
     
     def save_to_disk(self):
         # Implement disk saving logic here
@@ -56,7 +59,9 @@ class TelescopeModel:
             "tel_mgr": self.tel_mgr.to_dict(),
             "dsh_mgr": self.dsh_mgr.to_dict(),
             "dig_store": self.dig_store.to_dict(),
-            "sdp": self.sdp.to_dict()
+            "sdp": self.sdp.to_dict(),
+            "wtr_stn": self.wtr_stn.to_dict()
+
         }
 
 if __name__ == "__main__":

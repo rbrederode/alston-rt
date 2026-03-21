@@ -11,6 +11,8 @@ PACKAGES=(
     btop
     curl
     tmux
+    samba
+    samba-common-bin
 )
 
 for pkg in "${PACKAGES[@]}"; do

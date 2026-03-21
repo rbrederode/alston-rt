@@ -1,7 +1,10 @@
+import logging
 from typing import Any, List, Dict
 from queue import Queue
 
 from models.pipeline import PipelineConfig, StepConfig, StepType
+
+logger = logging.getLogger(__name__)
 
 class ProcessingStep:
     """

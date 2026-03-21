@@ -307,6 +307,7 @@ class TelescopeManagerModel(BaseModel):
         "allocations": And(ResourceAllocations, lambda v: isinstance(v, ResourceAllocations)),
         "sdp_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "dm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
+        "ws_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "ui_drivers": Or(None, And(list, lambda v: isinstance(v, list) and all(isinstance(item, UIDriver) for item in v))),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
@@ -332,6 +333,7 @@ class TelescopeManagerModel(BaseModel):
             "allocations": ResourceAllocations(),
             "sdp_connected": CommunicationStatus.NOT_ESTABLISHED,
             "dm_connected": CommunicationStatus.NOT_ESTABLISHED,
+            "ws_connected": CommunicationStatus.NOT_ESTABLISHED,
             "ui_drivers": [],
             "last_update": datetime.now(timezone.utc)
         }
@@ -464,6 +466,7 @@ if __name__ == "__main__":
             "sdp_range": "TM_UI_API++!J2",
             "odt_range": "TM_UI_API++!M2",
             "oda_range": "TM_UI_API++!P2",
+            "ws_range": "TM_UI_API++!S2",
         },  
         poll_period=30,
         last_update=datetime.now(timezone.utc)

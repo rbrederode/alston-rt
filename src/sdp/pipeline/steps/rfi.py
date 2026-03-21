@@ -11,10 +11,13 @@ class RFIFlag(ProcessingStep):
 
     def __init__(self, config: StepConfig = None):
         super().__init__(config)
+
+        logger.info("RFIFlag pipeline step initialisation with config:\n%s", str(self.config))
     
     def process(self, context: Any, signal: Any) -> Any:
         """
-        Apply RFI flagging to the signal array using parameters from context.
+        Apply RFI flagging to the signal array using parameters from context. 
+        Uses a simple median absolute deviation (MAD) method to identify and flag outliers. 
 
        Args:
             context: dict containing static parameters for flagging RFI
@@ -29,13 +32,30 @@ class RFIFlag(ProcessingStep):
         if not isinstance(context, dict):
             raise ValueError("RFIFlag: context must be a dictionary.")
 
-        # ... apply load file logic using context parameters ...
+        n = context.get("threshold", 5)  # Default to 5 if not provided
+        # Compute the median of the input signal.
+        median = np.median(signal)
+        # Calculate the MAD: median of the absolute deviations from the median.
+        mad = np.median(np.abs(signal - median))
+        # Define a threshold (e.g., n times MAD).
+        threshold = n * mad
+        # Flag or clip values that deviate from the median by more than the threshold.
+        mask = np.abs(signal - median) > threshold
+
+        # Log the number of flagged channels
+        num_flagged = np.sum(mask)
+        logger.info(f"RFIFlag: Flagged {num_flagged} channels as RFI outliers using threshold {threshold:.2f} (median={median:.2f}, MAD={mad:.2f})")
+
+        signal[mask] = median  # Replace outliers with median
         return signal
 
 def main():
  
+    # Set log level to info for demonstration
+    logging.basicConfig(level=logging.INFO)
+
     # Example StepConfig for gain calibration
-    step_config = StepConfig(step=StepType.RFI_FLAG, params={"rfi": 10})
+    step_config = StepConfig(step=StepType.RFI_FLAG, params={"threshold": 5})
     rfi_step = RFIFlag(step_config)
 
     # Example signal and context

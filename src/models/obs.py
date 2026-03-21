@@ -1,4 +1,5 @@
 import enum
+import os
 from datetime import datetime, timezone
 from schema import Schema, And, Or, Use, SchemaError
 
@@ -6,6 +7,7 @@ from models.base import BaseModel
 from models.scan import ScanModel, ScanState
 from models.target import TargetModel, TargetConfig, TargetScanSet, PointingType, MAX_SCAN_DURATION_SEC
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
+from util.fits_utils import observation_to_fits_hdulist
 
 # A scheduling block is the minimum time allocation of resources to an observation
 # For example, if an observation requires 90 minutes, and the scheduling block size is 60 minutes,
@@ -338,6 +340,23 @@ class Observation(BaseModel):
         except Exception as e:
             raise XSoftwareFailure(f"Observation {self.obs_id} failed to save to disk due to unexpected error: {e}")
 
+    def save_fits_to_disk(self, output_dir) -> bool:
+        """
+        Flush the observation to a FITS file on disk.
+            :param output_dir: Directory where the file will be saved
+            :returns: True if the data was saved successfully, False otherwise
+        """
+        filename = f"{self.obs_id.replace(':', '')}-obs.fits"
+
+        try:
+            # Convert the observation to a FITS file and save to disk
+            from util.fits_utils import observation_to_fits_hdulist
+            hdulist = observation_to_fits_hdulist(self)
+            hdulist.writeto(os.path.join(output_dir, filename), overwrite=True)
+            return True
+        except Exception as e:
+            raise XSoftwareFailure(f"Observation {self.obs_id} failed to save FITS to disk due to unexpected error: {e}")
+    
     def __str__(self):
         return f"Observation(obs_id={self.obs_id}, obs_state={self.obs_state.name})"
 
@@ -404,4 +423,20 @@ if __name__ == "__main__":
     obs000.determine_scans()
     pprint.pprint(obs000.to_dict())
 
-  
+    print("="*40)
+    print("Observation Save to Disk Test")
+    print("="*40)
+    try:
+        obs000.save_to_disk(output_dir="./data")
+        print("Observation saved to disk successfully.")
+    except XSoftwareFailure as e:
+        print(f"Failed to save observation to disk: {e}")
+
+    print("="*40)
+    print("Observation Convert to FITS and Save to Disk Test")
+    print("="*40)
+    try:
+        obs000.save_fits_to_disk(output_dir="./data")
+        print("Observation FITS file saved to disk successfully.")
+    except XSoftwareFailure as e:
+        print(f"Failed to save observation FITS to disk: {e}")

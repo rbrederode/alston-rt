@@ -13,6 +13,7 @@ from models.app import AppModel
 from models.base import BaseModel
 from models.comms import CommunicationStatus
 from models.health import HealthState
+from models.ws import WeatherData, WeatherStationList
 from util.xbase import XInvalidTransition, XAPIValidationFailed, XSoftwareFailure
 
 # Definition: Mode
@@ -122,6 +123,7 @@ class DishModel(BaseModel):
         "driver_poll_period": Or(None, And(int, lambda v: v > 0)),                                # Dish driver poll period in milliseconds to get altaz updates
         "driver_failures": And(int, lambda v: v >= 0),                                            # Count of consecutive driver call failures
         "health": And(HealthState, lambda v: isinstance(v, HealthState)),                         # Overall health state of the dish based on driver failures and other factors
+        "weather_alarm": And(bool, lambda v: isinstance(v, bool)),                                # Weather alarm status for the dish, True when weather conditions are unsafe for operation
         "last_err_msg": Or(None, And(str, lambda v: isinstance(v, str))),                         # Last error message from the dish manager
         "last_err_dt": Or(None, And(datetime, lambda v: isinstance(v, datetime))),                # Last error datetime from the dish manager
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
@@ -185,6 +187,7 @@ class DishModel(BaseModel):
             "driver_poll_period": 1000,                     # Default to 1000 ms
             "driver_failures": 0,                           # Initialize failure count to zero
             "health": HealthState.UNKNOWN,
+            "weather_alarm": False,                         # Initialize weather alarm to False
             "last_err_msg": None,
             "last_err_dt": None,   
             "last_update": datetime.now(timezone.utc),
@@ -285,10 +288,12 @@ class DishManagerModel(BaseModel):
 
     schema = Schema({    
         "_type": And(str, lambda v: v == "DishManagerModel"),     
-        "id": And(str, lambda v: isinstance(v, str)),                                    # Dish Manager identifier e.g. "dm001"         
-        "dish_store": And(DishList, lambda v: isinstance(v, DishList)),                  # List of DishModel objects                        
+        "id": And(str, lambda v: isinstance(v, str)),                                         # Dish Manager identifier e.g. "dm001"         
+        "dish_store": And(DishList, lambda v: isinstance(v, DishList)),                       # List of DishModel objects
+        "weather_store": Or(None, lambda v: v is None or isinstance(v, WeatherStationList)),  # List of WeatherData objects from weather stations relevant to the dishes
         "app": And(AppModel, lambda v: isinstance(v, AppModel)),
         "tm_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
+        "ws_connected": And(CommunicationStatus, lambda v: isinstance(v, CommunicationStatus)),
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
 
@@ -301,6 +306,7 @@ class DishManagerModel(BaseModel):
             "_type": "DishManagerModel",
             "id": "<undefined>",
             "dish_store": DishList(),
+            "weather_store": WeatherStationList(),
             "app": AppModel(
                 app_name="dshmgr",
                 app_running=False,
@@ -312,6 +318,7 @@ class DishManagerModel(BaseModel):
                 last_update=datetime.now(timezone.utc),
             ),
             "tm_connected": CommunicationStatus.NOT_ESTABLISHED,
+            "ws_connected": CommunicationStatus.NOT_ESTABLISHED,
             "last_update": datetime.now(timezone.utc),
         }
 
@@ -341,6 +348,19 @@ class DishManagerModel(BaseModel):
         for dish in self.dish_store.dish_list:
             if dish.dig_id == dig_id:
                 return dish
+        return None
+
+    def get_weather_by_ws_id(self, ws_id: str) -> WeatherData:
+        """ Retrieve a WeatherData from the weather_store by its ws_id.
+        Args: ws_id (str): The identifier of the weather station to retrieve.
+        Returns: WeatherData: The WeatherData with the specified ws_id. Returns None if not found.
+        """
+        if self.weather_store is None:
+            return None
+
+        for weather in self.weather_store.weather_list:
+            if weather.ws_id == ws_id:
+                return weather
         return None
 
 if __name__ == "__main__":
