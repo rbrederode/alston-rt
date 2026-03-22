@@ -16,37 +16,33 @@ class RFIFlag(ProcessingStep):
     
     def process(self, context: Any, signal: Any) -> Any:
         """
-        Apply RFI flagging to the signal array using parameters from context. 
-        Uses a simple median absolute deviation (MAD) method to identify and flag outliers. 
-
-       Args:
-            context: dict containing static parameters for flagging RFI
-            input_signal: 1D numpy array containing input spectrum (signal)
-        Returns:
-            1D numpy array containing processed output spectrum (signal)
+        Apply sliding-window MAD RFI flagging to the signal array, modifying it in-place.
         """
-
         if not isinstance(signal, np.ndarray):
             raise ValueError("RFIFlag: signal must be a numpy array.")
-
         if not isinstance(context, dict):
             raise ValueError("RFIFlag: context must be a dictionary.")
 
-        n = context.get("threshold", 5)  # Default to 5 if not provided
-        # Compute the median of the input signal.
-        median = np.median(signal)
-        # Calculate the MAD: median of the absolute deviations from the median.
-        mad = np.median(np.abs(signal - median))
-        # Define a threshold (e.g., n times MAD).
-        threshold = n * mad
-        # Flag or clip values that deviate from the median by more than the threshold.
-        mask = np.abs(signal - median) > threshold
+        n = context.get("threshold", 5)
+        window_size = context.get("window_size", 21)  # Must be odd
+        if window_size % 2 == 0:
+            raise ValueError("window_size must be odd.")
 
-        # Log the number of flagged channels
-        num_flagged = np.sum(mask)
-        logger.info(f"RFIFlag: Flagged {num_flagged} channels as RFI outliers using threshold {threshold:.2f} (median={median:.2f}, MAD={mad:.2f})")
+        half_window = window_size // 2
+        num_flagged = 0
 
-        signal[mask] = median  # Replace outliers with median
+        for i in range(len(signal)):
+            start = max(0, i - half_window)
+            end = min(len(signal), i + half_window + 1)
+            window = signal[start:end]
+            median = np.median(window)
+            mad = np.median(np.abs(window - median))
+            threshold = n * mad
+            if np.abs(signal[i] - median) > threshold:
+                signal[i] = median
+                num_flagged += 1
+
+        logger.info(f"RFIFlag (sliding window): Flagged {num_flagged} channels as RFI outliers using window_size={window_size}, threshold={n}*MAD")
         return signal
 
 def main():
@@ -55,7 +51,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     # Example StepConfig for gain calibration
-    step_config = StepConfig(step=StepType.RFI_FLAG, params={"threshold": 5})
+    step_config = StepConfig(step=StepType.RFI_FLAG, params={"threshold": 5, "window_size": 21})
     rfi_step = RFIFlag(step_config)
 
     # Example signal and context

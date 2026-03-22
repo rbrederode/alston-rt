@@ -47,7 +47,6 @@ class SDP(App):
         self.tm_api = tm_sdp.TM_SDP()
         # Telescope Manager TCP Server
         self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
-        self.tm_endpoint.start()
         # Register Telescope Manager interface with the App
         self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint, InterfaceType.APP_APP)
         # Set initial Telescope Manager connection status
@@ -58,7 +57,6 @@ class SDP(App):
         self.dig_api = sdp_dig.SDP_DIG()
         # Digitiser TCP Server
         self.dig_endpoint = TCPServer(description=self.dig_system, queue=self.get_queue(), host=self.get_args().dig_host, port=self.get_args().dig_port)
-        self.dig_endpoint.start()
         # Register Digitiser interface with the App
         self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint, InterfaceType.ENTITY_DRIVER)
         # Entity drivers maintain comms status per entity, so no need to initialise comms status here
@@ -129,6 +127,10 @@ class SDP(App):
             logger.info(f"Science Data Processor using default processing pipeline factory configuration as file not found in directory {input_dir} file {filename}:\n{self.sdp_model.pipeline_config}")
 
         self.pipeline_factory = ProcessingPipelineFactory(pipeline_config=self.sdp_model.pipeline_config)
+
+        # Start server endpoints and connect client endpoints to interfaces
+        self.tm_endpoint.start()
+        self.dig_endpoint.start()
 
         return action
 

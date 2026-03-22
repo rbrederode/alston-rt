@@ -79,7 +79,6 @@ class TelescopeManager(App):
         self.dm_api = tm_dm.TM_DM()
         # Dish Manager TCP Client
         self.dm_endpoint = TCPClient(description=self.dm_system, queue=self.get_queue(), host=self.get_args().dm_host, port=self.get_args().dm_port)
-        self.dm_endpoint.connect()
         # Register Dish Manager interface with the App
         self.register_interface(self.dm_system, self.dm_api, self.dm_endpoint, InterfaceType.APP_APP)
         # Initialise Dish Manager comms status
@@ -91,7 +90,6 @@ class TelescopeManager(App):
         self.dig_api = tm_dig.TM_DIG()
         # Digitiser TCP Server
         self.dig_endpoint = TCPServer(description=self.dig_system, queue=self.get_queue(), host=self.get_args().dig_host, port=self.get_args().dig_port)
-        self.dig_endpoint.start()
         # Register Digitiser interface with the App
         self.register_interface(self.dig_system, self.dig_api, self.dig_endpoint, InterfaceType.ENTITY_DRIVER)
         # Entity drivers maintain comms status per entity, so no need to initialise comms status here
@@ -101,7 +99,6 @@ class TelescopeManager(App):
         self.sdp_api = tm_sdp.TM_SDP()
         # Science Data Processor TCP Client
         self.sdp_endpoint = TCPClient(description=self.sdp_system, queue=self.get_queue(), host=self.get_args().sdp_host, port=self.get_args().sdp_port)
-        self.sdp_endpoint.connect()
         # Register Science Data Processor interface with the App
         self.register_interface(self.sdp_system, self.sdp_api, self.sdp_endpoint, InterfaceType.APP_APP)
         # Initialise Science Data Processor comms status
@@ -113,7 +110,6 @@ class TelescopeManager(App):
         self.ws_api = tm_ws.TM_WS()
         # Weather Station TCP Client
         self.ws_endpoint = TCPClient(description=self.ws_system, queue=self.get_queue(), host=self.get_args().ws_host, port=self.get_args().ws_port)
-        self.ws_endpoint.connect()
         # Register Weather Station interface with the App
         self.register_interface(self.ws_system, self.ws_api, self.ws_endpoint, InterfaceType.APP_APP)
         # Initialise Weather Station comms status
@@ -176,6 +172,13 @@ class TelescopeManager(App):
             logger.warning(f"Telescope Manager could not load Digitiser configuration from directory {input_dir} file {filename}")
 
         action = Action()
+
+        # Start server endpoints and connect client endpoints to interfaces
+        self.dm_endpoint.connect()
+        self.dig_endpoint.start()
+        self.sdp_endpoint.connect()
+        self.ws_endpoint.connect()
+
         return action
 
     def process_config(self, event: ConfigEvent) -> Action:
@@ -422,7 +425,8 @@ class TelescopeManager(App):
         self.telmodel.wtr_stn.tm_connected = CommunicationStatus.NOT_ESTABLISHED
         self.telmodel.tel_mgr.ws_connected = CommunicationStatus.NOT_ESTABLISHED
 
-        return self.abort_all_observations()
+        action = Action()
+        return action
 
     def process_ws_msg(self, event, api_msg: dict, api_call: dict, payload: bytearray) -> Action:
         """ Processes api messages received on the Weather Station service access point (SAP)
@@ -1202,16 +1206,19 @@ class TelescopeManager(App):
             ids.append(dish2.dsh_id)
 
         for obs in self.telmodel.oda.obs_store.obs_list:
+
+            logger.debug(f"Checking whether to abort observation {obs.obs_id} in state {obs.obs_state.name} for dish manager ID {obs.dsh_id} and digitiser ID {dig_id} with filter dish manager IDs {ids} and filter digitiser ID {dig_id}")
+
             if obs.obs_state in [ObsState.CONFIGURING, ObsState.READY, ObsState.SCANNING]:
 
                 if obs.dsh_id in ids or (dig_id is None and dsh_id is None):
                     
                     dish = self.telmodel.dsh_mgr.get_dish_by_id(obs.dsh_id)
-                    dig_id = dish.dig_id if dish is not None else None
+                    dig = dish.dig_id if dish is not None else None
 
                     logger.info(f"Telescope Manager aborting observation {obs.obs_id}.\nConnection status:\n" + \
                         f"- Dish Manager {obs.dsh_id}: {self.telmodel.dsh_mgr.tm_connected.name}\n" + \
-                        f"- Digitiser {dig_id}: {self.telmodel.dig_store.get_dig_by_id(dig_id).tm_connected.name if dig_id is not None else 'N/A'}\n" + \
+                        f"- Digitiser {dig}: {self.telmodel.dig_store.get_dig_by_id(dig).tm_connected.name if dig is not None else 'N/A'}\n" + \
                         f"- Science Data Processor: {self.telmodel.sdp.tm_connected.name}")
                     action.set_obs_transition(obs=obs, transition=ObsTransition.ABORT)
 

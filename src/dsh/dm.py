@@ -49,7 +49,6 @@ class DM(App):
         self.tm_api = tm_dm.TM_DM()
         # Telescope Manager TCP Server
         self.tm_endpoint = TCPServer(description=self.tm_system, queue=self.get_queue(), host=self.get_args().tm_host, port=self.get_args().tm_port)
-        self.tm_endpoint.start()
         # Register Telescope Manager interface with the App
         self.register_interface(self.tm_system, self.tm_api, self.tm_endpoint, InterfaceType.APP_APP)
         # Set initial Telescope Manager connection status
@@ -59,7 +58,6 @@ class DM(App):
         self.ws_system = "ws"
         self.ws_api = ws_dm.WS_DM()
         self.ws_endpoint = TCPServer(description=self.ws_system, queue=self.get_queue(), host=self.get_args().ws_host, port=self.get_args().ws_port)
-        self.ws_endpoint.start()
         # Register Weather Station interface with the App
         self.register_interface(self.ws_system, self.ws_api, self.ws_endpoint, InterfaceType.APP_APP)
 
@@ -139,6 +137,10 @@ class DM(App):
                 logger.info(f"DM instantiated MD01 driver for Dish {dish.dsh_id}")
             else:
                 logger.warning(f"DM cannot instantiate driver for Dish {dish.dsh_id} with unknown driver type {driver_type}")
+
+        # Start server endpoints and connect client endpoints to interfaces
+        self.tm_endpoint.start()
+        self.ws_endpoint.start()
 
         return action
 
@@ -445,12 +447,17 @@ class DM(App):
                 if target is not None and dish_driver.get_pointing_state() == PointingState.READY:
                     logger.info(f"DM reached slew target and is now in READY state for target {target} acquisition in observation {target.obs_id} with Dish {dish_id}.")
 
+                    status = tm_dm.STATUS_SUCCESS
+                    msg = f"Dish {dish_id} reached slew target and is now in READY state for target {target_id} acquisition in observation {target.obs_id}."
+
                     # If we need to track the target, tell the driver to track to it
                     if target.pointing in [PointingType.SIDEREAL_TRACK, PointingType.NON_SIDEREAL_TRACK]:                         
                         try:
                             dish_driver.track()
                         except XBase as e:
-                            logger.error(f"DM failed to track for Dish {dish_id} to target {target} in observation {target.obs_id}: {e}")
+                            status = tm_dm.STATUS_ERROR
+                            msg = f"DM failed to track for Dish {dish_id} to target {target_id} in observation {target.obs_id}: {e}"
+                            logger.error(msg)
 
                     # Else if we are doing an offset or five point scan, tell the driver to scan it
                     elif target.pointing in [PointingType.OFFSET_SCAN, PointingType.FIVE_POINT_SCAN]:
@@ -458,22 +465,27 @@ class DM(App):
                         try:
                             dish_driver.scan()
                         except XBase as e:
-                            logger.error(f"DM failed to scan for Dish {dish_id} for target {target} in observation {target.obs_id}: {e}")
+                            status = tm_dm.STATUS_ERROR
+                            msg = f"DM failed to scan for Dish {dish_id} for target {target_id} in observation {target.obs_id}: {e}"
+                            logger.error(msg)
 
-                    self._send_status_adv_to_tm(action, target_id, target)
+                    self._send_status_adv_to_tm(action, target_id, target, status, msg)
 
                 elif target is not None and dish_driver.get_pointing_state() == PointingState.TRACK:                     
                     try:
                         dish_driver.track()  # Continue tracking the target
                     except XBase as e:
-                        logger.error(f"DM failed to track for Dish {dish_id} to target {target} in observation {target.obs_id}: {e}")
-                
+                        msg = f"DM failed to track for Dish {dish_id} to target {target_id} in observation {target.obs_id}: {e}"
+                        logger.error(msg)
+                        self._send_status_adv_to_tm(action, target_id, target, tm_dm.STATUS_ERROR, msg)
+
                 elif target is not None and dish_driver.get_pointing_state() == PointingState.SCAN:                     
                     try:
                         dish_driver.scan()  # Continue scanning the target
                     except XBase as e:
-                        logger.error(f"DM failed to scan for Dish {dish_id} to target {target} in observation {target.obs_id}: {e}")
-
+                        msg = f"DM failed to scan for Dish {dish_id} for target {target_id} in observation {target.obs_id}: {e}"
+                        logger.error(msg)
+                        self._send_status_adv_to_tm(action, target_id, target, tm_dm.STATUS_ERROR, msg)
 
         # Restart the driver timer for the dish    
         action.set_timer_action(Action.Timer(
@@ -498,7 +510,7 @@ class DM(App):
         else:
             return HealthState.OK
 
-    def _construct_status_adv_to_tm(self) -> APIMessage:
+    def _construct_status_adv_to_tm(self, status=None, message=None) -> APIMessage:
         """ Constructs a status advice message for the Telescope Manager.
         """
         tm_adv = APIMessage(api_version=self.tm_api.get_api_version())
@@ -513,18 +525,19 @@ class DM(App):
                 "action_code": "set", 
                 "property": tm_dm.PROPERTY_STATUS, 
                 "value": self.dm_model.to_dict(), 
-                "message": "DM status update"
+                "status": tm_dm.STATUS_SUCCESS if status is None else status,
+                "message": "DM status update" if message is None else message
             })
         return tm_adv
 
-    def _send_status_adv_to_tm(self, action=None, target_id=None, target=None) -> Action:
+    def _send_status_adv_to_tm(self, action=None, target_id=None, target=None, status=None, message=None) -> Action:
         """ Sends a status advice message to the Telescope Manager if connected.
         """
         action = Action() if action is None else action
 
         if self.dm_model.tm_connected == CommunicationStatus.ESTABLISHED:
 
-            tm_adv = self._construct_status_adv_to_tm()
+            tm_adv = self._construct_status_adv_to_tm(status=status, message=message)
 
             # Setting the Obs ID will trigger the Observation Execution Tool to review the observation state
             if target is not None and target_id is not None:

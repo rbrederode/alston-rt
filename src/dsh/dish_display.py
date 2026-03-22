@@ -34,7 +34,7 @@ class DishDisplay:
         
         (0, 0.5, "Target"),
         (0, 1.5, "Target Type"),    (5, 1.5, "Health"),   
-        (0, 2.5, "Lat/Long"),       (5, 2.5, "Height"),
+        (0, 2.5, "Lat/Long"),       (5, 2.5, "Failures"),
         (0, 3.5, "Feed"),           (5, 3.5, "Digitiser"),
         (0, 4.5, "Pointing State"), (5, 4.5, "Driver Type"),
         (0, 5.5, "Mode"),           (5, 5.5, "Capability"),
@@ -181,7 +181,9 @@ class DishDisplay:
 
             self.update_mode_timeline(m) # Update the dish mode timeline with the latest mode history from the model
 
-            self.attr_texts["Height"].set_text(f"{m.height:.1f}m")
+            self.attr_texts["Failures"].set_text(f"{m.driver_failures}")
+            self.attr_rects["Failures"].set_color(
+                {'OK': 'tab:green', 'DEGRADED': 'gold', 'FAILED': 'tab:red', 'UNKNOWN': 'tab:gray'}.get(m.health.name, 'tab:gray'))
             self.attr_texts["Lat/Long"].set_text(f"{m.latitude:.1f}°,{m.longitude:.1f}°")
             self.attr_texts["Driver Type"].set_text(m.driver_type.name)
             self.attr_texts["Feed"].set_text(m.feed.name)

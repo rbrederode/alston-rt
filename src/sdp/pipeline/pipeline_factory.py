@@ -1,6 +1,7 @@
 import logging
 from typing import Any, List, Dict
 from queue import Queue
+import time
 
 from models.pipeline import PipelineConfig, StepConfig, StepType
 
@@ -37,8 +38,25 @@ class ProcessingPipeline:
         self.steps.append(step)
 
     def process(self, context: Any, signal: Any) -> Any:
+
+        # Iterate through the processing steps and apply each one to the signal, passing the context as needed
+        # Time each step and log a warning if it takes longer than a certain threshold (e.g. 100ms)
         for step in self.steps:
-            signal = step.process(context=context, signal=signal)
+            
+            step_pipeline = step.config.params.get("pipeline", "unknown")  # Get the pipeline name from the step config for logging
+            context_pipeline = context.get("pipeline", "unknown") if isinstance(context, dict) else "unknown"
+            
+            if step_pipeline == context_pipeline:
+
+                start_time = time.time()
+                signal = step.process(context=context, signal=signal)
+                elapsed = time.time() - start_time
+
+                if elapsed >= 0.1:  # Log a warning if processing takes longer than 100ms
+                    logger.warning(f"Processing step {step.__class__.__name__} in pipeline '{step_pipeline}' took {elapsed*1000:.2f} milliseconds!")
+                else:
+                    logger.info(f"Processing step {step.__class__.__name__} in pipeline '{step_pipeline}' took {elapsed*1000:.2f} milliseconds.")
+
         return signal
 
 class ProcessingPipelineFactory:

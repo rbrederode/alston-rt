@@ -90,9 +90,6 @@ class Scan:
             # Initialize data arrays for the scan
             self.init_data_arrays()
 
-            # Initialise a DC Spike removal step for this scan (used in load_samples when loading each second of samples)
-            self.dcspike = DCSpike(StepConfig(step=StepType.DC_SPIKE, params={'scan': self}))
-
     def __str__(self):
 
         created = self.scan_model.created.isoformat()
@@ -258,8 +255,9 @@ class Scan:
             pwr[j,:] = np.abs(np.fft.fftshift(np.fft.fft(iq[j,:])))**2  # The power spectrum is the absolute value of the signal squared
 
         spr = np.sum(pwr, axis=0)  # Sum power across all rows for this second
-        #self.dcspike.process(context={}, signal=spr)  # Remove DC spike if present using the DCSpike step
-        cal = self.pipeline.process(signal=spr.copy(), context={}) if self.pipeline else spr.copy()  # Push the summed power spectrum through the calibration pipeline
+
+        spr = self.pipeline.process(signal=spr, context={"pipeline": "spr"}) if self.pipeline else spr                # Push the summed power spectrum through the spr pipeline
+        cal = self.pipeline.process(signal=spr.copy(), context={"pipeline": "cal"}) if self.pipeline else spr.copy()  # Push the summed power spectrum through the cal pipeline
 
         # Store the raw, power and summed spectrum data in the appropriate rows of the scan data arrays
         with self._rlock:
@@ -446,8 +444,7 @@ class Scan:
 
                     # Calculate the sum of the power spectrum for each frequency bin in a given second
                     scan.spr[sec,:] = np.sum(scan.pwr[row_start:row_end,:], axis=0)  # Sum the power spectrum in a given sec for each frequency bin (in columns)
-                    #scan.dcspike.process(context={}, signal=scan.spr[sec,:])         # Remove DC spike if present using the DCSpike step
-                    
+
                 scan.loaded_secs = [True] * scan.scan_model.duration
             else:
                 # Load summed power spectrum only
