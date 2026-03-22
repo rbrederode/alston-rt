@@ -48,6 +48,11 @@
         "instance": "CommunicationStatus",
         "value": "NOT_ESTABLISHED"
     },
+    "ws_connected": {
+        "_type": "enum.IntEnum",
+        "instance": "CommunicationStatus",
+        "value": "NOT_ESTABLISHED"
+    },
     "ui_drivers": [
         {
             "_type": "UIDriver",
@@ -64,7 +69,8 @@
                 "dsh_range": "TM_UI_API++!G2:H",
                 "sdp_range": "TM_UI_API++!J2:K",
                 "odt_range": "TM_UI_API++!M2:N",
-                "oda_range": "TM_UI_API++!P2:Q"
+                "oda_range": "TM_UI_API++!P2:Q",
+                "ws_range": "TM_UI_API++!S2:T"
             },
             "poll_period": 30,
             "last_update": {
@@ -87,7 +93,9 @@
                 "dsh_range": "TM_UI_API++!G2:H",
                 "sdp_range": "TM_UI_API++!J2:K",
                 "odt_range": "TM_UI_API++!M2:N",
-                "oda_range": "TM_UI_API++!P2:Q"
+                "oda_range": "TM_UI_API++!P2:Q",
+                "ws_range": "TM_UI_API++!S2:T"
+
             },
             "poll_period": 120,
             "last_update": {

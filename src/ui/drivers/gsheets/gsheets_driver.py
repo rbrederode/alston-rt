@@ -112,6 +112,8 @@ class GoogleSheetsDriver(UIDriver):
             return self.config.oda_range
         elif model_type == "ObsList":
             return self.config.odt_range
+        elif model_type == "WeatherStationModel":
+            return self.config.ws_range
         else:
             logger.warning(f"Google Sheets Driver: Unknown model type: {model_type}")
             return None
@@ -200,6 +202,7 @@ if __name__ == "__main__":
         sdp_range="TM_UI_API++!J2:K",
         odt_range="TM_UI_API++!M2:N",
         oda_range="TM_UI_API++!P2:Q",
+        ws_range="TM_UI_API++!S2:T",
         last_update=datetime.now(timezone.utc)
     )
     print("GSheetConfig created successfully:", config.to_dict())

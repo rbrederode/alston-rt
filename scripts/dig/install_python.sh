@@ -56,18 +56,64 @@ if ! command -v pyenv >/dev/null; then
 fi
 
 echo "=== 6. Create default virtualenv 'venv' if it doesn't exist ==="
-PYTHON_VERSION="3.14.3"   
-if ! pyenv versions --bare | grep -q "$PYTHON_VERSION"; then
+
+PYTHON_VERSION="3.14.3"
+
+if ! pyenv versions --bare | grep -q "^$PYTHON_VERSION$"; then
     echo "Installing Python $PYTHON_VERSION..."
     pyenv install "$PYTHON_VERSION"
 fi
 
-if ! pyenv virtualenvs --bare | grep -q "venv"; then
+# Remove existing venv if it's not using the correct Python version
+if pyenv virtualenvs --bare | grep -q "^venv$"; then
+    VENV_PATH="$PYENV_ROOT/versions/venv"
+    VENV_PYTHON_VERSION=$(cat "$VENV_PATH"/pyvenv.cfg | grep "version =" | awk '{print $3}')
+    if [ "$VENV_PYTHON_VERSION" != "$PYTHON_VERSION" ]; then
+        echo "Removing old venv with Python $VENV_PYTHON_VERSION..."
+        pyenv virtualenv-delete -f venv
+        echo "Creating pyenv virtualenv 'venv' with Python $PYTHON_VERSION..."
+        pyenv virtualenv "$PYTHON_VERSION" venv
+    else
+        echo "pyenv virtualenv 'venv' already exists with Python $PYTHON_VERSION, continuing..."
+    fi
+else
     echo "Creating pyenv virtualenv 'venv'..."
     pyenv virtualenv "$PYTHON_VERSION" venv
 fi
 
 echo "=== 7. Activate virtualenv ==="
+
+# Setup shell environment for pyenv
+export PYENV_ROOT="$HOME/.pyenv"
+export PATH="$PYENV_ROOT/bin:$PATH"
+
+# Properly initialize pyenv and pyenv-virtualenv for this shell session
+eval "$($PYENV_ROOT/bin/pyenv init -)"
+eval "$($PYENV_ROOT/bin/pyenv virtualenv-init -)"
+
 pyenv activate venv
+
+if [ -f ../../src/requirements.txt ]; then
+    echo "Installing Python packages from requirements.txt..."
+    pip install --upgrade pip
+    pip install -r ../../src/requirements.txt
+else
+    echo "requirements.txt not found, skipping package installation."
+fi
+
+# Ensure pyenv and environment variables are initialized in future shell sessions
+BASHRC="$HOME/.bashrc"
+PYENV_INIT_STRING='export PYENV_ROOT="$HOME/.pyenv"
+export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$($PYENV_ROOT/bin/pyenv init -)"
+eval "$($PYENV_ROOT/bin/pyenv virtualenv-init -)"
+export PYTHONPATH="$HOME/alston-rt/src"
+export GPIOZERO_PIN_FACTORY=mock
+'
+
+if ! grep -q 'pyenv init' "$BASHRC"; then
+    echo "Adding pyenv initialization and environment variables to $BASHRC..."
+    echo "$PYENV_INIT_STRING" >> "$BASHRC"
+fi
 
 echo "Bootstrap complete! You can now use 'pyenv activate venv'"

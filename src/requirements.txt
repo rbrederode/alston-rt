@@ -5,8 +5,8 @@ pytz
 astropy
 astroplan
 astroquery
+gpiozero
 witmotion
-pyobjc
 pyrtlsdr==0.2.93
 #pyobjc
 pyrtlsdr

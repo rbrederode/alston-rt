@@ -351,6 +351,20 @@ class DishDriver:
                 raise XInvalidTransition(f"DishDriver {self.dsh_model.dsh_id} cannot set OPERATE mode when capability not operational.\n{self.dsh_model.to_dict()}")
             self.set_operate_mode()
 
+    def get_weather_alarm(self) -> bool:
+        """ Get the current weather alarm status from the DishModel.
+            :return: True if the weather alarm is on, False if it is off.
+        """
+        return self.dsh_model.weather_alarm
+    
+    def set_weather_alarm(self, alarm_on: bool):
+        """ Set the weather alarm status in the DishModel.
+            :param alarm_on: True if the weather alarm is on, False if it is off.
+        """
+        self.dsh_model.weather_alarm = alarm_on
+        self.dsh_model.last_err_msg = f"Weather alarm triggered in mode {self.get_mode().name}." if alarm_on else "Weather alarm cleared."
+        self.dsh_model.last_err_dt = self.dsh_model.last_update = datetime.now(timezone.utc)
+
     def clear_target_tuple(self):
         """ Clear the target of the dish in the DishModel.
         """
