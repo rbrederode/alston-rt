@@ -19,7 +19,7 @@ bash "$BASE_DIR/scripts/dig/install_sdr.sh"
 echo "Setting up Python environment..."
 bash "$BASE_DIR/scripts/dig/install_python.sh"
 
-echo "Configuring services..."./
+echo "Configuring services..."
 #bash "$BASE_DIR/scripts/dig/configure_services.sh"
 
 echo ""
