@@ -19,6 +19,9 @@ bash "$BASE_DIR/scripts/dig/install_sdr.sh"
 echo "Setting up Python environment..."
 bash "$BASE_DIR/scripts/dig/install_python.sh"
 
+echo "Installing Waveshare drivers..."
+bash "$BASE_DIR/scripts/dig/install_waveshare.sh"
+
 echo "Configuring services..."
 #bash "$BASE_DIR/scripts/dig/configure_services.sh"
 
