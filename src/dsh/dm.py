@@ -342,6 +342,9 @@ class DM(App):
         """ Processes weather alarm events triggered by the Weather Station model when a weather threshold is breached.
         """
 
+        if not self.dm_model.weather_store.is_ws_monitoring_enabled():
+            return action
+
         # For each dish driver, set the dish to STOW mode for safety if not already in STOW
         for dish_id, dish_driver in self.dish_drivers.items():
 
@@ -367,6 +370,9 @@ class DM(App):
     def _revert_weather_alarm(self, action: Action) -> Action:
         """ Reverts weather alarm state when weather conditions return to safe levels.
         """
+
+        if not self.dm_model.weather_store.is_ws_monitoring_enabled():
+            return action
 
         # For each dish driver, revert the weather alarm state to False
         for dish_id, dish_driver in self.dish_drivers.items():
@@ -403,12 +409,14 @@ class DM(App):
             if dish_driver is None or dish_lock is None:
                 raise XSoftwareFailure(f"DM driver timer event {event.name} for dish id {dish_id} without driver instance or lock\n{event}")
 
-            # If a weather threshold has been breached, process the weather alarm
-            # This will stow the dish where necessary and clear targets to prevent damage. 
-            if self.dm_model.weather_store.alarm():
-                self._process_weather_alarm(action)
-            else:
-                self._revert_weather_alarm(action)
+            # If weather station monitoring is enabled
+            if self.dm_model.weather_store.is_ws_monitoring_enabled():
+
+                # If a weather threshold has been breached, process the weather alarm
+                if self.dm_model.weather_store.alarm():
+                    self._process_weather_alarm(action) # Set dish to STOW mode if a weather threshold is breached
+                else:
+                    self._revert_weather_alarm(action)  # Revert to STANDBY_FP mode if weather thresholds are no longer breached
 
             with dish_lock:
 

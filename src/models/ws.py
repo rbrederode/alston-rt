@@ -74,10 +74,12 @@ class WeatherStationList(BaseModel):
     schema = Schema({
         "_type": And(str, lambda v: v == "WeatherStationList"),
         "list_id": And(str, lambda v: isinstance(v, str)),                 # Weather Station List identifier e.g. "active"   
+        "weather_enabled": And(bool, lambda v: isinstance(v, bool)),       # Flag to enable or disable weather monitoring and alarm processing for the dishes
         "weather_list": And(list, lambda v: isinstance(v, list)),          # List of WeatherData objects
         "threshold_timeout": And(int, lambda v: v >= 0),                   # Maximum age of weather data in seconds to keep in the list
-        "threshold_wind_speed": And(float, lambda v: v >= 0),              # Example threshold for high wind speed in m/s to trigger an alarm
-        "threshold_precipitation": And(float, lambda v: v >= 0),           # Example threshold for heavy precipitation in mm to trigger an alarm
+        "threshold_wind_avg": And(float, lambda v: v >= 0),                # Threshold for high wind avg in m/s to trigger an alarm
+        "threshold_wind_gust": And(float, lambda v: v >= 0),               # Threshold for high wind gust in m/s to trigger an alarm
+        "threshold_precipitation": And(float, lambda v: v >= 0),           # Threshold for heavy precipitation in mm to trigger an alarm
         "created_dt": And(datetime, lambda v: isinstance(v, datetime)),    # Timestamp when the weather station list was created
         "last_update": And(datetime, lambda v: isinstance(v, datetime)),
     })
@@ -90,9 +92,11 @@ class WeatherStationList(BaseModel):
         defaults = {
             "_type": "WeatherStationList",
             "list_id": "active",
+            "weather_enabled": True,                    # Default to True to enable weather monitoring and alarm processing
             "weather_list": [],
-            "threshold_timeout": 30,                      # Maximum age of weather data in seconds to keep in the list
-            "threshold_wind_speed": 20.0,               # Threshold for high wind speed in m/s to trigger an alarm
+            "threshold_timeout": 30,                    # Maximum age of weather data in seconds to keep in the list
+            "threshold_wind_gust": 30.0,                # Threshold for high wind gust in m/s to trigger an alarm
+            "threshold_wind_avg": 20.0,                 # Threshold for high wind avg in m/s to trigger an alarm
             "threshold_precipitation": 10.0,            # Threshold for heavy precipitation in mm to trigger an alarm
             "created_dt": datetime.now(timezone.utc),
             "last_update": datetime.now(timezone.utc),
@@ -107,32 +111,41 @@ class WeatherStationList(BaseModel):
 
     def __str__(self):
         weather_str = ",\n\n  ".join(str(wd) for wd in self.weather_list)
-        return f"WeatherStationList (list_id={self.list_id}, len={len(self.weather_list)}, threshold_timeout={self.threshold_timeout}, threshold_wind_speed={self.threshold_wind_speed}, threshold_precipitation={self.threshold_precipitation}, last_update={self.last_update.isoformat()}): [\n  {weather_str}\n]"
+        return f"WeatherStationList (list_id={self.list_id}, len={len(self.weather_list)}, threshold_timeout={self.threshold_timeout}, threshold_wind_gust={self.threshold_wind_gust}, threshold_wind_avg={self.threshold_wind_avg}, threshold_precipitation={self.threshold_precipitation}, last_update={self.last_update.isoformat()}): [\n  {weather_str}\n]"
 
+    def is_ws_monitoring_enabled(self) -> bool:
+        """
+        Returns True if weather monitoring and alarm processing is enabled for the dishes, False otherwise.
+        """
+        return self.weather_enabled
+    
     def alarm(self) -> bool:
         """
         Trims the weather list to only include samples within the threshold_timeout period.
         Alarm is True if:
             no samples in the threshhold period have been received, or 
-            if average wind speed or precipitation in the list exceeds thresholds.
+            if wind avg / wind gust or precipitation in the list exceeds thresholds.
         Returns
             True if an alarm condition is met, False otherwise.
         """
+        if not self.weather_enabled:
+            return False
+
         if self.weather_list is None:
-            raise XSoftwareFailure("WeatherStationList alarm check failed: weather_list is None")
+            self.weather_list = []
+            self.created_dt = datetime.now(timezone.utc) 
 
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(seconds=self.threshold_timeout)
-        # Remove samples older than threshold_timeout for each station
-        self.weather_list = [wd for wd in self.weather_list if wd.obs_time >= cutoff]
 
-        wind_speeds = [wd.wind_speed for wd in self.weather_list if wd.wind_speed is not None]
-        precipitations = [wd.precipitation for wd in self.weather_list if wd.precipitation is not None]
+        wind_speeds = [wd.wind_speed for wd in self.weather_list if wd.wind_speed is not None and wd.obs_time >= cutoff]
+        precipitations = [wd.precipitation for wd in self.weather_list if wd.precipitation is not None and wd.obs_time >= cutoff]
 
-        avg_wind_speed = sum(wind_speeds) / len(wind_speeds) if wind_speeds else 0.0
-        avg_precipitation = sum(precipitations) / len(precipitations) if precipitations else 0.0
+        avg_wind = sum(wind_speeds) / len(wind_speeds) if wind_speeds else 0.0
+        max_wind = max(wind_speeds) if wind_speeds else 0.0
+        avg_precip = sum(precipitations) / len(precipitations) if precipitations else 0.0
 
-        logger.debug(f"WeatherStationList with {len(self.weather_list)} samples: avg_wind_speed={avg_wind_speed:.2f} m/s, avg_precipitation={avg_precipitation:.2f} mm, thresholds: threshold_wind_speed={self.threshold_wind_speed:.2f} m/s, threshold_precipitation={self.threshold_precipitation:.2f} mm")
+        logger.debug(f"WeatherStationList with {len(self.weather_list)} samples: avg_wind_speed={avg_wind:.2f} m/s, avg_precipitation={avg_precip:.2f} mm, thresholds: threshold_wind_gust={self.threshold_wind_gust:.2f} m/s, threshold_wind_avg={self.threshold_wind_avg:.2f} m/s, threshold_precipitation={self.threshold_precipitation:.2f} mm")
         
         if len(self.weather_list) == 0:
 
@@ -144,12 +157,16 @@ class WeatherStationList(BaseModel):
             logger.warning("WeatherStationList alarm triggered: no recent weather data received within threshold timeout period.")
             return True
                 
-        if avg_wind_speed > self.threshold_wind_speed:
-            logger.warning(f"WeatherStationList alarm triggered by average wind speed: {avg_wind_speed:.2f} m/s exceeds threshold of {self.threshold_wind_speed:.2f} m/s")
+        if avg_wind > self.threshold_wind_avg:
+            logger.warning(f"WeatherStationList alarm triggered by average wind speed: {avg_wind:.2f} m/s exceeds threshold of {self.threshold_wind_avg:.2f} m/s")
+            return True
+
+        if max_wind > self.threshold_wind_gust:
+            logger.warning(f"WeatherStationList alarm triggered by wind gust: {max_wind:.2f} m/s exceeds threshold of {self.threshold_wind_gust:.2f} m/s")
             return True
         
-        if avg_precipitation > self.threshold_precipitation:
-            logger.warning(f"WeatherStationList alarm triggered by average precipitation: {avg_precipitation:.2f} mm exceeds threshold of {self.threshold_precipitation:.2f} mm")
+        if avg_precip > self.threshold_precipitation:
+            logger.warning(f"WeatherStationList alarm triggered by average precipitation: {avg_precip:.2f} mm exceeds threshold of {self.threshold_precipitation:.2f} mm")
             return True
         return False
 
@@ -163,6 +180,11 @@ class WeatherStationList(BaseModel):
             raise ValueError("WeatherData must have an obs_time attribute.")
 
         self.weather_list.append(weather_data)
+        
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=self.threshold_timeout)
+        self.weather_list = [wd for wd in self.weather_list if wd.obs_time >= cutoff]
+
         self.last_update = datetime.now(timezone.utc)
 
 class WeatherStationModel(BaseModel):
