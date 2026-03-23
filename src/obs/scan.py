@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timezone
 
 from models.pipeline import StepConfig, StepType
+from models.qa import ScanQA, QA
 from models.scan import ScanModel, ScanState
 from sdp.pipeline.steps.dc_spike import DCSpike
 from util import gen_file_prefix
@@ -84,6 +85,9 @@ class Scan:
 
             self.mean_real = 0.0  # Mean of real value of the raw samples (I)
             self.mean_imag = 0.0  # Mean of imaginary value of the raw samples (Q)
+             
+            # QA attributes for the signal in this scan
+            self.scan_qa = ScanQA(scan_id=self.scan_model.scan_id, scan_duration=self.scan_model.duration)
 
             self.load_scan = None  # Reference to a load scan for calibration
 
@@ -143,7 +147,7 @@ class Scan:
             self.spr = np.zeros((self.scan_model.duration, self.scan_model.channels), dtype=np.float64)     # float64 for summed pwr for each second in duration
             self.cal = np.zeros((self.scan_model.duration, self.scan_model.channels), dtype=np.float64)     # float64 for calibrated spectrum for each second in duration
             self.mpr = np.ones((self.scan_model.channels,), dtype=np.float64)               # float64 for mean power spectrum over duration for each channel (fft bin)
-            self.snr = np.zeros(self.scan_model.duration)                                   # SNR for each second in duration
+            self.snr = np.zeros((self.scan_model.duration, 5), dtype=np.float64)            # Signal to Noise Ratio, Signal dB, Noise dB, signal start bin, signal end bin for each second in duration
 
     def get_dig_id(self) -> str:
         """
@@ -151,6 +155,13 @@ class Scan:
             :returns: The digitiser ID as a string
         """
         return self.scan_model.dig_id
+
+    def get_qa(self) -> ScanQA:
+        """
+        Get the QA attributes for the signal in this scan.
+            :returns: A ScanQA instance containing the QA attributes for this scan
+        """
+        return self.scan_qa
 
     def get_obs_id(self) -> str:
         """
@@ -272,8 +283,9 @@ class Scan:
             self.mean_real = np.mean(np.abs(self.raw[row_start:row_end, ].real))*100  # Find the mean real value in the raw samples (I)
             self.mean_imag = np.mean(np.abs(self.raw[row_start:row_end, ].imag))*100  # Find the mean imaginary value in the raw samples (Q)
 
-            self.snr[sec - 1] = self.calc_snr(self.cal[sec - 1, :])                   # Calculate the SNR for this second and store it in the snr array
-            logger.info(f"Scan {self.scan_model.scan_id} - SNR for second {sec}: {self.snr[sec - 1]:.2f} dB")
+            self.snr[sec - 1] = self.calc_snr(self.cal[sec - 1, :])  # (snr_db, signal_db, noise_db)
+            snr_db, signal_db, noise_db, signal_start, signal_end = self.snr[sec - 1]
+            logger.info(f"Scan {self.scan_model.scan_id} - SNR for second {sec}: {snr_db:.2f} dB | Signal: {signal_db:.2f} dB | Noise: {noise_db:.2f} dB")
 
         # Count how many rows have self.loaded_secs marked as True
         actual_rows = np.count_nonzero(self.loaded_secs)
@@ -298,20 +310,31 @@ class Scan:
 
         return True
 
-    def calc_snr(self, spectrum: np.ndarray, window_frac: float = 0.10) -> float:
+    def calc_snr(self, spectrum: np.ndarray, window_frac: float = 0.20) -> tuple:
         """
-        Calculate the signal-to-noise ratio (SNR) for a given power spectrum.
-        The SNR is computed as (mean signal - mean noise) / std noise, where:
-        - The signal region is a window around the peak (default: 10% of channels, min 3 bins)
-        - The noise region is all bins outside the signal window
+        Calculate the signal, noise, and signal-to-noise ratio (SNR) for a given power spectrum using robust statistics.
+        - The signal region is a window around the peak (default: 10% of channels, min 3 bins).
+        - The noise region is all bins outside the signal window.
+        - The baseline is the median of the noise region.
+        - The signal is the peak value in the signal region above the baseline.
+        - The noise is the robust RMS estimated via the MAD (median absolute deviation) of the noise region.
+        - The SNR is computed as (signal - baseline) / noise (linear), and also reported in dB.
         :param spectrum: 1D numpy array of power values (e.g., a row from self.spr)
-        :param window_frac: Fraction of channels to use for the signal window (default 10%)
-        :return: SNR value (float)
+        :param window_frac: Fraction of channels to use for the signal window (default 20%)
+        :return: tuple with values 'snr_db', 'signal_db', 'noise_db', 'signal_start', 'signal_end'
+
+        For reference:
+            SNR 3 dB - Barely detectable signal
+            SNR 7 dB - Weak signal
+            SNR 10 dB - Strong signal
+            SNR 20 dB - Very strong signal
         """
-        channels = self.scan_model.channels
+        channels = len(spectrum)
         peak_bin = np.argmax(spectrum)
+
         window_width = max(3, int(window_frac * channels))
         half_width = window_width // 2
+
         signal_start = max(0, peak_bin - half_width)
         signal_end = min(channels, peak_bin + half_width + 1)
 
@@ -323,11 +346,26 @@ class Scan:
         else:
             noise_region = np.concatenate((spectrum[:signal_start], spectrum[signal_end:]))
 
-        signal_mean = np.mean(signal_region)
-        noise_mean = np.mean(noise_region) if noise_region.size > 0 else 0.0
-        noise_std = np.std(noise_region) if noise_region.size > 0 else 1.0
-        snr = (signal_mean - noise_mean) / noise_std if noise_std > 0 else np.inf
-        return snr
+        # --- Baseline (robust)
+        baseline = np.median(noise_region)
+
+        # --- Signal (peak above baseline)
+        peak = np.max(signal_region)
+        signal_lin = max(peak - baseline, 1e-12)  # avoid log(0)
+
+        # --- Noise (robust RMS via MAD)
+        noise_std = 1.4826 * np.median(np.abs(noise_region - baseline))
+        noise_lin = max(noise_std, 1e-12)
+
+        # --- SNR (linear)
+        snr = signal_lin / noise_lin
+
+        # --- Convert to dB
+        signal_db = 10 * np.log10(signal_lin)
+        noise_db = 10 * np.log10(noise_lin)
+        snr_db = 10 * np.log10(snr)
+
+        return snr_db, signal_db, noise_db, signal_start, signal_end
 
     def save_to_disk(self, output_dir, include_iq: bool = False) -> bool:
         """

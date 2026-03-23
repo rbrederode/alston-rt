@@ -74,9 +74,9 @@ class ProcessingPipelineFactory:
         step_configs = self.pipeline_config.get_steps(scan.scan_model.dig_id)
 
         for config in step_configs:
-            config.params['scan'] = scan        # The scan that the pipeline will process
+            config.params['scan']   = scan      # The scan that the pipeline will process
             config.params['scan_q'] = scan_q    # Pipeline steps are provided access to the scan queue if needed
-            config.params['cal_q'] = cal_q      # Pipeline steps are provided access to the calibration queue if needed
+            config.params['cal_q']  = cal_q     # Pipeline steps are provided access to the calibration queue if needed
 
         return [self.instantiate_step(config) for config in step_configs]
 
@@ -92,6 +92,8 @@ class ProcessingPipelineFactory:
         from sdp.pipeline.steps.gain     import GainCal
         from sdp.pipeline.steps.tsys     import TsysCal
         from sdp.pipeline.steps.rfi      import RFIFlag
+        from sdp.pipeline.steps.qa       import QA
+        # Add more step imports as needed
 
         step_map = {
             StepType.NOP.value:      Nop,
@@ -100,6 +102,8 @@ class ProcessingPipelineFactory:
             StepType.GAIN_CAL.value: GainCal,
             StepType.TSYS_CAL.value: TsysCal,
             StepType.RFI_FLAG.value: RFIFlag,
+            StepType.QA.value:       QA,
+
             # Add more step types as needed
         }
 

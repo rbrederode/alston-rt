@@ -259,12 +259,24 @@ class SignalDisplay:
         self.sig[0].legend(loc='lower right')
 
         self.sig[1].plot(
-            np.linspace(self.extent[0], self.extent[1], self.scan.scan_model.channels), 
-            #self.scan.spr.flatten()[(l_sec-1)*self.scan.scan_model.channels:(l_sec)*self.scan.scan_model.channels] / self.load.mpr, 
-            self.scan.cal.flatten()[(l_sec-1)*self.scan.scan_model.channels:(l_sec)*self.scan.scan_model.channels], 
-            color='orange', 
-            label=f'Signal (CAL)\nSNR {self.scan.snr[l_sec-1]:.2f} dB' if self.scan.snr is not None else 'Signal (CAL)'
+            np.linspace(self.extent[0], self.extent[1], self.scan.scan_model.channels),
+            self.scan.cal.flatten()[(l_sec-1)*self.scan.scan_model.channels:(l_sec)*self.scan.scan_model.channels],
+            color='orange',
+            label=(
+                f'SNR: {self.scan.snr[l_sec-1][0]:.2f} dB\n'
+                f'Signal: {self.scan.snr[l_sec-1][1]:.2f} dB\n'
+                f'Noise: {self.scan.snr[l_sec-1][2]:.2f} dB'
+            ) if self.scan.snr is not None else 'Signal (CAL)'
         )
+
+        # Draw vertical lines for the signal region if start/end bins are available
+        if self.scan.snr is not None and len(self.scan.snr[l_sec-1]) >= 5:
+            start_bin = int(self.scan.snr[l_sec-1][3])
+            end_bin = int(self.scan.snr[l_sec-1][4])
+            freq_start = self.extent[0] + (self.extent[1] - self.extent[0]) * start_bin / self.scan.scan_model.channels
+            freq_end = self.extent[0] + (self.extent[1] - self.extent[0]) * end_bin / self.scan.scan_model.channels
+            self.sig[1].axvline(x=freq_start, color='green', linestyle='--', label='Signal Start')
+            self.sig[1].axvline(x=freq_end, color='purple', linestyle='--', label='Signal End')
         self.sig[1].legend(loc='lower right')
 
         self.sig[3].bar(0, self.scan.mean_real, color='blue', label=f'I {self.scan.mean_real:.2e}' if self.sec == 0 else '_nolegend_')

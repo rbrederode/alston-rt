@@ -272,6 +272,7 @@ class BaseModel:
         from models.oet import OETModel
         from models.pipeline import StepConfig, StepType, PipelineConfig
         from models.proc import ProcessorModel
+        from models.qa import QA, ScanQA
         from models.scan import ScanModel, ScanState
         from models.sdp import ScienceDataProcessorModel
         from models.target import TargetModel, PointingType, OffsetScan, FivePointScan, TargetConfig, TargetScanSet
@@ -378,6 +379,12 @@ class BaseModel:
             elif model_type == "ProcessorModel":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ProcessorModel(**deserialized_fields)
+            elif model_type == "QA":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return QA(**deserialized_fields)
+            elif model_type == "ScanQA":
+                deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
+                return ScanQA(**deserialized_fields)
             elif model_type == "ResourceAllocations":
                 deserialized_fields = {k: BaseModel._deserialise(val) for k, val in v.items() if k != "_type"}
                 return ResourceAllocations(**deserialized_fields)

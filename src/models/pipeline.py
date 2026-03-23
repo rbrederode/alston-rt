@@ -11,6 +11,8 @@ class StepType(enum.IntEnum):
     GAIN_CAL = 3            # Perform gain calibration
     TSYS_CAL = 4            # Perform system temperature calibration
     RFI_FLAG = 5            # Flag radio frequency interference
+    QA = 6                  # Calculate signal quality attributes (SNR, signal power, noise power, etc.)
+    # Add more step types as needed
 
 class StepConfig(BaseModel):
     """A class representing the configuration for a single processing step in the signal processing pipeline."""
@@ -30,7 +32,7 @@ class StepConfig(BaseModel):
         defaults = {
             "_type": "StepConfig",
             "step": StepType.NOP,
-            "params": {},
+            "params": {"pipeline": "cal"},              # Default to "cal" pipeline as opposed to "SPR" pipeline
             "last_update": datetime.now(timezone.utc)
         }
 

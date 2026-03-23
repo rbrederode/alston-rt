@@ -42,8 +42,6 @@ Use the following steps to install (these assume you have copied the distributio
   sudo cp Desktop/release/WinTypes.h /usr/local/include/WinTypes.h
 8. You have now successfully installed the D2XX library.
 
-
-
 """
 
 # Configure instrument
