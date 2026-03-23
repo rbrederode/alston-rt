@@ -23,6 +23,15 @@ class QA(ProcessingStep):
     def process(self, context: Any, signal: Any) -> Any:
         """
         Calculate Quality Attributes for the signal array using parameters from context and update the scan QA attributes.
+            - Baseline (robust): median of noise region
+            - Signal (peak above baseline): max of signal region minus baseline
+            - Signal Power (sum above baseline): sum of signal region minus baseline
+            - Noise (robust RMS via MAD): 1.4826 * median absolute deviation of noise region
+            - SNR (linear): signal / noise
+            - SNR (dB): 10 * log10(signal / noise)
+            - Dynamic range (dB): 10 * log10(peak signal / noise)
+            - FWHM (full width at half maximum): width of signal region above half max
+
         Args:
             context: dict containing static parameters for applying load file
             input_signal: 1D numpy array containing input spectrum (signal)
@@ -42,25 +51,37 @@ class QA(ProcessingStep):
         channels = len(signal)
         peak_bin = np.argmax(signal)
 
+        # Estimate baseline using all but a window around the peak
         window_width = max(3, int(window_frac * channels))
         half_width = window_width // 2
-
-        signal_start = max(0, peak_bin - half_width)
-        signal_end = min(channels, peak_bin + half_width + 1)
-
-        signal_region = signal[signal_start:signal_end]
-        if signal_start == 0:
-            noise_region = signal[signal_end:]
-        elif signal_end == channels:
-            noise_region = signal[:signal_start]
+        exclude_start = max(0, peak_bin - half_width)
+        exclude_end = min(channels, peak_bin + half_width + 1)
+        if exclude_start == 0:
+            noise_region = signal[exclude_end:]
+        elif exclude_end == channels:
+            noise_region = signal[:exclude_start]
         else:
-            noise_region = np.concatenate((signal[:signal_start], signal[signal_end:]))
+            noise_region = np.concatenate((signal[:exclude_start], signal[exclude_end:]))
 
         # --- Baseline (robust)
         baseline = np.median(noise_region)
 
+        # --- FWHM-based signal region detection ---
+        peak = np.max(signal)
+        half_max = baseline + 0.5 * (peak - baseline)
+        above_half = np.where(signal >= half_max)[0]
+        if above_half.size > 0:
+            signal_start = int(above_half[0])
+            signal_end = int(above_half[-1]) + 1  # exclusive
+            fwhm = float(signal_end - signal_start)
+        else:
+            signal_start = peak_bin
+            signal_end = peak_bin + 1
+            fwhm = 0.0
+
+        signal_region = signal[signal_start:signal_end]
+
         # --- Signal (peak above baseline)
-        peak = np.max(signal_region)
         signal_lin = max(peak - baseline, 1e-12)  # avoid log(0)
 
         # --- Signal Power (sum above baseline)
