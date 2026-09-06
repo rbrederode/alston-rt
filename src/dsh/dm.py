@@ -50,6 +50,7 @@ class DM(App):
     def __init__(self, app_name: str = "dm"):
 
         super().__init__(app_name=app_name, app_model = self.dm_model.app)
+        self.register_command_handler("stop", self.process_stop_command)
 
         # Telescope Manager interface
         self.tm_system = "tm"
@@ -316,6 +317,26 @@ class DM(App):
                 except XBase as e:
                     message = f"Dish Manager failed to set STANDBY_FP mode for Dish {dish_id}: {e}"
                     logger.error(dish_driver.set_last_err(message))
+
+    def process_stop_command(self, api_call: dict) -> tuple[str, str]:
+        """Process the registered Dish Manager STOP command."""
+        dish_id = api_call.get("value")
+        logger.info("Dish Manager received STOP command for dish %s", dish_id)
+
+        dish_driver = self.dish_drivers.get(dish_id)
+        if dish_driver is None:
+            return (
+                dmd_protocol.STATUS_ERROR,
+                f"Dish Manager cannot stop unknown dish '{dish_id}'",
+            )
+
+        dish_lock = self._get_dish_lock(dish_id)
+        with dish_lock:
+            dish_driver.emergency_stop()
+
+        message = f"Dish Manager stopped movement of Dish {dish_id}"
+        logger.warning(message)
+        return dmd_protocol.STATUS_SUCCESS, message
 
     def process_tm_connected(self, event) -> Action:
         """ Processes Telescope Manager connected events.

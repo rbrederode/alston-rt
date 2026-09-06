@@ -502,21 +502,15 @@ class DishDriver:
         if not isinstance(capability, Capability):
             message = "DishDriver set_dish_capability requires a valid Capability enumeration value."
             raise ValueError(self.dsh_model.set_last_err(message))
-
-        # If we are currently operational 
-        if self.dsh_model.capability in [Capability.OPERATE_DEGRADED, Capability.OPERATE_FULL]:
-
-            # And we are transitioning to a non-operational mode, stow the dish first
-            if capability not in [Capability.OPERATE_DEGRADED, Capability.OPERATE_FULL]:
-
-                # Set new capability in dish model before stowing to ensure it is set
-                self.dsh_model.capability = capability
-                self.dsh_model.last_update = datetime.now(timezone.utc)
-                self.set_stow_mode()
-                return 
         
         self.dsh_model.capability = capability
         self.dsh_model.last_update = datetime.now(timezone.utc)
+
+        # STANDBY is a movement inhibit. Latch the capability before issuing
+        # the hardware stop so it remains non-operational even if the
+        # controller cannot be reached.
+        if capability == Capability.STANDBY:
+            self.stop()
 
     def set_startup_mode(self):
         """
@@ -624,6 +618,16 @@ class DishDriver:
             Transitions to UNKNOWN mode on failure.
             :raises NotImplementedError: If the method is not implemented by a subclass
         """
+        def _is_stow_cmd_allowed(self) -> bool:
+
+            if self.dsh_model.capability not in [Capability.OPERATE_DEGRADED, Capability.OPERATE_FULL]:
+                return False
+            return True
+
+        if not _is_stow_cmd_allowed(self):
+            message = f"DishDriver {self.dsh_model.dsh_id} cannot set STOW mode when capability not operational.\n{self._diagnostic_snapshot()}"
+            raise XInvalidTransition(self.dsh_model.set_last_err(message))
+
         # Clear any existing target model and unique target identifier from the dish
         self.clear_target_tuple()
 
@@ -790,6 +794,8 @@ class DishDriver:
         """
         def _is_track_cmd_allowed(self) -> bool:
             
+            if self.dsh_model.capability not in [Capability.OPERATE_DEGRADED, Capability.OPERATE_FULL]:
+                return False
             if self.dsh_model.mode != DishMode.OPERATE:
                 return False
             if self.dsh_model.pointing_state not in [PointingState.TRACK, PointingState.READY]:
@@ -847,6 +853,8 @@ class DishDriver:
         """
         def _is_scan_cmd_allowed(self) -> bool:
             
+            if self.dsh_model.capability not in [Capability.OPERATE_DEGRADED, Capability.OPERATE_FULL]:
+                return False
             if self.dsh_model.mode != DishMode.OPERATE:
                 return False
             if self.dsh_model.pointing_state not in [PointingState.SCAN, PointingState.READY]:
@@ -926,12 +934,30 @@ class DishDriver:
         self.dsh_model.pointing_state = PointingState.READY
         self.dsh_model.last_update = datetime.now(timezone.utc)
 
+    def emergency_stop(self):
+        """Stop movement and inhibit automatic movement until explicit recovery.
+
+        STANDBY capability prevents any subsequent movement command. Clearing
+        the target and desired position prevents the Dish Manager polling loop
+        from restarting a track or scan. These safety-state updates are retained
+        even when the hardware stop cannot be delivered.
+        """
+        try:
+            self.set_dish_capability(Capability.STANDBY)
+        finally:
+            self.clear_target_tuple()
+            self.set_desired_altaz(None)
+            self.dsh_model.mode = DishMode.UNKNOWN
+            self.dsh_model.last_update = datetime.now(timezone.utc)
+
     def slew(self, altaz: AltAz):
         """ Slew to the target AltAz position if states and modes permit. Delegates to subclass implementation.
             :param altaz: Target AltAz position
         """
         def _is_slew_cmd_allowed(self) -> bool:
 
+            if self.dsh_model.capability not in [Capability.OPERATE_DEGRADED, Capability.OPERATE_FULL]:
+                return False
             if self.dsh_model.mode != DishMode.OPERATE:
                 return False
             if self.dsh_model.pointing_state != PointingState.READY:

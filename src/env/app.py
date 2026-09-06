@@ -10,7 +10,8 @@ import threading
 
 from api.api import API
 from api import protocol as dmd_protocol
-from api.command import CommandAPI
+from api.cmd_api import CommandAPI
+from api.cmd_registry import CommandRegistry, DEFAULT_COMMAND_CONFIG
 from ipc.tcp_server import TCPServer
 from ipc.message import AppMessage, APIMessage
 from ipc.action import Action
@@ -74,6 +75,10 @@ class App:
         self.arg_parser = argparse.ArgumentParser(description=self.app_model.app_name)
         self.add_args(self.arg_parser)
         self.app_model.arguments = vars(self.get_args())
+        self.command_registry = CommandRegistry.load(
+            app_name=app_name,
+            path=self.get_args().cmd_config,
+        )
 
         # Debug is application-wide.  The command API and all processor
         # threads therefore share the state held by the AppModel and update
@@ -211,6 +216,13 @@ class App:
         arg_parser.add_argument("--queue_low_watermark", type=int, required=False, help="Queue size at which app-specific overload handling stops; 0 derives from processor count.", default=0)
         arg_parser.add_argument("--cmd_host", type=str, required=False, help="Command host to listen for TCP/IP command messages such as trace or debug ON/OFF, or resync. Defaults to 127.0.0.1 if not specified.")
         arg_parser.add_argument("--cmd_port", type=int, required=False, help="Command port to listen for TCP/IP command messages such as trace or debug ON/OFF, or resync. Generally in the range 60001-60010.")
+        arg_parser.add_argument(
+            "--cmd_config",
+            type=str,
+            required=False,
+            default=str(DEFAULT_COMMAND_CONFIG),
+            help="Path to the application command registry configuration",
+        )
         arg_parser.add_argument(
             "--manage_trace_archives",
             type=fmt_bool,
@@ -365,7 +377,8 @@ class App:
         if self.app_model.app_cmd_host is None or self.app_model.app_cmd_port is None:
             raise XSoftwareFailure("App requires both cmd host and port to be specified in the app model or via command line arguments")
 
-        self.cmd_api = CommandAPI()
+        self.command_registry.validate_handlers()
+        self.cmd_api = CommandAPI(registry=self.command_registry)
         self.cmd_endpoint = TCPServer(
             description=dmd_protocol.CMD,
             queue=self.get_queue(),
@@ -395,6 +408,26 @@ class App:
         if dmd_protocol.CMD in getattr(self, "interfaces", {}):
             self.deregister_interface(dmd_protocol.CMD)
         self.cmd_api = None
+
+    def register_command_handler(self, command_name: str, handler) -> None:
+        """Register code that implements a configured application command."""
+        self.command_registry.register_handler(command_name, handler)
+
+    def reload_command_registry(self) -> None:
+        """Atomically reload command specifications while retaining known handlers."""
+        replacement = CommandRegistry.load(
+            app_name=self.app_model.app_name,
+            path=self.command_registry.source_path,
+        )
+        for command_name in replacement.command_names:
+            handler = self.command_registry.get_handler(command_name)
+            if handler is not None:
+                replacement.register_handler(command_name, handler)
+        replacement.validate_handlers()
+
+        self.command_registry = replacement
+        if getattr(self, "cmd_api", None) is not None:
+            self.cmd_api.registry = replacement
 
     def register_interface(self, system_name: str, api: API, endpoint, interface_type: InterfaceType = InterfaceType.UNKNOWN):
         """Registers an interface with the application.

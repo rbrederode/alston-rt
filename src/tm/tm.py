@@ -20,6 +20,7 @@ from googleapiclient.http import HttpRequest
 # Import application modules
 from api import protocol as dmd_protocol
 from api import tm_dig, tm_sdp, tm_dm, tm_ws
+from api.cmd_registry import CommandRegistry
 from env.app import App
 from env.events import ConnectEvent, DisconnectEvent, DataEvent, ConfigEvent, ObsEvent
 from ipc.message import AppMessage, APIMessage
@@ -318,7 +319,19 @@ class TelescopeManager(App):
                     }
                     else dmd_protocol.DIG
                 )
-                command, property_name, value = cmd_app.normalise_command_config(config)
+                command_config_path = getattr(
+                    getattr(self, "command_registry", None),
+                    "source_path",
+                    None,
+                )
+                target_command_registry = CommandRegistry.load(
+                    app_name=command_system,
+                    path=command_config_path,
+                )
+                command, property_name, value = cmd_app.normalise_command_config(
+                    config,
+                    registry=target_command_registry,
+                )
                 host = app_model.app_cmd_host
                 port = app_model.app_cmd_port
                 if not host or port is None:
@@ -326,12 +339,15 @@ class TelescopeManager(App):
                         f"Target application '{config.get('app')}' has no command endpoint configured"
                     )
 
-                argv = ["--host", str(host), "--port", str(port), "--system", command_system, command]
+                argv = ["--host", str(host), "--port", str(port), "--system", command_system]
+                if command_config_path is not None:
+                    argv.extend(["--cmd_config", str(command_config_path)])
+                argv.append(command)
 
                 if property_name is not None:
                     argv.append(property_name)
                 if value is not None:
-                    argv.append(value)
+                    argv.append(str(value))
 
                 logger.info("Telescope Manager forwarding %s command to %s at %s:%s", command, command_system, host, port)
                 threading.Thread(
@@ -340,6 +356,12 @@ class TelescopeManager(App):
                     name=f"tm-command-{command_system}",
                     daemon=True,
                 ).start()
+
+                # A STOP is safety-related. Abort any active observation using
+                # the dish immediately rather than waiting for the forwarded
+                # command response or the next Dish Manager status update.
+                if command_system == dmd_protocol.DM and command == "stop":
+                    self.abort_observations(dsh_id=value, action=action)
             except (TypeError, ValueError) as exc:
                 message = f"Telescope Manager rejected command event: {exc}"
                 logger.error(self.set_last_err(message))
